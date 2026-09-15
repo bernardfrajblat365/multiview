@@ -11,11 +11,74 @@ let slotCount: SlotCount = 4
 let layout3: Layout3 = 'equal'
 let urls: string[] = []
 
+const YT_ID_RE = /^[\w-]{11}$/
+
+function extractIframeSrc(value: string): string | null {
+  const match = value.match(/<iframe\b[^>]*\bsrc\s*=\s*["']([^"']+)["']/i)
+  return match?.[1]?.trim() || null
+}
+
+function youtubeVideoId(urlString: string): string | null {
+  let url: URL
+  try {
+    url = new URL(urlString)
+  } catch {
+    return null
+  }
+
+  const host = url.hostname.replace(/^www\./i, '').toLowerCase()
+  const isYoutube =
+    host === 'youtu.be' ||
+    host === 'youtube.com' ||
+    host === 'm.youtube.com' ||
+    host === 'youtube-nocookie.com'
+
+  if (!isYoutube) return null
+
+  if (host === 'youtu.be') {
+    const id = url.pathname.split('/').filter(Boolean)[0] ?? ''
+    return YT_ID_RE.test(id) ? id : null
+  }
+
+  const pathMatch = url.pathname.match(/^\/(embed|shorts|live|v)\/([\w-]{11})(?:\/|$)/i)
+  if (pathMatch) return pathMatch[2]
+
+  if (/^\/watch\/?$/i.test(url.pathname)) {
+    const id = url.searchParams.get('v') ?? ''
+    return YT_ID_RE.test(id) ? id : null
+  }
+
+  return null
+}
+
+function isYouTubeEmbed(url: string): boolean {
+  try {
+    const parsed = new URL(url)
+    const host = parsed.hostname.replace(/^www\./i, '').toLowerCase()
+    return (
+      (host === 'youtube.com' || host === 'youtube-nocookie.com') &&
+      /^\/embed\/[\w-]{11}(?:\/|$)/i.test(parsed.pathname)
+    )
+  } catch {
+    return false
+  }
+}
+
 function normalizeUrl(value: string): string {
   const trimmed = value.trim()
   if (!trimmed) return ''
-  if (/^https?:\/\//i.test(trimmed)) return trimmed
-  return `https://${trimmed}`
+
+  const fromIframe = extractIframeSrc(trimmed)
+  let candidate = fromIframe ?? trimmed
+
+  if (!/^https?:\/\//i.test(candidate)) {
+    candidate = `https://${candidate}`
+  }
+
+  const videoId = youtubeVideoId(candidate)
+  if (videoId) return `https://www.youtube.com/embed/${videoId}`
+
+  return candidate
 }
 
 function escapeAttr(value: string): string {
@@ -32,7 +95,11 @@ function setSlotCount(count: SlotCount) {
   slotCount = count
 }
 
-function urlFormHtml(index: number, url: string): string {
+function urlFormHtml(index: number, url: string, options: { withClose?: boolean } = {}): string {
+  const closeBtn = options.withClose
+    ? `<button type="button" class="btn btn--ghost btn--icon panel__close" data-close aria-label="Fechar barra de URL"><span aria-hidden="true">×</span></button>`
+    : ''
+
   return `
     <form class="panel__bar" data-slot="${index}" novalidate>
       <label class="visually-hidden" for="url-${index}">URL do jogo ${index + 1}</label>
@@ -43,11 +110,12 @@ function urlFormHtml(index: number, url: string): string {
         inputmode="url"
         autocomplete="off"
         spellcheck="false"
-        placeholder="Cole o link e pressione Enter"
+        placeholder="Cole link YouTube ou URL e pressione Enter"
         value="${escapeAttr(url)}"
       />
       <button type="submit" class="btn btn--load" aria-label="Abrir link">Abrir</button>
       <button type="button" class="btn btn--clear" data-clear aria-label="Limpar link">Limpar</button>
+      ${closeBtn}
     </form>
   `
 }
@@ -62,23 +130,39 @@ function panelInnerHtml(index: number, url: string): string {
     `
   }
 
+  const referrerPolicy = isYouTubeEmbed(url)
+    ? 'strict-origin-when-cross-origin'
+    : 'no-referrer'
+
   return `
+    <button type="button" class="btn btn--ghost btn--icon panel__edit" data-edit aria-label="Editar URL">
+      <span aria-hidden="true">✎</span>
+    </button>
     <div class="panel__overlay">
-      ${urlFormHtml(index, url)}
+      ${urlFormHtml(index, url, { withClose: true })}
     </div>
     <iframe
       src="${escapeAttr(url)}"
       title="Jogo ${index + 1}"
       allow="autoplay; fullscreen; encrypted-media; picture-in-picture"
       allowfullscreen
-      referrerpolicy="no-referrer"
+      referrerpolicy="${referrerPolicy}"
     ></iframe>
   `
+}
+
+function setPanelEditing(panel: HTMLElement, editing: boolean) {
+  panel.classList.toggle('is-editing', editing)
+  if (!editing) return
+  const input = panel.querySelector<HTMLInputElement>('.panel__overlay input[name="url"]')
+  input?.focus()
+  input?.select()
 }
 
 function applyPanelUrl(panel: HTMLElement, index: number, next: string) {
   urls[index] = next
   panel.classList.toggle('panel--empty', !next)
+  panel.classList.remove('is-editing')
   panel.innerHTML = panelInnerHtml(index, next)
   bindPanelForm(panel)
 }
@@ -87,19 +171,32 @@ function bindPanelForm(panel: HTMLElement) {
   const form = panel.querySelector<HTMLFormElement>('.panel__bar')
   if (!form) return
 
+  panel.querySelector('[data-edit]')?.addEventListener('click', () => {
+    setPanelEditing(panel, true)
+  })
+
   form.addEventListener('submit', (event) => {
     event.preventDefault()
     const index = Number(form.dataset.slot)
     const input = form.elements.namedItem('url') as HTMLInputElement
     const next = normalizeUrl(input.value)
     applyPanelUrl(panel, index, next)
-    panel.querySelector<HTMLInputElement>('input')?.blur()
   })
 
   form.querySelector('[data-clear]')?.addEventListener('click', () => {
     const index = Number(form.dataset.slot)
     applyPanelUrl(panel, index, '')
     panel.querySelector<HTMLInputElement>('input')?.focus()
+  })
+
+  form.querySelector('[data-close]')?.addEventListener('click', () => {
+    setPanelEditing(panel, false)
+  })
+
+  form.addEventListener('keydown', (event) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    setPanelEditing(panel, false)
   })
 }
 
@@ -135,6 +232,122 @@ function toggleFullscreen() {
 }
 
 let moreMenuAbort: AbortController | null = null
+let toolbarAbort: AbortController | null = null
+let toolbarHideTimer: ReturnType<typeof setTimeout> | null = null
+
+const TOOLBAR_IDLE_MS = 10_000
+
+function clearToolbarHideTimer() {
+  if (!toolbarHideTimer) return
+  clearTimeout(toolbarHideTimer)
+  toolbarHideTimer = null
+}
+
+function bindToolbarAutoHide() {
+  toolbarAbort?.abort()
+  clearToolbarHideTimer()
+  toolbarAbort = new AbortController()
+  const { signal } = toolbarAbort
+
+  const shell = app.querySelector<HTMLElement>('.grid-shell')
+  const toolbar = app.querySelector<HTMLElement>('.toolbar')
+  const hotzone = app.querySelector<HTMLElement>('.toolbar-hotzone')
+  const more = app.querySelector<HTMLElement>('.toolbar__more')
+  if (!shell || !toolbar) return
+
+  const isPinned = () =>
+    Boolean(more?.classList.contains('is-open')) ||
+    (document.activeElement instanceof Node && toolbar.contains(document.activeElement))
+
+  const setVisible = (visible: boolean) => {
+    shell.classList.toggle('is-toolbar-visible', visible)
+  }
+
+  const scheduleHide = () => {
+    clearToolbarHideTimer()
+    toolbarHideTimer = setTimeout(() => {
+      toolbarHideTimer = null
+      if (isPinned()) return
+      setVisible(false)
+    }, TOOLBAR_IDLE_MS)
+  }
+
+  const reveal = () => {
+    setVisible(true)
+    if (isPinned()) {
+      clearToolbarHideTimer()
+      return
+    }
+    scheduleHide()
+  }
+
+  const pointInShell = (x: number, y: number) => {
+    const rect = shell.getBoundingClientRect()
+    return x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+  }
+
+  // document-level so movement over letterboxing / gaps still counts
+  document.addEventListener(
+    'mousemove',
+    (event) => {
+      if (pointInShell(event.clientX, event.clientY)) {
+        reveal()
+        return
+      }
+      if (isPinned()) {
+        setVisible(true)
+        clearToolbarHideTimer()
+        return
+      }
+      setVisible(false)
+      clearToolbarHideTimer()
+    },
+    { signal, passive: true },
+  )
+
+  // iframes swallow mousemove; this corner still catches the cursor
+  hotzone?.addEventListener('mouseenter', reveal, { signal })
+  hotzone?.addEventListener('mousemove', reveal, { signal, passive: true })
+
+  toolbar.addEventListener(
+    'focusin',
+    () => {
+      setVisible(true)
+      clearToolbarHideTimer()
+    },
+    { signal },
+  )
+
+  toolbar.addEventListener(
+    'focusout',
+    () => {
+      requestAnimationFrame(() => {
+        if (isPinned()) {
+          setVisible(true)
+          clearToolbarHideTimer()
+          return
+        }
+        scheduleHide()
+      })
+    },
+    { signal },
+  )
+
+  if (more) {
+    const observer = new MutationObserver(() => {
+      if (isPinned()) {
+        setVisible(true)
+        clearToolbarHideTimer()
+        return
+      }
+      scheduleHide()
+    })
+    observer.observe(more, { attributes: true, attributeFilter: ['class'] })
+    signal.addEventListener('abort', () => observer.disconnect())
+  }
+
+  setVisible(false)
+}
 
 function bindMoreMenu() {
   moreMenuAbort?.abort()
@@ -235,6 +448,7 @@ function renderGrid() {
 
   app.innerHTML = `
     <div class="grid-shell">
+      <div class="toolbar-hotzone" aria-hidden="true"></div>
       <div class="toolbar" role="toolbar" aria-label="Controles">
         <button type="button" class="btn btn--load" id="btn-open-all">Abrir todos</button>
         <button type="button" class="btn btn--ghost" id="btn-layout">Telas</button>
@@ -259,7 +473,7 @@ function renderGrid() {
             <span aria-hidden="true">⋯</span>
           </button>
           <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
-            <button type="button" class="toolbar__menu-item" id="btn-clear-all" role="menuitem">
+            <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">
               Limpar todos
             </button>
           </div>
@@ -309,11 +523,15 @@ function renderGrid() {
   })
 
   bindMoreMenu()
+  bindToolbarAutoHide()
 }
 
 function render() {
   moreMenuAbort?.abort()
   moreMenuAbort = null
+  toolbarAbort?.abort()
+  toolbarAbort = null
+  clearToolbarHideTimer()
   if (view === 'choose') {
     renderChoose()
   } else {

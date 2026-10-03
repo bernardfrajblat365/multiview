@@ -105,7 +105,7 @@ jobs:
           RELEASE_TAG: ${{ github.ref_name }}
         run: |
           $tag = $env:RELEASE_TAG
-          $repo = 'bernard-014/multiview-desktop'
+          $repo = '${{ github.repository }}'
           $releaseJson = gh release view $tag --repo $repo --json isDraft,tagName 2>$null
           $viewStatus = $LASTEXITCODE
           if ($viewStatus -eq 0) {

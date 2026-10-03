@@ -1,0 +1,71 @@
+name: Windows PR checks
+
+on:
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: windows-pr-${{ github.event.pull_request.number }}
+  cancel-in-progress: true
+
+jobs:
+  checks:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies and ECS
+        run: npm ci
+
+      - name: Verify clean ECS installation
+        run: npm run test:ecs
+
+      - name: Verify installer-check rejection path
+        run: npm run test:installer-verifier
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Verify DRM runtime capabilities
+        run: npm run test:drm-diagnostic
+
+      - name: Verify EVS hooks with mocks
+        run: npm run test:evs
+
+      - name: Verify development signature preservation hook
+        run: npm run test:drm-poc
+
+      - name: Build application
+        run: npm run build
+
+      - name: Build isolated ECS POC package without EVS secrets
+        run: npm run dist:drm-poc
+
+      - name: Renderer smoke
+        run: npm run test:renderer
+
+      - name: Toolbar smoke
+        run: npm run test:toolbar
+
+      - name: Application integration smoke
+        run: npm run test:app
+
+      - name: Window close smoke
+        run: npm run test:close
+
+      - name: Packaged application smoke
+        env:
+          QUADRA_PACKAGED_EXE: release-drm-poc/win-unpacked/Quadra.exe
+        run: npm run test:packaged

@@ -1,15 +1,71 @@
 {
   "name": "quadra-multiview",
   "private": true,
-  "version": "1.0.0",
+  "version": "1.0.11",
+  "description": "Quadra multi-view desktop com painéis independentes no Electron",
   "type": "module",
+  "main": "out/main/main.js",
   "scripts": {
-    "dev": "vite",
-    "build": "tsc && vite build",
-    "preview": "vite preview"
+    "dev": "electron-vite dev",
+    "postinstall": "node node_modules/electron/install.js",
+    "build": "electron-vite build",
+    "preview": "electron-vite preview",
+    "test": "npm run test:routing && node --experimental-strip-types --test tests/layout.test.ts tests/update-flow.test.ts tests/startup-degraded.test.ts",
+    "test:app": "node tests/app-integration.cjs",
+    "test:close": "node tests/app-close-smoke.cjs",
+    "test:packaged": "node tests/packaged-smoke.cjs",
+    "test:routing": "node --experimental-strip-types --test tests/routing.test.ts",
+    "test:renderer": "node tests/renderer-smoke.cjs",
+    "test:toolbar": "node tests/toolbar-smoke.cjs",
+    "test:release-metadata": "node tests/metadata-check.cjs",
+    "test:ecs": "node tests/check-ecs-install.cjs",
+    "test:installer-verifier": "node tests/verify-installer.cjs --self-test",
+    "test:drm-diagnostic": "node tests/drm-diagnostic.cjs",
+    "test:drm-poc": "node tests/poc-vmp.cjs",
+    "test:evs": "node tests/evs-signing.cjs",
+    "test:startup": "node --experimental-strip-types --test tests/startup-degraded.test.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "dist": "npm run build && electron-builder --win nsis --publish never",
+    "dist:release": "npm run dist",
+    "dist:drm-poc": "npm run build && electron-builder --win dir --publish never -c.directories.output=release-drm-poc -c.disableAsarIntegrity=true -c.afterPack=./electron/after-pack.cjs -c.afterSign=./electron/after-sign-poc.cjs -c.win.signAndEditExecutable=false -c.win.signExecutable=false"
+  },
+  "build": {
+    "appId": "com.quadra.multiview",
+    "productName": "Quadra",
+    "electronDist": "node_modules/electron/dist",
+    "afterSign": "./electron/after-sign.cjs",
+    "directories": {
+      "output": "release"
+    },
+    "files": [
+      "out/**/*",
+      "package.json"
+    ],
+    "win": {
+      "target": "nsis",
+      "icon": "public/quadra.ico",
+      "verifyUpdateCodeSignature": true
+    },
+    "nsis": {
+      "artifactName": "Quadra-Setup-${version}.${ext}"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "bernard-014",
+      "repo": "multiview-desktop",
+      "releaseType": "release"
+    }
   },
   "devDependencies": {
+    "@types/node": "^24.13.5",
+    "electron": "git+https://github.com/castlabs/electron-releases.git#v44.1.0+wvcus",
+    "electron-builder": "^26.15.3",
+    "electron-vite": "^5.0.0",
     "typescript": "~6.0.2",
-    "vite": "^8.2.2"
+    "vite": "^7.3.6"
+  },
+  "dependencies": {
+    "electron-updater": "6.8.9",
+    "yalps": "0.6.4"
   }
 }

@@ -1,0 +1,139 @@
+name: Build Windows release draft
+
+on:
+  push:
+    tags:
+      - 'v*'
+
+permissions:
+  contents: write
+
+concurrency:
+  group: windows-release-${{ github.ref_name }}
+  cancel-in-progress: false
+
+jobs:
+  release:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies and ECS
+        run: npm ci
+
+      - name: Verify release tag matches package version
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node tests/metadata-check.cjs --tag-only $env:RELEASE_TAG
+
+      - name: Verify clean ECS installation
+        run: npm run test:ecs
+
+      - name: Verify installer-check rejection path
+        run: npm run test:installer-verifier
+
+      - name: Typecheck
+        run: npm run typecheck
+
+      - name: Unit tests
+        run: npm test
+
+      - name: Verify DRM runtime capabilities
+        run: npm run test:drm-diagnostic
+
+      - name: Verify EVS hooks with mocks
+        run: npm run test:evs
+
+      - name: Verify development signature preservation hook
+        run: npm run test:drm-poc
+
+      - name: Build application
+        run: npm run build
+
+      - name: Configure Python for EVS
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.12'
+
+      - name: Install pinned EVS client
+        run: python -m pip install castlabs-evs==1.3.2
+
+      - name: Prepare EVS authentication
+        shell: pwsh
+        env:
+          EVS_AUTH_JSON: ${{ secrets.EVS_AUTH_JSON }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:EVS_AUTH_JSON)) { throw 'Configure the EVS_AUTH_JSON secret before building a release.' }
+          $evsConfig = Join-Path $env:RUNNER_TEMP 'evs-auth.json'
+          [IO.File]::WriteAllText($evsConfig, $env:EVS_AUTH_JSON)
+          "EVS_CONFIG_FILE=$evsConfig" >> $env:GITHUB_ENV
+
+      - name: Build NSIS installer with production streaming VMP
+        shell: pwsh
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
+        run: npm run dist:release
+
+      - name: Validate release metadata
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: node tests/metadata-check.cjs $env:RELEASE_TAG
+
+      - name: Extract and verify final installer payload
+        shell: pwsh
+        env:
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $installer = "release/Quadra-Setup-$version.exe"
+          $extractDir = Join-Path $env:RUNNER_TEMP ("quadra-payload-" + $env:GITHUB_RUN_ID)
+          node tests/verify-installer.cjs $installer $version $extractDir
+
+      - name: Create or update draft release
+        shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
+          RELEASE_TAG: ${{ github.ref_name }}
+        run: |
+          $tag = $env:RELEASE_TAG
+          $repo = 'bernard-014/multiview-desktop'
+          $releaseJson = gh release view $tag --repo $repo --json isDraft,tagName 2>$null
+          $viewStatus = $LASTEXITCODE
+          if ($viewStatus -eq 0) {
+            $release = $releaseJson | ConvertFrom-Json
+            if ($release.tagName -ne $tag) { throw 'GitHub returned a release for an unexpected tag.' }
+            if (-not $release.isDraft) { throw "Release $tag is already public; refusing to replace its assets." }
+          } elseif ($viewStatus -eq 1) {
+            gh release create $tag --repo $repo --verify-tag --draft --title "Quadra $tag" --generate-notes
+            if ($LASTEXITCODE -ne 0) { throw "Could not create draft $tag." }
+          } else {
+            throw "Could not safely inspect release $tag (exit $viewStatus)."
+          }
+
+          $version = (Get-Content package.json -Raw | ConvertFrom-Json).version
+          $assets = @(
+            "release/Quadra-Setup-$version.exe"
+            "release/Quadra-Setup-$version.exe.blockmap"
+            'release/latest.yml'
+            'release/release-verification.json'
+          )
+          foreach ($asset in $assets) {
+            gh release upload $tag $asset --repo $repo --clobber
+            if ($LASTEXITCODE -ne 0) { throw "Could not upload $asset to draft $tag." }
+          }
+
+      - name: Remove temporary EVS authentication
+        if: always()
+        shell: pwsh
+        run: |
+          $evsConfig = Join-Path $env:RUNNER_TEMP 'evs-auth.json'
+          if (Test-Path -LiteralPath $evsConfig) { Remove-Item -LiteralPath $evsConfig -Force }

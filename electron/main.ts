@@ -24,7 +24,7 @@ const videoContainCss = `
     background: #000 !important;
   }
 `
-const weddbetsPlayerCss = `
+const sportsPlayerCss = `
   html, body, #app {
     width: 100% !important;
     height: 100% !important;
@@ -111,19 +111,43 @@ const weddbetsPlayerCss = `
   }
 `
 
+type SportsCatalogId = 'weddbets' | 'bllsport'
+type SportsCatalogTarget = { id: string; label: string }
+
+type SportsCatalog = {
+  id: SportsCatalogId
+  name: string
+  homeUrl: string
+  window: BrowserWindow | null
+  target: SportsCatalogTarget | null
+}
+
 let mainWindow: BaseWindow | null = null
 let overlayWindow: BrowserWindow | null = null
-let weddbetsWindow: BrowserWindow | null = null
 let overlayReady = false
 let quadraSession: Electron.Session | null = null
 let shuttingDown = false
 let cursorHidden = false
-let weddbetsTarget: { id: string; label: string } | null = null
 let visiblePanelIds = new Set<string>()
 let fullscreenPrioritySyncPending = false
 let autoUpdateController: ReturnType<typeof createAutoUpdateController> | null = null
 
-const weddbetsHomeUrl = process.env.QUADRA_WEDDBETS_URL ?? 'https://www.weddbets.com/'
+const sportsCatalogs: Record<SportsCatalogId, SportsCatalog> = {
+  weddbets: {
+    id: 'weddbets',
+    name: 'WeddBets',
+    homeUrl: process.env.QUADRA_WEDDBETS_URL ?? 'https://www.weddbets.com/',
+    window: null,
+    target: null,
+  },
+  bllsport: {
+    id: 'bllsport',
+    name: 'BLL',
+    homeUrl: process.env.QUADRA_BLLSPORT_URL ?? 'https://www.bllsport.com/',
+    window: null,
+    target: null,
+  },
+}
 
 const slotViews = new Map<string, SlotViewState>()
 const testUserDataPath = process.env.QUADRA_TEST_USER_DATA
@@ -196,10 +220,14 @@ function installNativeFullscreenHandlers() {
   app.on('browser-window-blur', scheduleFullscreenPrioritySync)
 }
 
-function normalizeWeddbetsPlayerUrl(value: string) {
+function getSportsCatalog(id: SportsCatalogId) {
+  return sportsCatalogs[id]
+}
+
+function normalizeSportsPlayerUrl(catalog: SportsCatalog, value: string) {
   try {
-    const url = new URL(value, weddbetsHomeUrl)
-    const home = new URL(weddbetsHomeUrl)
+    const url = new URL(value, catalog.homeUrl)
+    const home = new URL(catalog.homeUrl)
     if (url.origin !== home.origin || !/^\/view\/[^/]+\/?$/i.test(url.pathname)) return null
     url.searchParams.set('view', 'clean')
     return url.toString()
@@ -208,28 +236,36 @@ function normalizeWeddbetsPlayerUrl(value: string) {
   }
 }
 
-function updateWeddbetsWindowTitle() {
-  if (!weddbetsWindow || weddbetsWindow.isDestroyed()) return
-  weddbetsWindow.setTitle(weddbetsTarget
-    ? `WeddBets — abrir no ${weddbetsTarget.label}`
-    : 'WeddBets — escolha um painel no Quadra')
+function matchSportsPlayerUrl(value: string) {
+  for (const catalog of Object.values(sportsCatalogs)) {
+    const playerUrl = normalizeSportsPlayerUrl(catalog, value)
+    if (playerUrl) return { catalog, playerUrl }
+  }
+  return null
 }
 
-function setWeddbetsTarget(id: string | null, label = '') {
-  weddbetsTarget = id && visiblePanelIds.has(id) ? { id, label } : null
-  updateWeddbetsWindowTitle()
+function updateSportsCatalogWindowTitle(catalog: SportsCatalog) {
+  if (!catalog.window || catalog.window.isDestroyed()) return
+  catalog.window.setTitle(catalog.target
+    ? `${catalog.name} — abrir no ${catalog.target.label}`
+    : `${catalog.name} — escolha um painel no Quadra`)
 }
 
-function configureWeddbetsCatalog(contents: Electron.WebContents) {
+function setSportsCatalogTarget(catalog: SportsCatalog, id: string | null, label = '') {
+  catalog.target = id && visiblePanelIds.has(id) ? { id, label } : null
+  updateSportsCatalogWindowTitle(catalog)
+}
+
+function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebContents) {
   contents.setUserAgent(electronUserAgent)
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    if (isMainFrame && errorCode !== -3) overlayWindow?.webContents.send('quadra:weddbets-error', {
+    if (isMainFrame && errorCode !== -3) overlayWindow?.webContents.send(`quadra:${catalog.id}-error`, {
       message: `Não foi possível abrir o catálogo (${errorDescription}).`,
       url: validatedURL,
     })
   })
   contents.setWindowOpenHandler(({ url }) => {
-    const playerUrl = normalizeWeddbetsPlayerUrl(url)
+    const playerUrl = normalizeSportsPlayerUrl(catalog, url)
     if (!playerUrl) {
       return {
         action: 'allow',
@@ -244,19 +280,19 @@ function configureWeddbetsCatalog(contents: Electron.WebContents) {
         },
       }
     }
-    if (!weddbetsTarget || !visiblePanelIds.has(weddbetsTarget.id)) {
-      setWeddbetsTarget(null)
-      overlayWindow?.webContents.send('quadra:weddbets-target-required')
+    if (!catalog.target || !visiblePanelIds.has(catalog.target.id)) {
+      setSportsCatalogTarget(catalog, null)
+      overlayWindow?.webContents.send(`quadra:${catalog.id}-target-required`)
       overlayWindow?.show()
       overlayWindow?.focus()
       return { action: 'deny' }
     }
-    const existing = slotViews.get(weddbetsTarget.id)
+    const existing = slotViews.get(catalog.target.id)
     if (existing?.url === playerUrl && !existing.view.webContents.isDestroyed()) {
       void existing.view.webContents.loadURL(playerUrl).catch(() => {})
     }
-    overlayWindow?.webContents.send('quadra:weddbets-player-opened', {
-      panelId: weddbetsTarget.id,
+    overlayWindow?.webContents.send(`quadra:${catalog.id}-player-opened`, {
+      panelId: catalog.target.id,
       url: playerUrl,
     })
     return { action: 'deny' }
@@ -266,17 +302,18 @@ function configureWeddbetsCatalog(contents: Electron.WebContents) {
   })
 }
 
-function openWeddbetsCatalog(id: string, label: string) {
+function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string) {
   if (!visiblePanelIds.has(id)) return
-  setWeddbetsTarget(id, label)
-  if (weddbetsWindow && !weddbetsWindow.isDestroyed()) {
-    if (weddbetsWindow.isMinimized()) weddbetsWindow.restore()
-    weddbetsWindow.show()
-    weddbetsWindow.focus()
+  const catalog = getSportsCatalog(catalogId)
+  setSportsCatalogTarget(catalog, id, label)
+  if (catalog.window && !catalog.window.isDestroyed()) {
+    if (catalog.window.isMinimized()) catalog.window.restore()
+    catalog.window.show()
+    catalog.window.focus()
     return
   }
-  weddbetsWindow = new BrowserWindow({
-    title: `WeddBets — abrir no ${label}`,
+  catalog.window = new BrowserWindow({
+    title: `${catalog.name} — abrir no ${label}`,
     icon: appIconPath,
     width: 1180,
     height: 820,
@@ -291,29 +328,31 @@ function openWeddbetsCatalog(id: string, label: string) {
       autoplayPolicy: 'no-user-gesture-required',
     },
   })
-  configureWeddbetsCatalog(weddbetsWindow.webContents)
-  weddbetsWindow.webContents.on('page-title-updated', (event) => {
+  configureSportsCatalog(catalog, catalog.window.webContents)
+  catalog.window.webContents.on('page-title-updated', (event) => {
     event.preventDefault()
-    updateWeddbetsWindowTitle()
+    updateSportsCatalogWindowTitle(catalog)
   })
-  weddbetsWindow.on('closed', () => {
-    weddbetsWindow = null
-    weddbetsTarget = null
+  catalog.window.on('closed', () => {
+    catalog.window = null
+    catalog.target = null
   })
-  void weddbetsWindow.loadURL(weddbetsHomeUrl).catch(() => {})
+  void catalog.window.loadURL(catalog.homeUrl).catch(() => {})
 }
 
 function configureRemoteContents(contents: Electron.WebContents, slotId?: string) {
   contents.setUserAgent(electronUserAgent)
   contents.on('did-finish-load', () => {
     void contents.insertCSS(videoContainCss, { cssOrigin: 'user' }).catch(() => {})
-    if (!normalizeWeddbetsPlayerUrl(contents.getURL())) return
-    void contents.insertCSS(weddbetsPlayerCss, { cssOrigin: 'user' }).catch(() => {})
+    if (!matchSportsPlayerUrl(contents.getURL())) return
+    void contents.insertCSS(sportsPlayerCss, { cssOrigin: 'user' }).catch(() => {})
   })
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
-    if (!slotId || !isMainFrame || errorCode === -3 || !normalizeWeddbetsPlayerUrl(validatedURL)) return
-    overlayWindow?.webContents.send('quadra:weddbets-error', {
-      message: `O player do WeddBets não carregou (${errorDescription}). Tente escolher o jogo novamente.`,
+    if (!slotId || !isMainFrame || errorCode === -3) return
+    const match = matchSportsPlayerUrl(validatedURL)
+    if (!match) return
+    overlayWindow?.webContents.send(`quadra:${match.catalog.id}-error`, {
+      message: `O player do ${match.catalog.name} não carregou (${errorDescription}). Tente escolher o jogo novamente.`,
       panelId: slotId,
       url: validatedURL,
     })
@@ -378,7 +417,9 @@ function destroyAllSlotViews() {
 
 function closeOwnedWindows() {
   destroyAllSlotViews()
-  if (weddbetsWindow && !weddbetsWindow.isDestroyed()) weddbetsWindow.close()
+  for (const catalog of Object.values(sportsCatalogs)) {
+    if (catalog.window && !catalog.window.isDestroyed()) catalog.window.close()
+  }
   if (overlayWindow && !overlayWindow.isDestroyed()) overlayWindow.close()
 }
 
@@ -456,7 +497,9 @@ function raiseOverlay() {
 function applyLayout(payload: LayoutPayload) {
   if (!mainWindow) return
   visiblePanelIds = new Set(payload.panels.map((panel) => panel.id))
-  if (weddbetsTarget && !visiblePanelIds.has(weddbetsTarget.id)) setWeddbetsTarget(null)
+  for (const catalog of Object.values(sportsCatalogs)) {
+    if (catalog.target && !visiblePanelIds.has(catalog.target.id)) setSportsCatalogTarget(catalog, null)
+  }
   if (payload.view === 'choose') {
     destroyAllSlotViews()
     raiseOverlay()
@@ -555,15 +598,29 @@ function installIpcHandlers() {
   })
   ipcMain.on('quadra:open-weddbets', (event, id: unknown, label: unknown) => {
     if (!isUiSender(event) || typeof id !== 'string' || typeof label !== 'string') return
-    openWeddbetsCatalog(id, label)
+    openSportsCatalog('weddbets', id, label)
   })
   ipcMain.on('quadra:set-weddbets-target', (event, id: unknown, label: unknown) => {
     if (!isUiSender(event)) return
+    const catalog = getSportsCatalog('weddbets')
     if (id === null) {
-      setWeddbetsTarget(null)
+      setSportsCatalogTarget(catalog, null)
       return
     }
-    if (typeof id === 'string' && typeof label === 'string') setWeddbetsTarget(id, label)
+    if (typeof id === 'string' && typeof label === 'string') setSportsCatalogTarget(catalog, id, label)
+  })
+  ipcMain.on('quadra:open-bllsport', (event, id: unknown, label: unknown) => {
+    if (!isUiSender(event) || typeof id !== 'string' || typeof label !== 'string') return
+    openSportsCatalog('bllsport', id, label)
+  })
+  ipcMain.on('quadra:set-bllsport-target', (event, id: unknown, label: unknown) => {
+    if (!isUiSender(event)) return
+    const catalog = getSportsCatalog('bllsport')
+    if (id === null) {
+      setSportsCatalogTarget(catalog, null)
+      return
+    }
+    if (typeof id === 'string' && typeof label === 'string') setSportsCatalogTarget(catalog, id, label)
   })
 }
 
@@ -605,7 +662,9 @@ function createWindow() {
   })
   mainWindow.on('closed', () => {
     mainWindow = null
-    if (weddbetsWindow && !weddbetsWindow.isDestroyed()) weddbetsWindow.close()
+    for (const catalog of Object.values(sportsCatalogs)) {
+      if (catalog.window && !catalog.window.isDestroyed()) catalog.window.close()
+    }
     destroyAllSlotViews()
     scheduleFullscreenPrioritySync()
   })

@@ -62,6 +62,7 @@ let layoutResizeFrame: number | null = null
 let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let weddbetsTargetId: PanelId | null = null
+let bllsportTargetId: PanelId | null = null
 
 function createPanel(): Panel {
   return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted() }
@@ -442,16 +443,45 @@ function openWeddbets(id: PanelId) {
   window.quadra?.openWeddbets(id, panelLabel(id))
 }
 
-function useWeddbetsPlayer(panelId: PanelId, url: string) {
+function openBllsport(id: PanelId) {
+  if (!panelById(id)) return
+  bllsportTargetId = id
+  window.quadra?.openBllsport(id, panelLabel(id))
+}
+
+function useSportsCatalogPlayer(
+  panelId: PanelId,
+  url: string,
+  setTargetId: (id: PanelId | null) => void,
+  syncTarget: (id: PanelId | null, label?: string) => void,
+) {
   const panel = panelById(panelId)
   if (!panel || view !== 'grid') return
   panel.url = url
   panel.draftUrl = url
   const next = panels.find((candidate) => candidate.id !== panelId && !candidate.url)
-  weddbetsTargetId = next?.id ?? null
+  setTargetId(next?.id ?? null)
   renderGrid()
-  if (next) window.quadra?.setWeddbetsTarget(next.id, panelLabel(next.id))
-  else window.quadra?.setWeddbetsTarget(null)
+  if (next) syncTarget(next.id, panelLabel(next.id))
+  else syncTarget(null)
+}
+
+function useWeddbetsPlayer(panelId: PanelId, url: string) {
+  useSportsCatalogPlayer(
+    panelId,
+    url,
+    (id) => { weddbetsTargetId = id },
+    (id, label) => window.quadra?.setWeddbetsTarget(id, label),
+  )
+}
+
+function useBllsportPlayer(panelId: PanelId, url: string) {
+  useSportsCatalogPlayer(
+    panelId,
+    url,
+    (id) => { bllsportTargetId = id },
+    (id, label) => window.quadra?.setBllsportTarget(id, label),
+  )
 }
 
 function openAllPanels() {
@@ -517,6 +547,7 @@ function urlFormHtml(panel: Panel, options: { withClose?: boolean } = {}): strin
       <input id="url-${escapeHtml(panel.id)}" type="url" name="url" inputmode="url" autocomplete="off" spellcheck="false"
         placeholder="Cole link YouTube ou URL e pressione Enter" value="${escapeHtml(panel.draftUrl)}" />
       <button type="button" class="btn btn--weddbets${weddbetsTargetId === panel.id ? ' is-target' : ''}" data-weddbets aria-pressed="${weddbetsTargetId === panel.id}" aria-label="Escolher jogo no WeddBets para o jogo ${index + 1}" title="Abrir WeddBets para este painel">WeddBets</button>
+      <button type="button" class="btn btn--bllsport${bllsportTargetId === panel.id ? ' is-target' : ''}" data-bllsport aria-pressed="${bllsportTargetId === panel.id}" aria-label="Escolher jogo no BLL para o jogo ${index + 1}" title="Abrir BLL para este painel">BLL</button>
       <button type="submit" class="btn btn--load" aria-label="Abrir link">Abrir</button>
       <button type="button" class="btn btn--clear" data-clear aria-label="Limpar link">Limpar</button>
       ${closeBtn}
@@ -634,6 +665,7 @@ function bindPanelForm(panelElement: HTMLElement) {
   })
   form?.querySelector('[data-clear]')?.addEventListener('click', () => applyPanelUrl(id, ''))
   form?.querySelector('[data-weddbets]')?.addEventListener('click', () => openWeddbets(id))
+  form?.querySelector('[data-bllsport]')?.addEventListener('click', () => openBllsport(id))
   form?.querySelector('[data-close]')?.addEventListener('click', () => setPanelEditing(panelElement, false))
   form?.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return
@@ -883,7 +915,9 @@ function renderChoose() {
   window.quadra?.setCursorHidden(false)
   pendingFocusPanelId = null
   weddbetsTargetId = null
+  bllsportTargetId = null
   window.quadra?.setWeddbetsTarget(null)
+  window.quadra?.setBllsportTarget(null)
   document.body.classList.remove('is-grid')
   setChromeInteractive(true)
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
@@ -1106,6 +1140,10 @@ window.quadra?.onFullscreenChange((on) => {
 window.quadra?.onWeddbetsPlayerOpened(({ panelId, url }) => useWeddbetsPlayer(panelId, url))
 window.quadra?.onWeddbetsTargetRequired(() => {
   weddbetsTargetId = null
+})
+window.quadra?.onBllsportPlayerOpened(({ panelId, url }) => useBllsportPlayer(panelId, url))
+window.quadra?.onBllsportTargetRequired(() => {
+  bllsportTargetId = null
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return

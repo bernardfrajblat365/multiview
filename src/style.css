@@ -99,7 +99,7 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 .panel:hover .panel__controls, .panel:focus-within .panel__controls, .layout-stage.is-editing .panel__controls, .grid-shell.is-toolbar-visible .panel__controls { opacity: 1; pointer-events: auto; }
 .panel__overlay { position: absolute; inset: 0 0 auto; z-index: 23; padding: 0.45rem 0.5rem; background: rgba(7,26,20,0.94); border-bottom: 1px solid rgba(200,245,96,0.15); backdrop-filter: blur(10px); opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity 0.16s ease, transform 0.16s ease; }
 .panel.is-editing .panel__overlay { opacity: 1; transform: none; pointer-events: auto; }
-.panel__bar { display: flex; align-items: center; gap: 0.45rem; width: min(100%, 34rem); padding: 0.65rem; border-radius: 12px; background: rgba(7,26,20,0.92); border: 1px solid rgba(200,245,96,0.14); backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
+.panel__bar { display: flex; align-items: center; gap: 0.45rem; width: min(100%, 38rem); padding: 0.65rem; border-radius: 12px; background: rgba(7,26,20,0.92); border: 1px solid rgba(200,245,96,0.14); backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }
 .panel__overlay .panel__bar { width: 100%; padding: 0; border: 0; border-radius: 0; background: transparent; box-shadow: none; backdrop-filter: none; }
 .panel__bar input { flex: 1; min-width: 0; border: 1px solid var(--line); border-radius: 8px; background: rgba(7,26,20,0.75); color: var(--ink); padding: 0.68rem 0.8rem; font: inherit; font-size: 0.95rem; outline: none; }
 .panel__bar input::placeholder { color: rgba(155,189,173,0.55); }
@@ -108,6 +108,9 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 .btn--weddbets { flex-shrink: 0; padding: 0.62rem 0.75rem; border: 1px solid rgba(84, 180, 255, 0.5); background: rgba(20, 91, 145, 0.72); color: #e8f6ff; font-size: 0.82rem; }
 .btn--weddbets:hover { border-color: rgba(125, 204, 255, 0.88); background: rgba(25, 112, 177, 0.9); }
 .btn--weddbets.is-target { border-color: #bfe7ff; box-shadow: 0 0 0 2px rgba(84, 180, 255, 0.2); }
+.btn--bllsport { flex-shrink: 0; padding: 0.62rem 0.75rem; border: 1px solid rgba(255, 168, 76, 0.55); background: rgba(140, 72, 18, 0.78); color: #fff3e6; font-size: 0.82rem; }
+.btn--bllsport:hover { border-color: rgba(255, 196, 122, 0.9); background: rgba(168, 88, 24, 0.92); }
+.btn--bllsport.is-target { border-color: #ffd7a8; box-shadow: 0 0 0 2px rgba(255, 168, 76, 0.22); }
 .panel__close { flex-shrink: 0; color: var(--ink-muted); }
 .panel__empty { display: flex; flex-direction: column; align-items: center; justify-content: center; gap: 0.6rem; width: 100%; height: 100%; padding: 1rem; text-align: center; color: var(--ink-muted); }
 .panel__slot { margin: 0; font-family: 'Neuton', serif; font-weight: 700; font-size: clamp(1.35rem, 5cqw, 2.6rem); color: var(--ink); }
@@ -301,7 +304,7 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 @container (max-width: 340px) {
   .panel__bar { gap: 0.25rem; padding: 0.35rem; }
   .panel__bar input { padding: 0.45rem; font-size: 0.75rem; }
-  .panel__bar .btn--load, .panel__bar .btn--clear, .panel__bar .btn--weddbets { padding: 0.4rem 0.45rem; font-size: 0.7rem; }
+  .panel__bar .btn--load, .panel__bar .btn--clear, .panel__bar .btn--weddbets, .panel__bar .btn--bllsport { padding: 0.4rem 0.45rem; font-size: 0.7rem; }
 }
 
 @media (max-width: 1000px) {

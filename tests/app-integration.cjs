@@ -87,9 +87,10 @@ async function run() {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-app-integration-'))
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
-    if (request.url?.startsWith('/wedd/')) {
+    if (request.url?.startsWith('/wedd/') || request.url?.startsWith('/bll/')) {
+      const label = request.url.startsWith('/bll/') ? 'BLL' : 'WeddBets'
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html><title>WeddBets Test Catalog</title>
+      response.end(`<!doctype html><title>${label} Test Catalog</title>
         <button id="game-a" onclick="window.open('/view/game-a?canal=2', 'game-a')">Jogo A</button>
         <button id="game-b" onclick="window.open('/view/game-b', 'game-b')">Jogo B</button>`)
       return
@@ -113,7 +114,7 @@ async function run() {
   delete childEnv.ELECTRON_RUN_AS_NODE
   const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_WEDDBETS_URL: `${baseUrl}/wedd/` },
+    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_WEDDBETS_URL: `${baseUrl}/wedd/`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` },
   })
   try {
     const target = await waitForRendererTarget(port)
@@ -159,6 +160,33 @@ async function run() {
     assert.equal(await evaluate(target.webSocketDebuggerUrl,
       `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`), true,
     'A substituição explícita alterou o painel errado.')
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('#btn-more').click()
+      document.querySelector('#btn-clear-all').click()
+      document.querySelector('#btn-layout').click()
+      document.querySelector('.confirm [data-ok]').click()
+    })()`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser'))`), true)
+
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('[data-count="2"]').click()`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-bllsport]').click()`)
+    const bllCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
+    assert.ok(bllCatalog, 'O catálogo BLL não abriu.')
+    await waitForExpression(bllCatalog, `Boolean(document.querySelector('#game-a'))`)
+    await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-a').click()`)
+    const firstBllPlayer = await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-a'))
+    assert.ok(firstBllPlayer, 'O primeiro player BLL não foi direcionado ao painel.')
+    const firstBllState = await evaluate(target.webSocketDebuggerUrl, `(() => ({
+      loaded: document.querySelector('.panel[data-slot="0"]').classList.contains('panel--loaded'),
+      nextTarget: document.querySelector('.panel[data-slot="1"] [data-bllsport]').classList.contains('is-target'),
+      url: document.querySelector('.panel[data-slot="0"] input[name="url"]').value,
+    }))()`)
+    assert.equal(firstBllState.loaded, true)
+    assert.equal(firstBllState.nextTarget, true)
+    assert.ok(firstBllState.url.includes('/view/game-a'))
+    assert.equal(new URL(firstBllState.url).searchParams.get('view'), 'clean')
+    await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-b').click()`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`)
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('#btn-more').click()
       document.querySelector('#btn-clear-all').click()
@@ -307,7 +335,7 @@ async function run() {
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser'))`), true)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `getComputedStyle(document.documentElement).backgroundColor`), 'rgb(7, 26, 20)')
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `getComputedStyle(document.documentElement).colorScheme`), 'dark')
-    process.stdout.write(JSON.stringify({ chooser: true, weddbetsCatalog: true, weddbetsSequentialPanels: true, weddbetsExplicitReplacement: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    process.stdout.write(JSON.stringify({ chooser: true, weddbetsCatalog: true, weddbetsSequentialPanels: true, weddbetsExplicitReplacement: true, bllsportCatalog: true, bllsportSequentialPanels: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

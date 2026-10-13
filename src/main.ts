@@ -61,7 +61,6 @@ let layoutSyncFrame: number | null = null
 let layoutResizeFrame: number | null = null
 let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
-let weddbetsTargetId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
 
 function createPanel(): Panel {
@@ -439,7 +438,6 @@ function panelLabel(id: PanelId) {
 
 function openWeddbets(id: PanelId) {
   if (!panelById(id)) return
-  weddbetsTargetId = id
   window.quadra?.openWeddbets(id, panelLabel(id))
 }
 
@@ -470,7 +468,7 @@ function useWeddbetsPlayer(panelId: PanelId, url: string) {
   useSportsCatalogPlayer(
     panelId,
     url,
-    (id) => { weddbetsTargetId = id },
+    () => {},
     (id, label) => window.quadra?.setWeddbetsTarget(id, label),
   )
 }
@@ -546,7 +544,6 @@ function urlFormHtml(panel: Panel, options: { withClose?: boolean } = {}): strin
       <label class="visually-hidden" for="url-${escapeHtml(panel.id)}">URL do jogo ${index + 1}</label>
       <input id="url-${escapeHtml(panel.id)}" type="url" name="url" inputmode="url" autocomplete="off" spellcheck="false"
         placeholder="Cole link YouTube ou URL e pressione Enter" value="${escapeHtml(panel.draftUrl)}" />
-      <button type="button" class="btn btn--weddbets${weddbetsTargetId === panel.id ? ' is-target' : ''}" data-weddbets aria-pressed="${weddbetsTargetId === panel.id}" aria-label="Escolher jogo no WeddBets para o jogo ${index + 1}" title="Abrir WeddBets para este painel">WeddBets</button>
       <button type="button" class="btn btn--bllsport${bllsportTargetId === panel.id ? ' is-target' : ''}" data-bllsport aria-pressed="${bllsportTargetId === panel.id}" aria-label="Escolher jogo no BLL para o jogo ${index + 1}" title="Abrir BLL para este painel">BLL</button>
       <button type="submit" class="btn btn--load" aria-label="Abrir link">Abrir</button>
       <button type="button" class="btn btn--clear" data-clear aria-label="Limpar link">Limpar</button>
@@ -914,7 +911,6 @@ function renderChoose() {
   document.body.classList.remove('is-cursor-hidden')
   window.quadra?.setCursorHidden(false)
   pendingFocusPanelId = null
-  weddbetsTargetId = null
   bllsportTargetId = null
   window.quadra?.setWeddbetsTarget(null)
   window.quadra?.setBllsportTarget(null)
@@ -1138,9 +1134,6 @@ window.quadra?.onFullscreenChange((on) => {
   scheduleSyncLayout()
 })
 window.quadra?.onWeddbetsPlayerOpened(({ panelId, url }) => useWeddbetsPlayer(panelId, url))
-window.quadra?.onWeddbetsTargetRequired(() => {
-  weddbetsTargetId = null
-})
 window.quadra?.onBllsportPlayerOpened(({ panelId, url }) => useBllsportPlayer(panelId, url))
 window.quadra?.onBllsportTargetRequired(() => {
   bllsportTargetId = null

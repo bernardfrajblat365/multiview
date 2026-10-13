@@ -3,7 +3,7 @@ const fs = require('node:fs')
 const os = require('node:os')
 const path = require('node:path')
 const { pathToFileURL } = require('node:url')
-const { createWeddBetsFixture } = require('./weddbets-fixture.cjs')
+const { createSportsPlayerFixture } = require('./sports-player-fixture.cjs')
 const root = path.resolve(__dirname, '..')
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
@@ -111,7 +111,7 @@ async function worker() {
   const main = BaseWindow.getAllWindows().find((win) => win !== overlay)
   const pages = () => webContents.getAllWebContents().filter((page) => page.getURL().startsWith(process.env.QUADRA_TOOLBAR_URL))
   const toolbarOrigin = new URL(process.env.QUADRA_TOOLBAR_URL).origin
-  const weddPages = () => webContents.getAllWebContents().filter((page) => page.getURL().startsWith(`${toolbarOrigin}/view/`))
+  const sportsPages = () => webContents.getAllWebContents().filter((page) => page.getURL().startsWith(`${toolbarOrigin}/view/`))
   let checks = 0
   let compositions = 0
   async function check(label) {
@@ -157,7 +157,7 @@ async function worker() {
     assert.equal(
       placement?.isTop,
       true,
-      `${count} WeddBets fixture must use a highlighted top panel: ${JSON.stringify(placement)}`,
+      `${count} sports player fixture must use a highlighted top panel: ${JSON.stringify(placement)}`,
     )
     return placement
   }
@@ -167,10 +167,10 @@ async function worker() {
     await click(`[data-organizer-aliases~="${positions[index]}"]`)
     await click('[data-organize-apply]')
   }
-  async function openWeddFixtures(count, ratio, player = 'openvidu', { late = false, empty = false } = {}) {
-    const fixture = empty ? 'empty' : 'weddbets'
+  async function openSportsFixtures(count, ratio, player = 'openvidu', { late = false, empty = false } = {}) {
+    const fixture = empty ? 'empty' : 'sports'
     const urls = Array.from({ length: count }, (_, index) =>
-      `${toolbarOrigin}/view/weddbets?fixture=${fixture}&ratio=${ratio}&player=${player}&late=${late ? 1 : 0}&slot=${index}`)
+      `${toolbarOrigin}/view/sports?fixture=${fixture}&ratio=${ratio}&player=${player}&late=${late ? 1 : 0}&slot=${index}`)
     await ui(`(() => {
       document.querySelectorAll('.panel input[name="url"]').forEach((input, index) => {
         input.value = ${JSON.stringify(urls)}[index]
@@ -179,7 +179,7 @@ async function worker() {
       document.querySelector('#btn-open-all').click()
     })()`)
     await until(async () => {
-      const scenarioPages = weddPages().filter((page) =>
+      const scenarioPages = sportsPages().filter((page) =>
         page.getURL().includes(`fixture=${fixture}`) &&
         page.getURL().includes(`ratio=${ratio}`) &&
         page.getURL().includes(`player=${player}`))
@@ -189,17 +189,17 @@ async function worker() {
         const video = [...document.querySelectorAll('video')].find((candidate) => candidate.videoWidth > 0)
         return document.readyState === 'complete' && Boolean(video && !video.paused && video.srcObject?.active)
       })()`).catch(() => false)))).every(Boolean)
-    }, `${count} WeddBets ${player} ${ratio} pages`)
+    }, `${count} sports player ${player} ${ratio} pages`)
     return urls
   }
-  async function closeWeddFixtures(label) {
+  async function closeSportsFixtures(label) {
     await click('#btn-layout')
     await click('.confirm [data-ok]')
     await until(() => ui("Boolean(document.querySelector('.chooser'))"), `${label}: chooser return`)
-    await until(() => weddPages().length === 0, `${label}: WeddBets pages closed`)
+    await until(() => sportsPages().length === 0, `${label}: sports player pages closed`)
     await wait(150)
   }
-  async function readWeddVideo(page) {
+  async function readSportsVideo(page) {
     return page.executeJavaScript(`(() => {
       const video = [...document.querySelectorAll('video')].find((candidate) => candidate.videoWidth > 0) || document.querySelector('video')
       if (!video) return null
@@ -265,19 +265,19 @@ async function worker() {
       }
     })()`)
   }
-  async function assertWeddVideoFits(page, label) {
+  async function assertSportsVideoFits(page, label) {
     let metrics = null
     await until(async () => {
-      const next = await readWeddVideo(page)
+      const next = await readSportsVideo(page)
       if (!next || next.intrinsic.width <= 0 || next.intrinsic.height <= 0 || next.paused) return false
       metrics = next
       return true
-    }, `${label}: WeddBets video metadata`)
+    }, `${label}: sports player video metadata`)
     const tolerance = 2
     assert.equal(metrics.fit, 'contain', `${label}: object-fit must preserve the complete video`)
     assert.equal(metrics.position, '50% 50%', `${label}: video must be centered`)
     assert.equal(metrics.background, 'rgb(0, 0, 0)', `${label}: video background must be black`)
-    assert.equal(metrics.paused, false, `${label}: WeddBets video must keep playing`)
+    assert.equal(metrics.paused, false, `${label}: sports player video must keep playing`)
     assert.ok(metrics.rect.x >= -tolerance && metrics.rect.y >= -tolerance &&
       metrics.rect.x + metrics.rect.width <= metrics.viewport.width + tolerance &&
       metrics.rect.y + metrics.rect.height <= metrics.viewport.height + tolerance,
@@ -305,7 +305,7 @@ async function worker() {
       Math.abs(metrics.rendered.height - metrics.content.height) <= tolerance,
     `${label}: contain deve maximizar a imagem em pelo menos um eixo: ${JSON.stringify(metrics)}`)
   }
-  async function runWeddGeometryScenarios() {
+  async function runSportsGeometryScenarios() {
     const ratios = ['16x9', '4x3', '3x4', '16x4']
     const playerScenarios = [
       { player: 'openvidu', ratios, rotations: true },
@@ -321,35 +321,35 @@ async function worker() {
           for (const rotation of rotations) {
             const placement = await selectTopHighlight(count)
             await selectHighlightPosition(rotation)
-            await openWeddFixtures(count, ratio, scenario.player, {
+            await openSportsFixtures(count, ratio, scenario.player, {
               late: scenario.player === 'openvidu' && rotation === 0,
             })
             const label = `${count} panels, ${scenario.player}, ${ratio}, position=${['top', 'bottom', 'left', 'right'][rotation]}, top=${JSON.stringify(placement)}`
-            for (const page of weddPages()) await assertWeddVideoFits(page, label)
+            for (const page of sportsPages()) await assertSportsVideoFits(page, label)
 
             if (count === 3 && scenario.player === 'openvidu' && ratio === '16x9' && rotation === 0) {
-              const first = weddPages()[0]
+              const first = sportsPages()[0]
               first.reload()
-              await assertWeddVideoFits(first, `${label}, reload`)
+              await assertSportsVideoFits(first, `${label}, reload`)
               await click('#btn-organize')
               await ui("document.querySelector('.panel:not(.is-highlighted) [data-highlight]').click()")
               await click('#btn-organize')
-              for (const page of weddPages()) await assertWeddVideoFits(page, `${label}, swapped highlight`)
+              for (const page of sportsPages()) await assertSportsVideoFits(page, `${label}, swapped highlight`)
               main.unmaximize()
               for (const [width, height] of [[960, 620], [1440, 900]]) {
                 main.setSize(width, height)
                 await wait(180)
-                for (const page of weddPages()) await assertWeddVideoFits(page, `${label}, resized ${width}x${height}`)
+                for (const page of sportsPages()) await assertSportsVideoFits(page, `${label}, resized ${width}x${height}`)
               }
               await ui("document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))")
               await until(() => ui("document.querySelector('.grid-shell').classList.contains('is-toolbar-visible')"), `${label}: reveal toolbar`)
               await click('#btn-fullscreen')
               await until(() => main.isFullScreen(), `${label}: enter fullscreen`)
-              for (const page of weddPages()) await assertWeddVideoFits(page, `${label}, fullscreen`)
+              for (const page of sportsPages()) await assertSportsVideoFits(page, `${label}, fullscreen`)
               await click('#btn-fullscreen')
               await until(() => !main.isFullScreen(), `${label}: leave fullscreen`)
             }
-            await closeWeddFixtures(label)
+            await closeSportsFixtures(label)
           }
         }
       }
@@ -360,19 +360,19 @@ async function worker() {
       await click('#btn-organize')
       await click('[data-composition="0"]')
       await click('[data-organize-apply]')
-      await openWeddFixtures(count, '4x3', 'openvidu')
-      for (const page of weddPages()) await assertWeddVideoFits(page, `${count} panels, equal, 4x3`)
-      await closeWeddFixtures(`${count} panels, equal`)
+      await openSportsFixtures(count, '4x3', 'openvidu')
+      for (const page of sportsPages()) await assertSportsVideoFits(page, `${count} panels, equal, 4x3`)
+      await closeSportsFixtures(`${count} panels, equal`)
     }
 
     await selectTopHighlight(3)
-    await openWeddFixtures(3, '16x9', 'openvidu', { empty: true })
-    for (const page of weddPages()) {
+    await openSportsFixtures(3, '16x9', 'openvidu', { empty: true })
+    for (const page of sportsPages()) {
       assert.equal(await page.executeJavaScript('document.querySelectorAll(\'video\').length'), 0, 'Página sem player não deve criar vídeo')
     }
-    await closeWeddFixtures('WeddBets sem player')
+    await closeSportsFixtures('sports player without video')
   }
-  await runWeddGeometryScenarios()
+  await runSportsGeometryScenarios()
   async function click(selector) {
     const result = await ui(`(() => {
       try {
@@ -522,7 +522,7 @@ async function parent() {
     const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host}`)
     if (requestUrl.pathname.startsWith('/view/')) {
       res.writeHead(200, { 'content-type': 'text/html' })
-      res.end(createWeddBetsFixture(requestUrl))
+      res.end(createSportsPlayerFixture(requestUrl))
       return
     }
     res.writeHead(200, { 'content-type': 'text/html' })
@@ -540,7 +540,7 @@ async function parent() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-toolbar-'))
   const baseUrl = `http://127.0.0.1:${server.address().port}`
-  const env = { ...process.env, QUADRA_TEST_USER_DATA: userData, QUADRA_TOOLBAR_URL: `${baseUrl}/video`, QUADRA_WEDDBETS_URL: `${baseUrl}/wedd/` }
+  const env = { ...process.env, QUADRA_TEST_USER_DATA: userData, QUADRA_TOOLBAR_URL: `${baseUrl}/video`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(require('electron'), [__filename, '--worker'], { env, windowsHide: true, stdio: 'inherit' })
   const timer = setTimeout(() => child.kill(), 600000)

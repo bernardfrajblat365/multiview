@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
-const { createWeddBetsFixture } = require('./weddbets-fixture.cjs')
+const { createSportsPlayerFixture } = require('./sports-player-fixture.cjs')
 
 const projectRoot = path.resolve(__dirname, '..')
 const expectedAppVersion = `v${require('../package.json').version}`
@@ -87,17 +87,16 @@ async function run() {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-app-integration-'))
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
-    if (request.url?.startsWith('/wedd/') || request.url?.startsWith('/bll/')) {
-      const label = request.url.startsWith('/bll/') ? 'BLL' : 'WeddBets'
+    if (request.url?.startsWith('/bll/')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html><title>${label} Test Catalog</title>
+      response.end(`<!doctype html><title>BLL Test Catalog</title>
         <button id="game-a" onclick="window.open('/view/game-a?canal=2', 'game-a')">Jogo A</button>
         <button id="game-b" onclick="window.open('/view/game-b', 'game-b')">Jogo B</button>`)
       return
     }
     if (request.url?.startsWith('/view/')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(createWeddBetsFixture(new URL(request.url, `http://${request.headers.host}`)))
+      response.end(createSportsPlayerFixture(new URL(request.url, `http://${request.headers.host}`)))
       return
     }
     const title = request.url?.startsWith('/blocked') ? 'Quadra Blocked Page' : 'Quadra Integration Page'
@@ -114,60 +113,11 @@ async function run() {
   delete childEnv.ELECTRON_RUN_AS_NODE
   const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_WEDDBETS_URL: `${baseUrl}/wedd/`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` },
+    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` },
   })
   try {
     const target = await waitForRendererTarget(port)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.app-version')?.textContent`), expectedAppVersion)
-    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('[data-count="2"]').click()`)
-    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-weddbets]').click()`)
-    const catalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/wedd/'))
-    assert.ok(catalog, 'O catálogo WeddBets não abriu.')
-    await waitForExpression(catalog, `Boolean(document.querySelector('#game-a'))`)
-    await evaluate(catalog.webSocketDebuggerUrl, `document.querySelector('#game-a').click()`)
-    const firstWeddPlayer = await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-a'))
-    assert.ok(firstWeddPlayer, 'O primeiro player WeddBets não foi direcionado ao painel.')
-    const firstWeddState = await evaluate(target.webSocketDebuggerUrl, `(() => ({
-      loaded: document.querySelector('.panel[data-slot="0"]').classList.contains('panel--loaded'),
-      nextTarget: document.querySelector('.panel[data-slot="1"] [data-weddbets]').classList.contains('is-target'),
-      statusRemoved: !document.querySelector('[data-weddbets-status]'),
-    }))()`)
-    assert.equal(firstWeddState.loaded, true)
-    assert.equal(firstWeddState.nextTarget, true)
-    assert.equal(firstWeddState.statusRemoved, true)
-    const firstPlayerUrl = new URL(firstWeddPlayer.url)
-    assert.equal(firstPlayerUrl.searchParams.get('canal'), '2')
-    assert.equal(firstPlayerUrl.searchParams.get('view'), 'clean')
-
-    await evaluate(catalog.webSocketDebuggerUrl, `document.querySelector('#game-b').click()`)
-    const secondWeddPlayer = await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-b'))
-    assert.ok(secondWeddPlayer, 'O segundo player WeddBets não foi direcionado ao painel seguinte.')
-    const idsBeforeBlockedReplacement = [firstWeddPlayer.id, secondWeddPlayer.id].sort()
-    await evaluate(catalog.webSocketDebuggerUrl, `document.querySelector('#game-a').click()`)
-    await wait(150)
-    const idsAfterBlockedReplacement = (await fetchJson(`http://127.0.0.1:${port}/json`))
-      .filter((candidate) => candidate.url.includes('/view/game-')).map((candidate) => candidate.id).sort()
-    assert.deepEqual(idsAfterBlockedReplacement, idsBeforeBlockedReplacement,
-      'Um clique sem painel selecionado substituiu um jogo existente.')
-    assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('[data-weddbets-status]'))`), false)
-
-    await evaluate(target.webSocketDebuggerUrl, `(() => {
-      document.querySelector('.panel[data-slot="0"] [data-edit]').click()
-      document.querySelector('.panel[data-slot="0"] [data-weddbets]').click()
-    })()`)
-    await evaluate(catalog.webSocketDebuggerUrl, `document.querySelector('#game-b').click()`)
-    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"] input[name="url"]').value.includes('/view/game-b')`)
-    assert.equal(await evaluate(target.webSocketDebuggerUrl,
-      `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`), true,
-    'A substituição explícita alterou o painel errado.')
-    await evaluate(target.webSocketDebuggerUrl, `(() => {
-      document.querySelector('#btn-more').click()
-      document.querySelector('#btn-clear-all').click()
-      document.querySelector('#btn-layout').click()
-      document.querySelector('.confirm [data-ok]').click()
-    })()`)
-    assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser'))`), true)
-
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('[data-count="2"]').click()`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-bllsport]').click()`)
     const bllCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
@@ -184,9 +134,30 @@ async function run() {
     assert.equal(firstBllState.loaded, true)
     assert.equal(firstBllState.nextTarget, true)
     assert.ok(firstBllState.url.includes('/view/game-a'))
+    assert.equal(new URL(firstBllState.url).searchParams.get('canal'), '2')
     assert.equal(new URL(firstBllState.url).searchParams.get('view'), 'clean')
+
     await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-b').click()`)
+    const secondBllPlayer = await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-b'))
+    assert.ok(secondBllPlayer, 'O segundo player BLL não foi direcionado ao painel seguinte.')
     await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`)
+    const idsBeforeBlockedReplacement = [firstBllPlayer.id, secondBllPlayer.id].sort()
+    await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-a').click()`)
+    await wait(150)
+    const idsAfterBlockedReplacement = (await fetchJson(`http://127.0.0.1:${port}/json`))
+      .filter((candidate) => candidate.url.includes('/view/game-')).map((candidate) => candidate.id).sort()
+    assert.deepEqual(idsAfterBlockedReplacement, idsBeforeBlockedReplacement,
+      'Um clique sem painel selecionado substituiu um jogo existente.')
+
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.panel[data-slot="0"] [data-edit]').click()
+      document.querySelector('.panel[data-slot="0"] [data-bllsport]').click()
+    })()`)
+    await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-b').click()`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"] input[name="url"]').value.includes('/view/game-b')`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl,
+      `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`), true,
+    'A substituição explícita alterou o painel errado.')
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('#btn-more').click()
       document.querySelector('#btn-clear-all').click()
@@ -335,7 +306,7 @@ async function run() {
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser'))`), true)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `getComputedStyle(document.documentElement).backgroundColor`), 'rgb(7, 26, 20)')
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `getComputedStyle(document.documentElement).colorScheme`), 'dark')
-    process.stdout.write(JSON.stringify({ chooser: true, weddbetsCatalog: true, weddbetsSequentialPanels: true, weddbetsExplicitReplacement: true, bllsportCatalog: true, bllsportSequentialPanels: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

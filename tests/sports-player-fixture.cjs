@@ -5,7 +5,7 @@ const dimensionsByRatio = {
   '16x4': [320, 80],
 }
 
-function createWeddBetsFixture(requestUrl) {
+function createSportsPlayerFixture(requestUrl) {
   const url = requestUrl instanceof URL ? requestUrl : new URL(requestUrl, 'http://127.0.0.1')
   if (!url.pathname.startsWith('/view/')) return null
   const [width, height] = dimensionsByRatio[url.searchParams.get('ratio')] ?? dimensionsByRatio['16x9']
@@ -16,7 +16,7 @@ function createWeddBetsFixture(requestUrl) {
   const empty = url.searchParams.get('fixture') === 'empty'
   const display = (...players) => players.includes(player) ? 'block' : 'none'
   const openviduVideo = late && player === 'openvidu' ? '' : '<video autoplay muted playsinline data-fixture-video="openvidu"></video>'
-  return `<!doctype html><title>WeddBets video fixture</title>
+  return `<!doctype html><title>Sports player video fixture</title>
     <style>
       html,body{margin:0;background:#000;overflow:hidden}
       #app.container-fluid{padding-right:15px;padding-left:15px;box-sizing:border-box}
@@ -72,4 +72,4 @@ function createWeddBetsFixture(requestUrl) {
     </script>`
 }
 
-module.exports = { createWeddBetsFixture }
+module.exports = { createSportsPlayerFixture }

@@ -4,7 +4,7 @@ const fs = require('node:fs')
 const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
-const { createWeddBetsFixture } = require('./weddbets-fixture.cjs')
+const { createSportsPlayerFixture } = require('./sports-player-fixture.cjs')
 
 const projectRoot = path.resolve(__dirname, '..')
 const expectedAppVersion = `v${require('../package.json').version}`
@@ -93,14 +93,14 @@ async function run() {
   const port = 47000 + Math.floor(Math.random() * 1000)
   const fixtureServer = http.createServer((request, response) => {
     const requestUrl = new URL(request.url ?? '/', `http://${request.headers.host}`)
-    const fixture = createWeddBetsFixture(requestUrl)
+    const fixture = createSportsPlayerFixture(requestUrl)
     if (fixture) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(fixture)
       return
     }
     response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end('<!doctype html><title>WeddBets packaged catalog</title>')
+    response.end('<!doctype html><title>Sports player packaged fixture</title>')
   })
   await new Promise((resolve, reject) => {
     fixtureServer.once('error', reject)
@@ -112,7 +112,7 @@ async function run() {
   const child = spawn(executablePath, [`--remote-debugging-port=${port}`], {
     windowsHide: false,
     stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_WEDDBETS_URL: `${fixtureOrigin}/wedd/` },
+    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${fixtureOrigin}/bll/` },
   })
 
   try {
@@ -174,27 +174,27 @@ async function run() {
       document.querySelector('[data-organize-apply]').click()
       const base = ${JSON.stringify(fixtureOrigin)}
       document.querySelectorAll('.panel input[name="url"]').forEach((input, index) => {
-        input.value = base + '/view/weddbets?fixture=weddbets&ratio=4x3&player=openvidu&slot=' + index
+        input.value = base + '/view/sports?fixture=sports&ratio=4x3&player=openvidu&slot=' + index
         input.dispatchEvent(new Event('input', { bubbles: true }))
       })
       document.querySelector('#btn-open-all').click()
     })()`)
-    const weddDeadline = Date.now() + 15000
-    let weddTargets = []
-    while (Date.now() < weddDeadline) {
+    const sportsDeadline = Date.now() + 15000
+    let sportsTargets = []
+    while (Date.now() < sportsDeadline) {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json`)
-      weddTargets = targets.filter((candidate) => candidate.type === 'page' &&
-        candidate.url.includes(`${fixtureOrigin}/view/weddbets`) && candidate.url.includes('fixture=weddbets'))
-      if (weddTargets.length === 3) break
+      sportsTargets = targets.filter((candidate) => candidate.type === 'page' &&
+        candidate.url.includes(`${fixtureOrigin}/view/sports`) && candidate.url.includes('fixture=sports'))
+      if (sportsTargets.length === 3) break
       await wait(100)
     }
-    assert.equal(weddTargets.length, 3, 'O executÃ¡vel empacotado nÃ£o abriu os três players WeddBets.')
-    for (const weddTarget of weddTargets) {
-      await waitForExpression(weddTarget, `(() => {
+    assert.equal(sportsTargets.length, 3, 'O executável empacotado não abriu os três players esportivos.')
+    for (const sportsTarget of sportsTargets) {
+      await waitForExpression(sportsTarget, `(() => {
         const video = [...document.querySelectorAll('video')].find((candidate) => candidate.videoWidth > 0)
         return document.readyState === 'complete' && Boolean(video && !video.paused && video.srcObject?.active)
       })()`)
-      const metrics = await evaluate(weddTarget.webSocketDebuggerUrl, `(() => {
+      const metrics = await evaluate(sportsTarget.webSocketDebuggerUrl, `(() => {
         const video = [...document.querySelectorAll('video')].find((candidate) => candidate.videoWidth > 0)
         if (!video) return null
         const rect = video.getBoundingClientRect()
@@ -205,18 +205,18 @@ async function run() {
           intrinsic: { width: video.videoWidth, height: video.videoHeight }, fit: style.objectFit, position: style.objectPosition,
           paused: video.paused, rendered }
       })()`)
-      assert.ok(metrics && metrics.intrinsic.width > 0 && metrics.intrinsic.height > 0, 'Player WeddBets empacotado sem dimensões intrínsecas.')
+      assert.ok(metrics && metrics.intrinsic.width > 0 && metrics.intrinsic.height > 0, 'Player esportivo empacotado sem dimensões intrínsecas.')
       assert.equal(metrics.fit, 'contain')
       assert.equal(metrics.position, '50% 50%')
       assert.equal(metrics.paused, false)
       assert.ok(metrics.rect.x >= -2 && metrics.rect.y >= -2 &&
         metrics.rect.x + metrics.rect.width <= metrics.viewport.width + 2 &&
         metrics.rect.y + metrics.rect.height <= metrics.viewport.height + 2,
-      `Player WeddBets empacotado excedeu o viewport: ${JSON.stringify(metrics)}`)
+      `Player esportivo empacotado excedeu o viewport: ${JSON.stringify(metrics)}`)
       assert.ok(Math.abs(metrics.rect.width - metrics.viewport.width) <= 2 && Math.abs(metrics.rect.height - metrics.viewport.height) <= 2,
-        `Player WeddBets empacotado não ocupou o painel: ${JSON.stringify(metrics)}`)
+        `Player esportivo empacotado não ocupou o painel: ${JSON.stringify(metrics)}`)
       assert.ok(Math.abs(metrics.rendered.width - metrics.rect.width) <= 2 || Math.abs(metrics.rendered.height - metrics.rect.height) <= 2,
-        `Player WeddBets empacotado não maximizou a imagem: ${JSON.stringify(metrics)}`)
+        `Player esportivo empacotado não maximizou a imagem: ${JSON.stringify(metrics)}`)
     }
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-layout').click()`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.confirm [data-ok]').click()`)

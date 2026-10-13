@@ -105,9 +105,6 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 .panel__bar input::placeholder { color: rgba(155,189,173,0.55); }
 .panel__bar input:focus { border-color: rgba(200,245,96,0.55); box-shadow: 0 0 0 3px rgba(200,245,96,0.12); }
 .panel__bar .btn--load, .panel__bar .btn--clear { padding: 0.62rem 0.82rem; font-size: 0.87rem; }
-.btn--weddbets { flex-shrink: 0; padding: 0.62rem 0.75rem; border: 1px solid rgba(84, 180, 255, 0.5); background: rgba(20, 91, 145, 0.72); color: #e8f6ff; font-size: 0.82rem; }
-.btn--weddbets:hover { border-color: rgba(125, 204, 255, 0.88); background: rgba(25, 112, 177, 0.9); }
-.btn--weddbets.is-target { border-color: #bfe7ff; box-shadow: 0 0 0 2px rgba(84, 180, 255, 0.2); }
 .btn--bllsport { flex-shrink: 0; padding: 0.62rem 0.75rem; border: 1px solid rgba(255, 168, 76, 0.55); background: rgba(140, 72, 18, 0.78); color: #fff3e6; font-size: 0.82rem; }
 .btn--bllsport:hover { border-color: rgba(255, 196, 122, 0.9); background: rgba(168, 88, 24, 0.92); }
 .btn--bllsport.is-target { border-color: #ffd7a8; box-shadow: 0 0 0 2px rgba(255, 168, 76, 0.22); }
@@ -304,7 +301,7 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 @container (max-width: 340px) {
   .panel__bar { gap: 0.25rem; padding: 0.35rem; }
   .panel__bar input { padding: 0.45rem; font-size: 0.75rem; }
-  .panel__bar .btn--load, .panel__bar .btn--clear, .panel__bar .btn--weddbets, .panel__bar .btn--bllsport { padding: 0.4rem 0.45rem; font-size: 0.7rem; }
+  .panel__bar .btn--load, .panel__bar .btn--clear, .panel__bar .btn--bllsport { padding: 0.4rem 0.45rem; font-size: 0.7rem; }
 }
 
 @media (max-width: 1000px) {

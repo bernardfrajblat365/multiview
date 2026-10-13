@@ -72,7 +72,7 @@ Não há banco, ORM, schema de aplicação, migration, seed, API server ou repos
 - `slotViews` associa `panelId` a `WebContentsView` viva;
 - o cache do otimizador também é apenas RAM.
 
-Ao fechar o programa, painéis, URLs, composição e histórico são destruídos. A única persistência deliberada é a sessão Chromium `persist:quadra`, compartilhada pelo catálogo e pelos players do WeddBets, para manter cookies/login/localStorage. Isso pertence ao Electron, não a um modelo de dados do Quadra.
+Ao fechar o programa, painéis, URLs, composição e histórico são destruídos. A única persistência deliberada é a sessão Chromium `persist:quadra`, compartilhada pelo catálogo e pelos players do BLL, para manter cookies/login/localStorage. Isso pertence ao Electron, não a um modelo de dados do Quadra.
 
 ## API, IPC e rede
 
@@ -85,13 +85,14 @@ Não existe REST, GraphQL, tRPC ou servidor local de negócio. A API interna é 
 | `quadra:set-chrome-interactive` | renderer → main | habilita/desabilita interação do overlay |
 | `quadra:set-fullscreen` | renderer → main | alterna fullscreen nativo |
 | `quadra:set-cursor-hidden` | renderer → main | esconde cursor nos conteúdos |
-| `quadra:open-weddbets` | renderer → main | abre catálogo WeddBets para um painel |
-| `quadra:set-weddbets-target` | renderer → main | seleciona o painel destino |
+| `quadra:open-bllsport` | renderer → main | abre catálogo BLL para um painel |
+| `quadra:set-bllsport-target` | renderer → main | seleciona o painel destino |
 | `quadra:request-layout` | main → renderer | pede recálculo de bounds |
 | `quadra:fullscreen-changed` | main → renderer | informa mudança de fullscreen |
-| `quadra:weddbets-player-opened` | main → renderer | entrega URL do player ao painel escolhido |
-| `quadra:weddbets-target-required` | main → renderer | informa que falta escolher um painel |
-| `quadra:weddbets-error` | main → renderer | relata falha de catálogo/player |
+| `quadra:bllsport-player-opened` | main → renderer | entrega URL do player ao painel escolhido |
+| `quadra:bllsport-target-required` | main → renderer | informa que falta escolher um painel |
+| `quadra:bllsport-error` | main → renderer | relata falha de catálogo/player |
+| `quadra:*-weddbets*` | ambos | mesmos canais para o WeddBets; mantidos no código, mas sem botão na UI |
 
 O main só aceita comandos enviados pelo overlay. URLs carregadas nos painéis precisam ser HTTP(S), têm limite de 4096 caracteres e navegações não HTTP(S) são bloqueadas. Conteúdos remotos são páginas Chromium completas, não iframes; por isso páginas com `X-Frame-Options: DENY` continuam podendo abrir como view direta.
 
@@ -99,7 +100,7 @@ O main só aceita comandos enviados pelo overlay. URLs carregadas nos painéis p
 
 O Quadra não tem contas, login próprio, roles, permissões ou middleware de usuário. O acesso é local ao executável. A separação de privilégios vem do Electron (`contextIsolation`, `nodeIntegration: false`, `sandbox: true` nos conteúdos remotos) e da checagem de que IPC veio do overlay.
 
-O login do WeddBets é feito pelo próprio site dentro da sessão persistente `quadra`. O Quadra não lê senha nem implementa token; apenas roteia o catálogo e URLs `/view/<id>` para o painel selecionado.
+O login do BLL é feito pelo próprio site dentro da sessão persistente `quadra`. O Quadra não lê senha nem implementa token; apenas roteia o catálogo e URLs `/view/<id>` para o painel selecionado.
 
 ## Build e distribuição
 
@@ -107,12 +108,12 @@ O login do WeddBets é feito pelo próprio site dentro da sessão persistente `q
 - Única dependência de runtime: `yalps 0.6.4` para otimização linear/MIP dos layouts.
 - `electron.vite.config.ts` separa bundles main, preload e renderer; dev/preview usam a porta `43123`.
 - `electron-builder` gera NSIS Windows com appId `com.quadra.multiview`, produto `Quadra`, ícone `public/quadra.ico` e saída em `release/`.
-- `QUADRA_WEDDBETS_URL` substitui a URL do catálogo; `QUADRA_TEST_USER_DATA` isola o perfil Chromium em testes.
+- `QUADRA_BLLSPORT_URL` (e `QUADRA_WEDDBETS_URL`) substitui a URL do catálogo; `QUADRA_TEST_USER_DATA` isola o perfil Chromium em testes.
 
 ## O que o usuário consegue fazer
 
 1. Escolher 1–16 telas ou começar com uma.
-2. Colar URLs comuns, links/embeds do YouTube ou usar o catálogo WeddBets.
+2. Colar URLs comuns, links/embeds do YouTube ou usar o catálogo BLL.
 3. Abrir um painel ou todos, editar/limpar URLs, adicionar/remover telas e mutar individualmente/coletivamente.
 4. Destacar jogos; o algoritmo redistribui os demais conforme quantidade e proporção da janela.
 5. Abrir o editor, selecionar composição, telas principais e posição; aplicar/cancelar com undo.
@@ -120,14 +121,14 @@ O login do WeddBets é feito pelo próprio site dentro da sessão persistente `q
 
 ## Testes e limites conhecidos
 
-O `typecheck`, `npm test` e o build passam no estado analisado. Os testes unitários cobrem routing, layouts até 16 painéis, 124 combinações de composição/posição, editor, otimização, histerese e validação geométrica. Os smokes Electron cobrem WeddBets, múltiplas views, `X-Frame-Options`, fechamento e executável empacotado.
+O `typecheck`, `npm test` e o build passam no estado analisado. Os testes unitários cobrem routing, layouts até 16 painéis, 124 combinações de composição/posição, editor, otimização, histerese e validação geométrica. Os smokes Electron cobrem BLL, múltiplas views, `X-Frame-Options`, fechamento e executável empacotado.
 
 O próprio README/DIAGNOSTICO registra limites: URLs inválidas ainda não têm validação de UX completa; há casos de reabertura da mesma URL, mensagens genéricas de navegação e perda de parâmetros em alguns links do YouTube. Reprodução, áudio e desempenho de serviços externos dependem do ambiente real e não são garantidos pelos testes locais.
 
 ## Arquivos para começar
 
 - `README.md` — uso e decisões funcionais.
-- `electron/main.ts` — integração Electron, segurança de navegação, WeddBets e ciclo de vida.
+- `electron/main.ts` — integração Electron, segurança de navegação, BLL e ciclo de vida.
 - `src/main.ts` — fluxo completo da UI.
 - `src/layout.ts` — regras de composição e geometria.
 - `src/video-layout.ts` — solver que redistribui os painéis.

@@ -478,6 +478,7 @@ function isValidLayoutPayload(value: unknown): value is LayoutPayload {
     ids.add(candidate.id)
     return typeof candidate.url === 'string' && candidate.url.length <= 4096 &&
       typeof candidate.muted === 'boolean' && typeof candidate.editing === 'boolean' &&
+      typeof candidate.forceReload === 'boolean' &&
       Boolean(candidate.bounds) && isValidBounds(candidate.bounds as Bounds)
   })
 }
@@ -513,12 +514,13 @@ function applyLayout(payload: LayoutPayload) {
     }
     visibleSlots.add(panel.id)
     let state = slotViews.get(panel.id)
-    if (!state) state = createSlotView(panel.id, panel.url, panel.muted)
-    state.view.webContents.setAudioMuted(panel.muted)
-    if (state.url !== panel.url) {
+    if (!state) {
+      state = createSlotView(panel.id, panel.url, panel.muted)
+    } else if (state.url !== panel.url || panel.forceReload) {
       state.url = panel.url
       void state.view.webContents.loadURL(panel.url).catch(() => {})
     }
+    state.view.webContents.setAudioMuted(panel.muted)
     state.view.setBounds({
       x: Math.round(panel.bounds.x),
       y: Math.round(panel.bounds.y),

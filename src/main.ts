@@ -62,6 +62,7 @@ let layoutResizeFrame: number | null = null
 let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
+const forceReloadIds = new Set<PanelId>()
 
 function createPanel(): Panel {
   return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted() }
@@ -429,6 +430,8 @@ function applyPanelUrl(id: PanelId, next: string) {
   if (!panel) return
   panel.url = next
   panel.draftUrl = next
+  if (next) forceReloadIds.add(id)
+  else forceReloadIds.delete(id)
   renderGrid()
 }
 
@@ -486,6 +489,8 @@ function openAllPanels() {
   panels = panels.map((panel) => {
     const input = app.querySelector<HTMLInputElement>(`[data-panel-id="${CSS.escape(panel.id)}"] input[name="url"]`)
     const url = input ? normalizeUrl(input.value) : panel.url
+    if (url) forceReloadIds.add(panel.id)
+    else forceReloadIds.delete(panel.id)
     return { ...panel, url, draftUrl: url }
   })
   renderGrid()
@@ -738,11 +743,14 @@ function syncLayout() {
     if (!panelElement) return []
     const stage = panelElement.querySelector<HTMLElement>('[data-stage]')
     const rect = (stage ?? panelElement).getBoundingClientRect()
+    const forceReload = forceReloadIds.has(panel.id)
+    if (forceReload) forceReloadIds.delete(panel.id)
     return [{
       id: panel.id,
       url: panel.url,
       muted: panel.muted,
       editing: panelElement.classList.contains('is-editing'),
+      forceReload,
       bounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
     }]
   })

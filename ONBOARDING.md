@@ -117,7 +117,7 @@ O login do BLL é feito pelo próprio site dentro da sessão persistente `quadra
 3. Abrir um painel ou todos, editar/limpar URLs, adicionar/remover telas e mutar individualmente/coletivamente.
 4. Destacar jogos; o algoritmo redistribui os demais conforme quantidade e proporção da janela.
 5. Abrir o editor, selecionar composição, telas principais e posição; aplicar/cancelar com undo.
-6. Alternar layout automático/equal, fullscreen, voltar ao seletor e usar toolbar que desaparece após 10 segundos ociosa.
+6. Alternar layout automático/equal, fullscreen, voltar ao seletor e usar toolbar que desaparece após 5 segundos ociosa.
 
 ## Testes e limites conhecidos
 

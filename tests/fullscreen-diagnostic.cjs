@@ -162,7 +162,7 @@ async function worker() {
     await ui("document.querySelectorAll('input[name=url]')[5].blur(); document.dispatchEvent(new MouseEvent('mousemove', {clientX:400,clientY:300,bubbles:true}))")
     overlay.webContents.sendInputEvent({ type: 'mouseMove', x: 400, y: 300 })
     main.focus()
-    await wait(11500)
+    await wait(6500)
     const idle = await ui(`({ hidden: !document.querySelector('.grid-shell').classList.contains('is-toolbar-visible'),
       protectedUi: document.querySelector('.toolbar:hover, .toolbar__menu:not([hidden]), .organize-panel, .confirm')?.className ?? null })`)
     console.log('IDLE ' + JSON.stringify(idle))

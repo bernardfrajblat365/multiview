@@ -37,7 +37,7 @@ const APP_VERSION = `v${version}`
 const MIN_PANELS = 1
 const MAX_PANELS = 16
 const HISTORY_LIMIT = 24
-const TOOLBAR_IDLE_MS = 10_000
+const TOOLBAR_IDLE_MS = 5_000
 let highlightPosition: HighlightPosition | undefined
 let compositionVariant: string | undefined
 let panelOrder: PanelId[] = []

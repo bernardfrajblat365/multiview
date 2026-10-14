@@ -475,7 +475,7 @@ async function worker() {
       await ui('document.activeElement?.blur()')
       pages()[0].focus()
       await ui("document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))")
-      await wait(11000)
+      await wait(6000)
       assert.equal(await ui(`(() => {
         const toolbar = document.querySelector('.toolbar')
         const style = getComputedStyle(toolbar)

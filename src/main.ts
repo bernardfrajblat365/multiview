@@ -450,6 +450,13 @@ function openBllsport(id: PanelId) {
   window.quadra?.openBllsport(id, panelLabel(id))
 }
 
+const ZAPPING_URL = 'https://app.zapping.com.br/webplayer'
+
+function openZapping(id: PanelId) {
+  if (!panelById(id)) return
+  applyPanelUrl(id, ZAPPING_URL)
+}
+
 function useSportsCatalogPlayer(
   panelId: PanelId,
   url: string,
@@ -550,6 +557,7 @@ function urlFormHtml(panel: Panel, options: { withClose?: boolean } = {}): strin
       <input id="url-${escapeHtml(panel.id)}" type="url" name="url" inputmode="url" autocomplete="off" spellcheck="false"
         placeholder="Cole link YouTube ou URL e pressione Enter" value="${escapeHtml(panel.draftUrl)}" />
       <button type="button" class="btn btn--bllsport${bllsportTargetId === panel.id ? ' is-target' : ''}" data-bllsport aria-pressed="${bllsportTargetId === panel.id}" aria-label="Escolher jogo no BLL para o jogo ${index + 1}" title="Abrir BLL para este painel">BLL</button>
+      <button type="button" class="btn btn--zapping" data-zapping aria-label="Abrir Zapping no jogo ${index + 1}" title="Abrir Zapping para este painel">Zapping</button>
       <button type="submit" class="btn btn--load" aria-label="Abrir link">Abrir</button>
       <button type="button" class="btn btn--clear" data-clear aria-label="Limpar link">Limpar</button>
       ${closeBtn}
@@ -668,6 +676,7 @@ function bindPanelForm(panelElement: HTMLElement) {
   form?.querySelector('[data-clear]')?.addEventListener('click', () => applyPanelUrl(id, ''))
   form?.querySelector('[data-weddbets]')?.addEventListener('click', () => openWeddbets(id))
   form?.querySelector('[data-bllsport]')?.addEventListener('click', () => openBllsport(id))
+  form?.querySelector('[data-zapping]')?.addEventListener('click', () => openZapping(id))
   form?.querySelector('[data-close]')?.addEventListener('click', () => setPanelEditing(panelElement, false))
   form?.addEventListener('keydown', (event) => {
     if (event.key !== 'Escape') return
@@ -729,7 +738,9 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
 function setChromeInteractive(interactive: boolean) {
   if (lastChromeInteractive === interactive) return
   lastChromeInteractive = interactive
-  window.quadra?.setChromeInteractive(interactive)
+  const active = document.activeElement
+  const editing = active instanceof HTMLElement && active.matches('input, textarea, select, [contenteditable]')
+  window.quadra?.setChromeInteractive(interactive, !interactive && !editing)
 }
 
 function syncLayout() {
@@ -835,10 +846,14 @@ function bindToolbar() {
     revealToolbar()
     updateChromeHitTarget(event.clientX, event.clientY)
   }, { signal, passive: true })
-  document.addEventListener('pointerdown', revealToolbar, { signal, passive: true })
+  document.addEventListener('pointerdown', (event) => {
+    updateChromeHitTarget(event.clientX, event.clientY)
+    revealToolbar()
+  }, { signal, passive: true })
   document.addEventListener('keydown', revealToolbar, { signal, passive: true })
   toolbar.addEventListener('pointerenter', () => setChromeInteractive(true), { signal })
   toolbar.addEventListener('focusin', () => setChromeInteractive(true), { signal })
+  setChromeInteractive(Boolean(toolbar.matches(':hover')))
 }
 
 function bindMoreMenu() {

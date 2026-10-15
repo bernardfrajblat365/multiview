@@ -7,6 +7,7 @@ import {
   defaultHighlightCount,
   getCompositions,
   resolveComposition,
+  swapPanels,
   type HighlightPosition,
   type LayoutMode,
   type LayoutNode,
@@ -38,6 +39,9 @@ const MIN_PANELS = 1
 const MAX_PANELS = 16
 const HISTORY_LIMIT = 24
 const TOOLBAR_IDLE_MS = 5_000
+const DRAG_THRESHOLD_PX = 6
+type DragState = { sourceId: PanelId; pointerId: number; startX: number; startY: number; active: boolean; targetId: PanelId | null; abort: AbortController }
+let dragState: DragState | null = null
 let highlightPosition: HighlightPosition | undefined
 let compositionVariant: string | undefined
 let panelOrder: PanelId[] = []
@@ -565,6 +569,7 @@ function panelActionsHtml(panel: Panel): string {
     : 'É necessário manter pelo menos uma tela'
   return `
     <div class="panel__controls" aria-label="Ações do jogo ${panelIndex(panel.id) + 1}">
+      ${panels.length > 1 ? `<button type="button" class="btn btn--ghost btn--icon panel__drag" data-drag aria-label="Arrastar jogo ${panelIndex(panel.id) + 1} para trocar de posição" title="Arrastar para trocar de posição">⠿</button>` : ''}
       <button type="button" class="btn btn--ghost panel__mute" data-mute aria-pressed="${panel.muted}" aria-label="${panel.muted ? 'Ativar som do' : 'Mutar'} jogo ${panelIndex(panel.id) + 1}" title="${panel.muted ? 'Ativar som do' : 'Mutar'} jogo ${panelIndex(panel.id) + 1}">${panel.muted ? 'Ativar som' : 'Mutar'}</button>
       <button type="button" class="btn btn--ghost btn--icon" data-highlight aria-pressed="${isHighlighted}" aria-label="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}" title="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}">${isHighlighted ? '★' : '☆'}</button>
       ${panel.url ? '<button type="button" class="btn btn--ghost btn--icon" data-edit aria-label="Editar URL" title="Editar URL">✎</button>' : ''}
@@ -655,6 +660,7 @@ function bindPanelForm(panelElement: HTMLElement) {
     event.stopPropagation()
     removePanel(id)
   })
+  panelElement.querySelector<HTMLButtonElement>('[data-drag]')?.addEventListener('pointerdown', (event) => startPanelDrag(id, event))
   panelElement.querySelector('[data-highlight]')?.addEventListener('click', (event) => {
     event.stopPropagation()
     chooseHighlight(id)
@@ -765,7 +771,121 @@ function scheduleSyncLayout() {
   })
 }
 
+function panelAtPoint(x: number, y: number): PanelId | null {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')
+  if (!stage) return null
+  const bounds = stage.getBoundingClientRect()
+  const px = (x - bounds.left) / bounds.width
+  const py = (y - bounds.top) / bounds.height
+  const rect = calculateLayout(layoutTree).rects.find((candidate) =>
+    px >= candidate.x && px < candidate.x + candidate.width && py >= candidate.y && py < candidate.y + candidate.height)
+  return rect?.panelId ?? null
+}
+
+function placeOverPanel(element: HTMLElement, id: PanelId) {
+  const rect = calculateLayout(layoutTree).rects.find((candidate) => candidate.panelId === id)
+  if (!rect) return
+  element.style.left = `${rect.x * 100}%`
+  element.style.top = `${rect.y * 100}%`
+  element.style.width = `${rect.width * 100}%`
+  element.style.height = `${rect.height * 100}%`
+}
+
+function updateDropIndicator(targetId: PanelId | null) {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')
+  if (!stage) return
+  let indicator = stage.querySelector<HTMLElement>('.drop-indicator')
+  if (!targetId) {
+    indicator?.classList.remove('is-visible')
+    return
+  }
+  if (!indicator) {
+    indicator = document.createElement('div')
+    indicator.className = 'drop-indicator'
+    indicator.setAttribute('aria-hidden', 'true')
+    indicator.innerHTML = '<span class="drop-indicator__label"></span>'
+    stage.appendChild(indicator)
+  }
+  placeOverPanel(indicator, targetId)
+  const role = highlighted.has(targetId) ? ' (principal)' : ''
+  indicator.querySelector('.drop-indicator__label')!.textContent = `Trocar com Jogo ${panelIndex(targetId) + 1}${role}`
+  indicator.classList.add('is-visible')
+}
+
+function moveDragGhost(x: number, y: number) {
+  if (!dragState) return
+  let ghost = document.querySelector<HTMLElement>('.drag-ghost')
+  if (!ghost) {
+    ghost = document.createElement('div')
+    ghost.className = 'drag-ghost'
+    ghost.setAttribute('aria-hidden', 'true')
+    ghost.textContent = `Jogo ${panelIndex(dragState.sourceId) + 1}`
+    document.body.appendChild(ghost)
+  }
+  ghost.style.transform = `translate(${x + 14}px, ${y + 14}px)`
+}
+
+function startPanelDrag(id: PanelId, event: PointerEvent) {
+  if (event.button !== 0 || panels.length < 2) return
+  cancelPanelDrag()
+  event.preventDefault()
+  const handle = event.currentTarget as HTMLElement
+  handle.setPointerCapture(event.pointerId)
+  setChromeInteractive(true)
+  const abort = new AbortController()
+  dragState = { sourceId: id, pointerId: event.pointerId, startX: event.clientX, startY: event.clientY, active: false, targetId: null, abort }
+  const { signal } = abort
+  handle.addEventListener('pointermove', onPanelDragMove, { signal })
+  handle.addEventListener('pointerup', onPanelDragEnd, { signal })
+  handle.addEventListener('pointercancel', () => cancelPanelDrag(), { signal })
+  handle.addEventListener('lostpointercapture', () => cancelPanelDrag(), { signal })
+  document.addEventListener('keydown', (keyEvent) => {
+    if (keyEvent.key !== 'Escape') return
+    keyEvent.preventDefault()
+    cancelPanelDrag()
+  }, { signal })
+}
+
+function onPanelDragMove(event: PointerEvent) {
+  if (!dragState || event.pointerId !== dragState.pointerId) return
+  if (!dragState.active) {
+    if (Math.hypot(event.clientX - dragState.startX, event.clientY - dragState.startY) < DRAG_THRESHOLD_PX) return
+    dragState.active = true
+    document.body.classList.add('is-dragging')
+    app.querySelector(`[data-panel-id="${CSS.escape(dragState.sourceId)}"]`)?.classList.add('is-drag-source')
+  }
+  const target = panelAtPoint(event.clientX, event.clientY)
+  dragState.targetId = target && target !== dragState.sourceId ? target : null
+  updateDropIndicator(dragState.targetId)
+  moveDragGhost(event.clientX, event.clientY)
+}
+
+function onPanelDragEnd(event: PointerEvent) {
+  if (!dragState || event.pointerId !== dragState.pointerId) return
+  const { sourceId, targetId, active } = dragState
+  cancelPanelDrag()
+  if (!active || !targetId || !panelById(sourceId) || !panelById(targetId)) return
+  pushHistory()
+  const result = swapPanels(panelOrder, [...highlighted], sourceId, targetId)
+  panelOrder = result.order
+  highlighted = new Set(result.highlighted)
+  buildCurrentLayout(layoutMode)
+  renderGrid()
+}
+
+function cancelPanelDrag() {
+  if (!dragState) return
+  const { abort, sourceId } = dragState
+  dragState = null
+  abort.abort()
+  document.body.classList.remove('is-dragging')
+  document.querySelector('.drag-ghost')?.remove()
+  app.querySelector('.drop-indicator')?.remove()
+  app.querySelector(`[data-panel-id="${CSS.escape(sourceId)}"]`)?.classList.remove('is-drag-source')
+}
+
 function updateChromeHitTarget(x: number, y: number) {
+  if (dragState) return
   if (view !== 'grid') {
     setChromeInteractive(true)
     return
@@ -785,6 +905,7 @@ function clearToolbarHideTimer() {
 }
 
 function setToolbarVisible(visible: boolean) {
+  if (!visible && dragState) return
   const shell = app.querySelector<HTMLElement>('.grid-shell')
   shell?.classList.toggle('is-toolbar-visible', visible)
   document.body.classList.toggle('is-cursor-hidden', !visible)
@@ -1063,6 +1184,7 @@ function updateOrganizerPanel(focusSelector?: string): void {
 }
 
 function renderGrid() {
+  cancelPanelDrag()
   clearToolbarHideTimer()
   moreMenuAbort?.abort()
   moreMenuAbort = null

@@ -344,6 +344,14 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
   contents.setUserAgent(electronUserAgent)
   contents.on('did-finish-load', () => {
     void contents.insertCSS(videoContainCss, { cssOrigin: 'user' }).catch(() => {})
+    if (slotId) {
+      const state = slotViews.get(slotId)
+      if (state) {
+        // Navigation clears inserted CSS; drop the stale key and re-apply cursor policy.
+        state.cursorCssKey = undefined
+        void syncSlotCursor(state)
+      }
+    }
     if (!matchSportsPlayerUrl(contents.getURL())) return
     void contents.insertCSS(sportsPlayerCss, { cssOrigin: 'user' }).catch(() => {})
   })
@@ -389,16 +397,20 @@ function destroySlotView(id: string) {
 
 async function syncSlotCursor(state: SlotViewState) {
   const revision = ++state.cursorRevision
-  if (!cursorHidden) {
-    const key = state.cursorCssKey
-    state.cursorCssKey = undefined
-    if (key && !state.view.webContents.isDestroyed()) await state.view.webContents.removeInsertedCSS(key).catch(() => {})
-    return
+  const previousKey = state.cursorCssKey
+  state.cursorCssKey = undefined
+  if (previousKey && !state.view.webContents.isDestroyed()) {
+    await state.view.webContents.removeInsertedCSS(previousKey).catch(() => {})
   }
-  if (state.cursorCssKey || state.view.webContents.isDestroyed()) return
-  const key = await state.view.webContents.insertCSS('* { cursor: none !important; }').catch(() => '')
+  if (state.view.webContents.isDestroyed()) return
+  // Keep guest cursor under Quadra control. Sites like Zapping set cursor:none on the
+  // player; with click-through that makes the system pointer vanish over the panel.
+  const css = cursorHidden
+    ? '* { cursor: none !important; }'
+    : '* { cursor: auto !important; }'
+  const key = await state.view.webContents.insertCSS(css).catch(() => '')
   if (!key) return
-  if (revision !== state.cursorRevision || !cursorHidden || state.view.webContents.isDestroyed()) {
+  if (revision !== state.cursorRevision || state.view.webContents.isDestroyed()) {
     if (!state.view.webContents.isDestroyed()) await state.view.webContents.removeInsertedCSS(key).catch(() => {})
     return
   }
@@ -449,7 +461,7 @@ function createSlotView(id: string, url: string, muted: boolean) {
   mainWindow?.contentView.addChildView(view)
   const state: SlotViewState = { view, url, cursorRevision: 0 }
   slotViews.set(id, state)
-  if (cursorHidden) void syncSlotCursor(state)
+  void syncSlotCursor(state)
   void view.webContents.loadURL(url).catch(() => {})
   return state
 }
@@ -518,6 +530,7 @@ function applyLayout(payload: LayoutPayload) {
       state = createSlotView(panel.id, panel.url, panel.muted)
     } else if (state.url !== panel.url || panel.forceReload) {
       state.url = panel.url
+      state.cursorCssKey = undefined
       void state.view.webContents.loadURL(panel.url).catch(() => {})
     }
     state.view.webContents.setAudioMuted(panel.muted)

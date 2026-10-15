@@ -207,6 +207,11 @@ export function resolveComposition(panelIds: PanelId[], options: CompositionOpti
   return { tree, highlighted: largeIds, composition, position, variant: chosen.variant }
 }
 
+export function swapPanels(order: readonly PanelId[], highlighted: readonly PanelId[], sourceId: PanelId, targetId: PanelId) {
+  const swap = (ids: readonly PanelId[]) => ids.map((id) => id === sourceId ? targetId : id === targetId ? sourceId : id)
+  return { order: swap(order), highlighted: swap(highlighted) }
+}
+
 export function buildLayoutTree(panelIds: PanelId[], highlighted?: ReadonlySet<PanelId>, aspect = REFERENCE_ASPECT, position?: HighlightPosition): LayoutNode {
   return resolveComposition(panelIds, { mode: highlighted === undefined ? 'auto' : highlighted.size === 0 || highlighted.size === panelIds.length ? 'equal' : 'highlights', highlighted, aspect, position }).tree
 }

@@ -97,6 +97,13 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 .panel__controls .panel__remove:not(:disabled):hover { color: #ffb0a8; border-color: rgba(255, 126, 116, 0.72); background: rgba(78, 19, 17, 0.94); }
 .panel__mute[aria-pressed="true"], #btn-mute-all[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .panel:hover .panel__controls, .panel:focus-within .panel__controls, .layout-stage.is-editing .panel__controls, .grid-shell.is-toolbar-visible .panel__controls { opacity: 1; pointer-events: auto; }
+.panel__controls .panel__drag { cursor: grab; touch-action: none; }
+.panel.is-drag-source { outline: 2px dashed var(--accent); outline-offset: -3px; }
+.drop-indicator { position: absolute; z-index: 30; display: grid; place-items: center; border: 3px solid var(--accent); background: rgba(2,8,6,0.55); box-shadow: inset 0 0 0 1px rgba(200,245,96,0.35), 0 0 24px rgba(200,245,96,0.25); opacity: 0; pointer-events: none; transition: left 0.12s ease, top 0.12s ease, width 0.12s ease, height 0.12s ease, opacity 0.12s ease; }
+.drop-indicator.is-visible { opacity: 1; }
+.drop-indicator__label { padding: 0.5rem 0.9rem; border-radius: 999px; background: rgba(7,26,20,0.94); border: 1px solid var(--accent); color: var(--ink); font-weight: 700; font-size: 1rem; }
+.drag-ghost { position: fixed; top: 0; left: 0; z-index: 120; padding: 0.4rem 0.75rem; border-radius: 8px; background: rgba(7,26,20,0.94); border: 1px solid var(--accent); color: var(--ink); font-size: 0.85rem; font-weight: 700; pointer-events: none; box-shadow: 0 10px 30px rgba(0,0,0,0.45); }
+body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .panel__overlay { position: absolute; inset: 0 0 auto; z-index: 23; padding: 0.45rem 0.5rem; background: rgba(7,26,20,0.94); border-bottom: 1px solid rgba(200,245,96,0.15); backdrop-filter: blur(10px); opacity: 0; transform: translateY(-4px); pointer-events: none; transition: opacity 0.16s ease, transform 0.16s ease; }
 .panel.is-editing .panel__overlay { opacity: 1; transform: none; pointer-events: auto; }
 .panel__bar { display: flex; align-items: center; gap: 0.45rem; width: min(100%, 38rem); padding: 0.65rem; border-radius: 12px; background: rgba(7,26,20,0.92); border: 1px solid rgba(200,245,96,0.14); backdrop-filter: blur(10px); box-shadow: 0 10px 30px rgba(0,0,0,0.35); }

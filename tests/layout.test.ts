@@ -9,6 +9,7 @@ import {
   getCompositions,
   defaultHighlightCount,
   resolveComposition,
+  swapPanels,
   updateSplitRatio,
   validateLayout,
   type HighlightPosition,
@@ -276,4 +277,25 @@ test('buildLayoutTree mantém compatibilidade: sem conjunto é automático, vazi
   const highlighted = buildLayoutTree(panelIds, new Set([panelIds[2]]))
   const hero = rectFor(highlighted, panelIds[2])
   assert.ok(hero.width * hero.height > 3 / 13)
+})
+
+test('swapPanels troca uma pequena por uma principal mantendo o índice do destaque', () => {
+  const order = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+  const result = swapPanels(order, ['a', 'b', 'c'], 'f', 'b')
+  assert.deepEqual(result.highlighted, ['a', 'f', 'c'])
+  assert.deepEqual(result.order, ['a', 'f', 'c', 'd', 'e', 'b', 'g'])
+  const before = resolveComposition(order, { mode: 'highlights', highlighted: new Set(['a', 'b', 'c']), position: 'top-left' })
+  const after = resolveComposition(result.order, { mode: 'highlights', highlighted: new Set(result.highlighted), position: 'top-left' })
+  const rectOf = (tree: LayoutNode, id: string) => calculateLayout(tree).rects.find((rect) => rect.panelId === id)
+  assert.deepEqual(rectOf(after.tree, 'f'), { ...rectOf(before.tree, 'b'), panelId: 'f' })
+  assert.deepEqual(rectOf(after.tree, 'b'), { ...rectOf(before.tree, 'f'), panelId: 'b' })
+})
+
+test('swapPanels troca principais entre si, pequenas entre si e ignora a mesma tela', () => {
+  const order = ['a', 'b', 'c', 'd', 'e', 'f', 'g']
+  assert.deepEqual(swapPanels(order, ['a', 'b', 'c'], 'a', 'c').highlighted, ['c', 'b', 'a'])
+  const small = swapPanels(order, ['a', 'b', 'c'], 'd', 'g')
+  assert.deepEqual(small.order, ['a', 'b', 'c', 'g', 'e', 'f', 'd'])
+  assert.deepEqual(small.highlighted, ['a', 'b', 'c'])
+  assert.deepEqual(swapPanels(order, ['a'], 'b', 'b'), { order, highlighted: ['a'] })
 })

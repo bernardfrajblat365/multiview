@@ -738,7 +738,9 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
 function setChromeInteractive(interactive: boolean) {
   if (lastChromeInteractive === interactive) return
   lastChromeInteractive = interactive
-  window.quadra?.setChromeInteractive(interactive)
+  const active = document.activeElement
+  const editing = active instanceof HTMLElement && active.matches('input, textarea, select, [contenteditable]')
+  window.quadra?.setChromeInteractive(interactive, !interactive && !editing)
 }
 
 function syncLayout() {
@@ -844,10 +846,14 @@ function bindToolbar() {
     revealToolbar()
     updateChromeHitTarget(event.clientX, event.clientY)
   }, { signal, passive: true })
-  document.addEventListener('pointerdown', revealToolbar, { signal, passive: true })
+  document.addEventListener('pointerdown', (event) => {
+    updateChromeHitTarget(event.clientX, event.clientY)
+    revealToolbar()
+  }, { signal, passive: true })
   document.addEventListener('keydown', revealToolbar, { signal, passive: true })
   toolbar.addEventListener('pointerenter', () => setChromeInteractive(true), { signal })
   toolbar.addEventListener('focusin', () => setChromeInteractive(true), { signal })
+  setChromeInteractive(Boolean(toolbar.matches(':hover')))
 }
 
 function bindMoreMenu() {

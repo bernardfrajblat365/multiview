@@ -454,6 +454,7 @@ function createSlotView(id: string, url: string, muted: boolean) {
       nodeIntegration: false,
       sandbox: true,
       autoplayPolicy: 'no-user-gesture-required',
+      backgroundThrottling: false,
     },
   })
   configureRemoteContents(view.webContents, id)
@@ -601,9 +602,13 @@ function installIpcHandlers() {
   ipcMain.on('quadra:set-layout', (event, payload: unknown) => {
     if (isUiSender(event) && isValidLayoutPayload(payload)) applyLayout(payload)
   })
-  ipcMain.on('quadra:set-chrome-interactive', (event, interactive: unknown) => {
+  ipcMain.on('quadra:set-chrome-interactive', (event, interactive: unknown, refocusPlayers: unknown) => {
     if (!isUiSender(event) || typeof interactive !== 'boolean' || !overlayWindow) return
     overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true })
+    // A focused overlay leaves the panel views in the background, where live players stop painting.
+    if (!interactive && refocusPlayers === true && overlayWindow.isFocused() && mainWindow && !mainWindow.isDestroyed()) {
+      mainWindow.focus()
+    }
   })
   ipcMain.on('quadra:set-fullscreen', (event, on: unknown) => {
     if (isUiSender(event) && typeof on === 'boolean') setNativeFullscreen(on)

@@ -2,6 +2,8 @@
 
 Quadra é um aplicativo desktop Electron para abrir de 1 a 16 páginas independentes em uma única janela. Cada painel usa uma `WebContentsView` completa do Chromium, portanto páginas que bloqueiam incorporação continuam podendo ser abertas diretamente no painel.
 
+![Tela inicial do Quadra](docs/images/tela-inicial.png)
+
 ## Como rodar
 
 ```bash

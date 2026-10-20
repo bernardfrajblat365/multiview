@@ -12,6 +12,7 @@ dist
 dist-ssr
 out
 artifacts/toolbar-checks
+artifacts/layout-study
 release
 release-*
 *.local

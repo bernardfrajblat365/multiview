@@ -8,6 +8,7 @@ import {
   collectPanelIds,
   getCompositions,
   defaultHighlightCount,
+  MAX_PANELS,
   resolveComposition,
   swapPanels,
   updateSplitRatio,
@@ -40,7 +41,7 @@ function videoSize(rect: { width: number; height: number }, aspect: number, widt
 
 test('catálogo expõe equal, 1 e 2 destaques (3 em 7) com posições válidas', () => {
   assert.deepEqual(defaultHighlightCount(1), 0)
-  for (let count = 1; count <= 16; count += 1) {
+  for (let count = 1; count <= MAX_PANELS; count += 1) {
     const catalog = getCompositions(count)
     assert.ok(catalog.some((entry) => entry.highlightCount === 0))
     if (count >= 3) {
@@ -52,18 +53,25 @@ test('catálogo expõe equal, 1 e 2 destaques (3 em 7) com posições válidas',
     if (count === 7) assert.ok(catalog.some((entry) => entry.highlightCount === 3))
     for (const entry of catalog) {
       if (entry.highlightCount === 0) assert.deepEqual(entry.positions, [])
-      else if ([13, 10, 7].includes(count) && entry.highlightCount === (count === 13 ? 1 : count === 10 ? 2 : 3)) assert.deepEqual(entry.positions, CORNERS)
+      else if (
+        (count === 13 && entry.highlightCount === 1)
+        || (count === 10 && entry.highlightCount === 2)
+        || (count === 18 && entry.highlightCount === 2)
+        || (count === 7 && entry.highlightCount === 3)
+      ) assert.deepEqual(entry.positions, CORNERS)
       else assert.deepEqual(entry.positions, SIDES)
     }
   }
   assert.equal(defaultHighlightCount(10), 2)
   assert.equal(defaultHighlightCount(13), 1)
   assert.equal(defaultHighlightCount(14), 2)
+  assert.equal(defaultHighlightCount(17), 0)
+  assert.equal(defaultHighlightCount(18), 2)
   assert.equal(defaultHighlightCount(4), 0)
 })
 
 test('gera composições válidas para cada quantidade, destaque, posição e formato', () => {
-  for (let count = 1; count <= 16; count += 1) {
+  for (let count = 1; count <= MAX_PANELS; count += 1) {
     for (const composition of getCompositions(count)) {
       for (const position of composition.positions.length > 0 ? composition.positions : [undefined]) {
         for (const aspect of ASPECTS) {
@@ -82,7 +90,7 @@ test('gera composições válidas para cada quantidade, destaque, posição e fo
   }
 })
 
-test('reproduz as 124 referências aprovadas de vídeo 16:9', () => {
+test('reproduz as 142 referências aprovadas de vídeo 16:9', () => {
   const reference = JSON.parse(fs.readFileSync(new URL('./fixtures/video-layout-reference.json', import.meta.url), 'utf8')) as {
     width: number
     height: number
@@ -133,13 +141,13 @@ test('reproduz as 124 referências aprovadas de vídeo 16:9', () => {
     assert.ok(Math.abs(entry.expectedSumWidth - entry.expectedVideos.reduce((sum, video) => sum + video.width, 0)) <= 0.001, `${entry.key} fixture sum`)
     if (entry.expectedSumWidth > baselineWidth + 0.001) gains += 1
   }
-  assert.equal(reference.cases.length, 124)
-  assert.equal(gains, 57)
-  assert.equal(reference.cases.length - gains, 67)
+  assert.equal(reference.cases.length, 142)
+  assert.equal(gains, 63)
+  assert.equal(reference.cases.length - gains, 79)
 })
 
-test('mantém a geometria válida em combinações representativas de destaques até 16 painéis', () => {
-  for (let count = 1; count <= 16; count += 1) {
+test('mantém a geometria válida em combinações representativas de destaques até 18 painéis', () => {
+  for (let count = 1; count <= MAX_PANELS; count += 1) {
     const panelIds = ids(count)
     const masks = count <= 6
       ? Array.from({ length: 2 ** count }, (_, mask) => mask)
@@ -159,7 +167,7 @@ test('mantém a geometria válida em combinações representativas de destaques 
 
 test('modo sem destaques maximiza o vídeo mesmo quando os painéis têm áreas diferentes', () => {
   for (const aspect of ASPECTS) {
-    for (let count = 2; count <= 16; count += 1) {
+    for (let count = 2; count <= MAX_PANELS; count += 1) {
       const resolved = resolveComposition(ids(count), { mode: 'equal', aspect })
       const rects = calculateLayout(resolved.tree).rects
       assert.equal(validateLayout({ rects, splits: calculateLayout(resolved.tree).splits }, new Set(ids(count))), true)
@@ -195,13 +203,15 @@ test('otimizador é determinístico, não mistura IDs e recua para fallback em e
 })
 
 test('automático usa os defaults por quantidade', () => {
-  for (let count = 1; count <= 16; count += 1) {
+  for (let count = 1; count <= MAX_PANELS; count += 1) {
     const resolved = resolveComposition(ids(count), { mode: 'auto' })
     assert.equal(resolved.highlighted.length, Math.min(defaultHighlightCount(count), count - 1 >= 0 ? defaultHighlightCount(count) : 0))
     assert.equal(validateLayout(calculateLayout(resolved.tree), new Set(ids(count))), true)
   }
   assert.deepEqual(resolveComposition(ids(10), { mode: 'auto' }).highlighted, [ids(10)[0], ids(10)[1]])
   assert.deepEqual(resolveComposition(ids(13), { mode: 'auto' }).highlighted, [ids(13)[0]])
+  assert.deepEqual(resolveComposition(ids(18), { mode: 'auto' }).highlighted, [ids(18)[0], ids(18)[1]])
+  assert.deepEqual(resolveComposition(ids(17), { mode: 'auto' }).highlighted, [])
 })
 
 test('destaque em 13 painéis ocupa um bloco 2x2 na malha 4x4 em qualquer canto', () => {
@@ -240,6 +250,25 @@ test('dois destaques mantêm áreas equivalentes entre grandes e entre pequenos'
     const rects = calculateLayout(resolved.tree).rects
     const large = rects.filter((rect) => highlighted.includes(rect.panelId)).map((rect) => rect.width * rect.height)
     const small = rects.filter((rect) => !highlighted.includes(rect.panelId)).map((rect) => rect.width * rect.height)
+    assert.ok(Math.max(...large) / Math.min(...large) < 1.001)
+    assert.ok(Math.max(...small) / Math.min(...small) < 1.001)
+    assert.ok(Math.min(...large) > Math.max(...small) * 3)
+  }
+})
+
+test('dezoito telas com dois destaques usam quadrantes e mantêm áreas equivalentes', () => {
+  const panelIds = ids(18)
+  const highlighted = [panelIds[1], panelIds[8]]
+  for (const corner of CORNERS) {
+    const resolved = resolveComposition(panelIds, { mode: 'highlights', highlighted: new Set(highlighted), position: corner })
+    assert.equal(resolved.variant, '18-2:quadrants')
+    assert.equal(resolved.position, corner)
+    const rects = calculateLayout(resolved.tree).rects
+    assert.equal(validateLayout({ rects, splits: calculateLayout(resolved.tree).splits }, new Set(panelIds)), true)
+    const large = rects.filter((rect) => highlighted.includes(rect.panelId)).map((rect) => rect.width * rect.height)
+    const small = rects.filter((rect) => !highlighted.includes(rect.panelId)).map((rect) => rect.width * rect.height)
+    assert.equal(large.length, 2)
+    assert.equal(small.length, 16)
     assert.ok(Math.max(...large) / Math.min(...large) < 1.001)
     assert.ok(Math.max(...small) / Math.min(...small) < 1.001)
     assert.ok(Math.min(...large) > Math.max(...small) * 3)

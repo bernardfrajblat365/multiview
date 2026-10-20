@@ -7,8 +7,8 @@ const { createSportsPlayerFixture } = require('./sports-player-fixture.cjs')
 const root = path.resolve(__dirname, '..')
 const wait = (ms) => new Promise((resolve) => setTimeout(resolve, ms))
 
-async function until(check, label) {
-  const deadline = Date.now() + 15000
+async function until(check, label, timeoutMs = 15000) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await check()) return
     await wait(50)
@@ -167,10 +167,12 @@ async function worker() {
     await click(`[data-organizer-aliases~="${positions[index]}"]`)
     await click('[data-organize-apply]')
   }
-  async function openSportsFixtures(count, ratio, player = 'openvidu', { late = false, empty = false } = {}) {
+  async function openSportsFixtures(count, ratio, player = 'openvidu', { late = false, empty = false, withTitles = false } = {}) {
     const fixture = empty ? 'empty' : 'sports'
-    const urls = Array.from({ length: count }, (_, index) =>
-      `${toolbarOrigin}/view/sports?fixture=${fixture}&ratio=${ratio}&player=${player}&late=${late ? 1 : 0}&slot=${index}`)
+    const urls = Array.from({ length: count }, (_, index) => {
+      const title = withTitles ? `&title=${encodeURIComponent(`Time ${index + 1}A x Time ${index + 1}B`)}` : ''
+      return `${toolbarOrigin}/view/sports?fixture=${fixture}&ratio=${ratio}&player=${player}&late=${late ? 1 : 0}&slot=${index}${title}`
+    })
     await ui(`(() => {
       document.querySelectorAll('.panel input[name="url"]').forEach((input, index) => {
         input.value = ${JSON.stringify(urls)}[index]
@@ -372,7 +374,114 @@ async function worker() {
     }
     await closeSportsFixtures('sports player without video')
   }
+  async function runMatchLabelScenarios() {
+    const expectedModes = {
+      '16x9': 'overlay-bottom',
+      '4x3': 'bar-side',
+      '16x4': 'bar-bottom',
+    }
+    for (const [ratio, expectedMode] of Object.entries(expectedModes)) {
+      if (!main.isMaximized()) main.maximize()
+      await until(() => main.isMaximized(), `maximize before labels ${ratio}`)
+      await ui(`document.querySelector('[data-count="16"]').click()`)
+      await click('#btn-organize')
+      await click('[data-composition="0"]')
+      await click('[data-organize-apply]')
+      await openSportsFixtures(16, ratio, 'openvidu', { withTitles: true })
+      await until(async () => ui(`(() => {
+        const labels = [...document.querySelectorAll('.panel__label')]
+        return labels.length === 16 && labels.every((label) => label.dataset.mode === ${JSON.stringify(expectedMode)})
+      })()`), `16 labels mode ${expectedMode} for ${ratio}`, 12000)
+
+      const report = await ui(`(() => {
+        const panels = [...document.querySelectorAll('.panel.panel--loaded')]
+        return panels.map((panel) => {
+          const label = panel.querySelector('.panel__label')
+          const panelRect = panel.getBoundingClientRect()
+          const labelRect = label.getBoundingClientRect()
+          const slot = Number(panel.dataset.slot)
+          return {
+            slot,
+            mode: label.dataset.mode,
+            text: label.dataset.label || label.textContent,
+            inside: labelRect.left >= panelRect.left - 1
+              && labelRect.right <= panelRect.right + 1
+              && labelRect.top >= panelRect.top - 1
+              && labelRect.bottom <= panelRect.bottom + 1,
+            label: { x: labelRect.x, y: labelRect.y, width: labelRect.width, height: labelRect.height },
+            panel: { x: panelRect.x, y: panelRect.y, width: panelRect.width, height: panelRect.height },
+          }
+        })
+      })()`)
+      assert.equal(report.length, 16, `labels ${ratio}: expected 16 panels`)
+      for (const item of report) {
+        assert.equal(item.mode, expectedMode, `labels ${ratio}: ${JSON.stringify(item)}`)
+        assert.match(item.text, /Time \d+A x Time \d+B/)
+        assert.equal(item.inside, true, `labels ${ratio}: rótulo fora do painel ${JSON.stringify(item)}`)
+      }
+
+      if (expectedMode.startsWith('bar-')) {
+        const bySlot = new Map(report.map((item) => [item.slot, item]))
+        const overlaps = await Promise.all(sportsPages().map(async (page) => {
+          const slotMatch = page.getURL().match(/[?&]slot=(\d+)/)
+          const slot = slotMatch ? Number(slotMatch[1]) : -1
+          const labelBox = bySlot.get(slot)
+          const video = await page.executeJavaScript(`(() => {
+            const video = [...document.querySelectorAll('video')].find((candidate) => candidate.videoWidth > 0)
+            if (!video) return null
+            const box = video.getBoundingClientRect()
+            const mediaW = video.videoWidth
+            const mediaH = video.videoHeight
+            const vw = window.innerWidth || 1
+            const vh = window.innerHeight || 1
+            let contentX = box.left, contentY = box.top, contentW = box.width, contentH = box.height
+            if (mediaW > 0 && mediaH > 0) {
+              const mediaAspect = mediaW / mediaH
+              const boxAspect = box.width / box.height
+              if (boxAspect > mediaAspect) {
+                contentH = box.height
+                contentW = box.height * mediaAspect
+                contentX = box.left + (box.width - contentW) / 2
+              } else {
+                contentW = box.width
+                contentH = box.width / mediaAspect
+                contentY = box.top + (box.height - contentH) / 2
+              }
+            }
+            return { x: contentX / vw, y: contentY / vh, width: contentW / vw, height: contentH / vh }
+          })()`)
+          if (!video || !labelBox) return true
+          const panel = labelBox.panel
+          const label = labelBox.label
+          const normLabel = {
+            x: (label.x - panel.x) / panel.width,
+            y: (label.y - panel.y) / panel.height,
+            width: label.width / panel.width,
+            height: label.height / panel.height,
+          }
+          return !(
+            normLabel.x + normLabel.width <= video.x + 0.01 ||
+            video.x + video.width <= normLabel.x + 0.01 ||
+            normLabel.y + normLabel.height <= video.y + 0.01 ||
+            video.y + video.height <= normLabel.y + 0.01
+          )
+        }))
+        assert.ok(overlaps.every((value) => value === false), `labels ${ratio}: rótulo em barra não pode cobrir o vídeo`)
+      }
+
+      await click('#btn-more')
+      await click('#btn-match-labels')
+      await until(() => ui('document.querySelectorAll(".panel__label").length === 0'), `labels ${ratio}: toggle off`)
+      await click('#btn-more')
+      await click('#btn-match-labels')
+      await until(() => ui('document.querySelectorAll(".panel__label").length === 16'), `labels ${ratio}: toggle on`)
+      await capture(`labels-16-${ratio}`)
+      await closeSportsFixtures(`labels ${ratio}`)
+      console.log(`PASS match labels 16 panels ${ratio} -> ${expectedMode}`)
+    }
+  }
   await runSportsGeometryScenarios()
+  await runMatchLabelScenarios()
   async function click(selector) {
     const result = await ui(`(() => {
       try {
@@ -404,7 +513,7 @@ async function worker() {
         ? ['none']
         : panelCount === 13 && count === 1
           ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
-          : panelCount === 10 && count === 2
+          : (panelCount === 10 || panelCount === 18) && count === 2
             ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
             : panelCount === 7 && count === 3
               ? ['top-left', 'top-right', 'bottom-left', 'bottom-right']
@@ -422,6 +531,7 @@ async function worker() {
             '10:2:top-left': 'organizer-10-two',
             '13:1:bottom-right': 'organizer-13-corner',
             '16:2:left': 'organizer-16-two',
+            '18:2:top-left': 'organizer-18-two',
           }
           const captureName = captureNames[`${panelCount}:${count}:${alias}`]
           if (captureName) await capture(captureName)
@@ -440,7 +550,9 @@ async function worker() {
     const screens = await desktopCapturer.getSources({ types: ['screen'], thumbnailSize: { width: 1920, height: 1080 } })
     if (screens[0]) fs.writeFileSync(path.join(root, `artifacts/toolbar-checks/${name}-desktop.png`), screens[0].thumbnail.toPNG())
   }
-  for (let count = 1; count <= 16; count++) {
+  for (let count = 1; count <= 18; count++) {
+    if (!main.isMaximized()) main.maximize()
+    await until(() => main.isMaximized(), 'maximize before count')
     await ui(`document.querySelector('[data-count="${count}"]').click()`)
     await variants(`${count} empty`)
     await ui(`(() => {
@@ -471,17 +583,23 @@ async function worker() {
     await click('#btn-fullscreen')
     await until(() => main.isFullScreen(), 'enter fullscreen')
     await variants(`${count} playing fullscreen`)
-    if (count === 1 || count === 16) {
+    if (count === 1 || count === 18) {
       await ui('document.activeElement?.blur()')
       pages()[0].focus()
+      await ui(`(() => {
+        document.querySelector('#toolbar-more-menu')?.setAttribute('hidden', '')
+        document.querySelector('.toolbar__more')?.classList.remove('is-open')
+        document.querySelector('#btn-more')?.setAttribute('aria-expanded', 'false')
+      })()`)
+      // Real input clears CSS :hover on the toolbar (synthetic mousemove alone may not).
+      overlay.webContents.sendInputEvent({ type: 'mouseMove', x: 20, y: 20 })
       await ui("document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))")
-      await wait(6000)
-      assert.equal(await ui(`(() => {
+      await until(async () => ui(`(() => {
         const toolbar = document.querySelector('.toolbar')
         const style = getComputedStyle(toolbar)
         return !document.querySelector('.grid-shell').classList.contains('is-toolbar-visible') &&
           style.opacity === '0' && style.visibility === 'hidden' && style.pointerEvents === 'none'
-      })()`), true, `${count}: toolbar should hide after idle timeout`)
+      })()`), `${count}: toolbar should hide after idle timeout`, 12000)
       await until(async () => (await Promise.all(pages().map((page) => page.executeJavaScript(
         "getComputedStyle(document.body).cursor === 'none'",
       )))).every(Boolean), 'cursor hidden in every video panel')
@@ -510,8 +628,8 @@ async function worker() {
     await until(() => ui("Boolean(document.querySelector('.chooser'))"), 'back to chooser')
     console.log(`PASS ${count} panels: empty, playing, every composition/position, resize, fullscreen, focus, controls`)
   }
-  console.log(JSON.stringify({ checks, compositions, videoCounts: 16 }))
-  assert.equal(compositions, 620, '124 composition/position combinations in five scenarios')
+  console.log(JSON.stringify({ checks, compositions, videoCounts: 18 }))
+  assert.equal(compositions, 710, '142 composition/position combinations in five scenarios')
   app.quit()
 }
 

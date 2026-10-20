@@ -71,8 +71,8 @@ async function waitForPageTarget(port, predicate) {
   return null
 }
 
-async function waitForExpression(target, expression) {
-  const deadline = Date.now() + 10000
+async function waitForExpression(target, expression, timeoutMs = 10000) {
+  const deadline = Date.now() + timeoutMs
   while (Date.now() < deadline) {
     if (await evaluate(target.webSocketDebuggerUrl, expression).catch(() => false)) return
     await wait(50)
@@ -90,8 +90,8 @@ async function run() {
     if (request.url?.startsWith('/bll/')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(`<!doctype html><title>BLL Test Catalog</title>
-        <button id="game-a" onclick="window.open('/view/game-a?canal=2', 'game-a')">Jogo A</button>
-        <button id="game-b" onclick="window.open('/view/game-b', 'game-b')">Jogo B</button>`)
+        <button id="game-a" onclick="window.open('/view/game-a?canal=2&title=' + encodeURIComponent('Time A x Time B'), 'game-a')">Jogo A</button>
+        <button id="game-b" onclick="window.open('/view/game-b?title=' + encodeURIComponent('Time C x Time D'), 'game-b')">Jogo B</button>`)
       return
     }
     if (request.url?.startsWith('/view/')) {
@@ -119,9 +119,15 @@ async function run() {
     const target = await waitForRendererTarget(port)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.app-version')?.textContent`), expectedAppVersion)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('[data-count="2"]').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.panel[data-slot="0"] [data-bllsport]'))`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-bllsport]').click()`)
     const bllCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
-    assert.ok(bllCatalog, 'O catálogo BLL não abriu.')
+    if (!bllCatalog) {
+      const pages = (await fetchJson(`http://127.0.0.1:${port}/json`).catch(() => []))
+        .filter((candidate) => candidate.type === 'page')
+        .map((candidate) => candidate.url)
+      assert.fail(`O catálogo BLL não abriu. Páginas: ${JSON.stringify(pages)}`)
+    }
     await waitForExpression(bllCatalog, `Boolean(document.querySelector('#game-a'))`)
     await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-a').click()`)
     const firstBllPlayer = await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-a'))
@@ -137,10 +143,67 @@ async function run() {
     assert.equal(new URL(firstBllState.url).searchParams.get('canal'), '2')
     assert.equal(new URL(firstBllState.url).searchParams.get('view'), 'clean')
 
+    const firstPlayerId = firstBllPlayer.id
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="0"] .panel__label')?.dataset.label === 'Time A x Time B'`)
+    const labelBeforeSwap = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const panel = document.querySelector('.panel[data-slot="0"]')
+      const label = panel.querySelector('.panel__label')
+      return {
+        panelId: panel.dataset.panelId,
+        label: label?.dataset.label ?? null,
+        mode: label?.dataset.mode ?? null,
+        hasDismiss: Boolean(label?.querySelector('[data-dismiss-label]')),
+      }
+    })()`)
+    assert.equal(labelBeforeSwap.label, 'Time A x Time B')
+    assert.ok(labelBeforeSwap.mode, 'O rótulo precisa ter um modo de posicionamento.')
+    assert.equal(labelBeforeSwap.hasDismiss, true, 'O rótulo precisa ter um X para ocultar.')
+    assert.equal(firstBllPlayer.id, firstPlayerId, 'A chegada do título não pode recriar o WebContents do painel.')
+
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-dismiss-label]').click()`)
+    await waitForExpression(target, `!document.querySelector('.panel[data-slot="0"] .panel__label')`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const form = document.querySelector('.panel[data-slot="0"] [data-panel-form]')
+      form.requestSubmit()
+    })()`)
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="0"] .panel__label')?.dataset.label === 'Time A x Time B'`,
+      12000)
+
     await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-b').click()`)
     const secondBllPlayer = await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-b'))
     assert.ok(secondBllPlayer, 'O segundo player BLL não foi direcionado ao painel seguinte.')
     await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`)
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.label === 'Time C x Time D'`)
+
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const source = document.querySelector('.panel[data-slot="0"]')
+      const targetPanel = document.querySelector('.panel[data-slot="1"]')
+      const handle = source.querySelector('[data-drag]')
+      const from = handle.getBoundingClientRect()
+      const to = targetPanel.getBoundingClientRect()
+      const startX = from.left + from.width / 2
+      const startY = from.top + from.height / 2
+      const endX = to.left + to.width / 2
+      const endY = to.top + to.height / 2
+      handle.dispatchEvent(new PointerEvent('pointerdown', { bubbles: true, pointerId: 1, clientX: startX, clientY: startY, buttons: 1 }))
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: startX + 20, clientY: startY + 20, buttons: 1 }))
+      document.dispatchEvent(new PointerEvent('pointermove', { bubbles: true, pointerId: 1, clientX: endX, clientY: endY, buttons: 1 }))
+      document.dispatchEvent(new PointerEvent('pointerup', { bubbles: true, pointerId: 1, clientX: endX, clientY: endY }))
+    })()`)
+    await waitForExpression(target, `(() => {
+      const panel = document.querySelector('[data-panel-id="${labelBeforeSwap.panelId}"]')
+      return panel?.querySelector('.panel__label')?.dataset.label === 'Time A x Time B'
+        && panel.querySelector('input[name="url"]')?.value.includes('/view/game-a')
+    })()`)
+    assert.equal(
+      (await fetchJson(`http://127.0.0.1:${port}/json`)).some((candidate) => candidate.id === firstPlayerId),
+      true,
+      'Trocar posição não pode destruir o WebContents do jogo.',
+    )
+
     const idsBeforeBlockedReplacement = [firstBllPlayer.id, secondBllPlayer.id].sort()
     await evaluate(bllCatalog.webSocketDebuggerUrl, `document.querySelector('#game-a').click()`)
     await wait(150)
@@ -160,7 +223,21 @@ async function run() {
     'A substituição explícita alterou o painel errado.')
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('#btn-more').click()
+      document.querySelector('#btn-match-labels').click()
+    })()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel__label').length === 0`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('#btn-more').click()
+      document.querySelector('#btn-match-labels').click()
+    })()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel__label').length >= 1`)
+
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('#btn-more').click()
       document.querySelector('#btn-clear-all').click()
+    })()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel__label').length === 0`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('#btn-layout').click()
       document.querySelector('.confirm [data-ok]').click()
     })()`)

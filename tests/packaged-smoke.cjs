@@ -132,7 +132,7 @@ async function run() {
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.app-version')?.textContent`), expectedAppVersion)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser'))`), true)
     const grid = await evaluate(target.webSocketDebuggerUrl, `(() => {
-      document.querySelector('[data-count="16"]').click()
+      document.querySelector('[data-count="18"]').click()
       return {
         className: document.querySelector('.grid')?.className ?? '',
         panelCount: document.querySelectorAll('.panel').length,
@@ -140,8 +140,8 @@ async function run() {
           document.documentElement.scrollHeight > document.documentElement.clientHeight,
       }
     })()`)
-    assert.match(grid.className, /grid--16/)
-    assert.equal(grid.panelCount, 16)
+    assert.match(grid.className, /grid--18/)
+    assert.equal(grid.panelCount, 18)
     assert.equal(grid.overflow, false)
     await assertToolbar()
     const removal = await evaluate(target.webSocketDebuggerUrl, `(() => {

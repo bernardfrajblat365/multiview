@@ -14,6 +14,11 @@ function createSportsPlayerFixture(requestUrl) {
     : 'openvidu'
   const late = url.searchParams.get('late') === '1'
   const empty = url.searchParams.get('fixture') === 'empty'
+  const titleParam = url.searchParams.get('title')
+  const canal = url.searchParams.get('canal')
+  const pageTitle = titleParam
+    ? (canal ? `(${canal}) ${titleParam}` : titleParam)
+    : 'Sports player video fixture'
   const display = (...players) => players.includes(player) ? 'block' : 'none'
   const openviduVideo = late && player === 'openvidu' ? '' : '<video autoplay muted playsinline data-fixture-video="openvidu"></video>'
   return `<!doctype html><title>Sports player video fixture</title>
@@ -69,6 +74,10 @@ function createSportsPlayerFixture(requestUrl) {
       draw(); setInterval(draw,100);
       if (empty) document.querySelectorAll('video').forEach((video) => video.remove());
       else setTimeout(mountVideo, late ? 150 : 0);
+      const deferredTitle = ${JSON.stringify(pageTitle)};
+      if (deferredTitle !== 'Sports player video fixture') {
+        setTimeout(() => { document.title = deferredTitle }, 200);
+      }
     </script>`
 }
 

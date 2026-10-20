@@ -52,6 +52,19 @@ const quadra = {
     ipcRenderer.on('quadra:bllsport-error', listener)
     return () => ipcRenderer.removeListener('quadra:bllsport-error', listener)
   },
+  onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; title: string }) => callback(payload)
+    ipcRenderer.on('quadra:panel-title', listener)
+    return () => ipcRenderer.removeListener('quadra:panel-title', listener)
+  },
+  onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null },
+    ) => callback(payload)
+    ipcRenderer.on('quadra:panel-video-rect', listener)
+    return () => ipcRenderer.removeListener('quadra:panel-video-rect', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('quadra', quadra)

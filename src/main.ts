@@ -6,6 +6,7 @@ import {
   calculateLayout,
   defaultHighlightCount,
   getCompositions,
+  MAX_PANELS,
   resolveComposition,
   swapPanels,
   type HighlightPosition,
@@ -13,6 +14,11 @@ import {
   type LayoutNode,
   type PanelId,
 } from './layout'
+import {
+  extractMatchLabel,
+  placeMatchLabel,
+  type NormRect,
+} from './match-label'
 import {
   buildOrganizerChoices,
   organizerDraftKey,
@@ -36,7 +42,6 @@ type LayoutSnapshot = {
 const app = document.querySelector<HTMLDivElement>('#app')!
 const APP_VERSION = `v${version}`
 const MIN_PANELS = 1
-const MAX_PANELS = 16
 const HISTORY_LIMIT = 24
 const TOOLBAR_IDLE_MS = 5_000
 const DRAG_THRESHOLD_PX = 6
@@ -66,7 +71,114 @@ let layoutResizeFrame: number | null = null
 let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
+let showMatchLabels = true
 const forceReloadIds = new Set<PanelId>()
+const panelTitles = new Map<PanelId, string>()
+const panelVideoRects = new Map<PanelId, NormRect | null>()
+/** Per-panel dismiss; restored when the user opens/reloads the panel URL. */
+const dismissedMatchLabels = new Set<PanelId>()
+
+function clearPanelMatchState(id: PanelId) {
+  panelTitles.delete(id)
+  panelVideoRects.delete(id)
+  dismissedMatchLabels.delete(id)
+}
+
+function clearAllPanelMatchState() {
+  panelTitles.clear()
+  panelVideoRects.clear()
+  dismissedMatchLabels.clear()
+}
+
+function ensureMatchLabelDismiss(labelElement: HTMLElement, panelId: PanelId) {
+  let dismiss = labelElement.querySelector<HTMLButtonElement>('.panel__label-dismiss')
+  if (dismiss) return dismiss
+  dismiss = document.createElement('button')
+  dismiss.type = 'button'
+  dismiss.className = 'panel__label-dismiss'
+  dismiss.dataset.dismissLabel = ''
+  dismiss.setAttribute('aria-label', 'Ocultar nome do jogo')
+  dismiss.title = 'Ocultar nome (abra o link de novo para mostrar)'
+  dismiss.textContent = '×'
+  dismiss.addEventListener('pointerenter', () => setChromeInteractive(true))
+  dismiss.addEventListener('pointerdown', (event) => {
+    event.stopPropagation()
+    setChromeInteractive(true)
+  })
+  dismiss.addEventListener('click', (event) => {
+    event.preventDefault()
+    event.stopPropagation()
+    dismissedMatchLabels.add(panelId)
+    updatePanelLabels()
+  })
+  return dismiss
+}
+
+function updatePanelLabels() {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')
+  if (!stage) return
+  for (const panelElement of stage.querySelectorAll<HTMLElement>('.panel')) {
+    const id = panelElement.dataset.panelId
+    if (!id) continue
+    const panel = panelById(id)
+    const existing = panelElement.querySelector<HTMLElement>('.panel__label')
+    if (
+      !showMatchLabels ||
+      !panel?.url ||
+      !panelElement.classList.contains('panel--loaded') ||
+      dismissedMatchLabels.has(id)
+    ) {
+      existing?.remove()
+      continue
+    }
+    const title = panelTitles.get(id) ?? ''
+    const label = extractMatchLabel(title)
+    if (!label) {
+      existing?.remove()
+      continue
+    }
+    const width = panelElement.clientWidth || 1
+    const height = panelElement.clientHeight || 1
+    const placement = placeMatchLabel({
+      panelWidth: width,
+      panelHeight: height,
+      videoRect: panelVideoRects.has(id) ? panelVideoRects.get(id) ?? null : null,
+      label,
+    })
+    const labelElement = existing ?? document.createElement('div')
+    if (!existing) {
+      labelElement.className = 'panel__label'
+      panelElement.appendChild(labelElement)
+    }
+    labelElement.dataset.mode = placement.mode
+    labelElement.dataset.label = label
+    labelElement.style.setProperty('--label-x', `${placement.box.x * 100}%`)
+    labelElement.style.setProperty('--label-y', `${placement.box.y * 100}%`)
+    labelElement.style.setProperty('--label-w', `${placement.box.width * 100}%`)
+    labelElement.style.setProperty('--label-h', `${placement.box.height * 100}%`)
+    labelElement.style.setProperty('--label-font', `${placement.fontPx}px`)
+    const dismiss = ensureMatchLabelDismiss(labelElement, id)
+    const textNodes =
+      placement.mode === 'bar-side'
+        ? placement.lines.map((line) => {
+            const span = document.createElement('span')
+            span.className = 'panel__label-line'
+            span.textContent = line
+            span.setAttribute('aria-hidden', 'true')
+            return span
+          })
+        : [
+            (() => {
+              const span = document.createElement('span')
+              span.className = 'panel__label-text'
+              span.textContent = placement.lines[0] ?? label
+              span.setAttribute('aria-hidden', 'true')
+              return span
+            })(),
+          ]
+    labelElement.replaceChildren(dismiss, ...textNodes)
+  }
+}
 
 function createPanel(): Panel {
   return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted() }
@@ -190,6 +302,7 @@ function setPanelCount(count: number, options: { recordHistory?: boolean } = {})
     panels = [...panels, ...Array.from({ length: nextCount - panels.length }, createPanel)]
   } else {
     const removed = new Set(panels.slice(nextCount).map((panel) => panel.id))
+    for (const id of removed) clearPanelMatchState(id)
     panels = panels.slice(0, nextCount)
     highlighted = new Set([...highlighted].filter((id) => !removed.has(id)))
   }
@@ -241,6 +354,7 @@ function removeLastPanel() {
 function removePanel(id: PanelId) {
   if (panels.length <= MIN_PANELS || !panelById(id) || view !== 'grid') return
   pushHistory()
+  clearPanelMatchState(id)
   panels = panels.filter((panel) => panel.id !== id)
   panelOrder = panelOrder.filter((panelId) => panelId !== id)
   highlighted.clear()
@@ -432,10 +546,16 @@ function organizeAutomatically() {
 function applyPanelUrl(id: PanelId, next: string) {
   const panel = panelById(id)
   if (!panel) return
+  if (panel.url !== next) clearPanelMatchState(id)
   panel.url = next
   panel.draftUrl = next
-  if (next) forceReloadIds.add(id)
-  else forceReloadIds.delete(id)
+  if (next) {
+    dismissedMatchLabels.delete(id)
+    forceReloadIds.add(id)
+  } else {
+    forceReloadIds.delete(id)
+    clearPanelMatchState(id)
+  }
   renderGrid()
 }
 
@@ -445,12 +565,15 @@ function panelLabel(id: PanelId) {
 
 function openWeddbets(id: PanelId) {
   if (!panelById(id)) return
+  // Ensure main knows the panel exists before the catalog IPC (same-turn send order).
+  syncLayout()
   window.quadra?.openWeddbets(id, panelLabel(id))
 }
 
 function openBllsport(id: PanelId) {
   if (!panelById(id)) return
   bllsportTargetId = id
+  syncLayout()
   window.quadra?.openBllsport(id, panelLabel(id))
 }
 
@@ -469,6 +592,7 @@ function useSportsCatalogPlayer(
 ) {
   const panel = panelById(panelId)
   if (!panel || view !== 'grid') return
+  if (panel.url !== url) clearPanelMatchState(panelId)
   panel.url = url
   panel.draftUrl = url
   const next = panels.find((candidate) => candidate.id !== panelId && !candidate.url)
@@ -500,8 +624,14 @@ function openAllPanels() {
   panels = panels.map((panel) => {
     const input = app.querySelector<HTMLInputElement>(`[data-panel-id="${CSS.escape(panel.id)}"] input[name="url"]`)
     const url = input ? normalizeUrl(input.value) : panel.url
-    if (url) forceReloadIds.add(panel.id)
-    else forceReloadIds.delete(panel.id)
+    if (panel.url !== url) clearPanelMatchState(panel.id)
+    if (url) {
+      dismissedMatchLabels.delete(panel.id)
+      forceReloadIds.add(panel.id)
+    } else {
+      forceReloadIds.delete(panel.id)
+      clearPanelMatchState(panel.id)
+    }
     return { ...panel, url, draftUrl: url }
   })
   renderGrid()
@@ -545,8 +675,19 @@ function toggleAllMuted() {
 
 function clearAllPanels() {
   pushHistory()
+  clearAllPanelMatchState()
   panels = panels.map((panel) => ({ ...panel, url: '', draftUrl: '' }))
   renderGrid()
+}
+
+function setShowMatchLabels(next: boolean) {
+  showMatchLabels = next
+  const button = app.querySelector<HTMLButtonElement>('#btn-match-labels')
+  if (button) {
+    button.setAttribute('aria-pressed', String(showMatchLabels))
+    button.textContent = showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'
+  }
+  updatePanelLabels()
 }
 
 function urlFormHtml(panel: Panel, options: { withClose?: boolean } = {}): string {
@@ -623,6 +764,7 @@ function renderPanelElements() {
   }
 
   scheduleSyncLayout()
+  updatePanelLabels()
 }
 
 function focusPendingPanel() {
@@ -779,6 +921,7 @@ function scheduleSyncLayout() {
   layoutSyncFrame = requestAnimationFrame(() => {
     layoutSyncFrame = null
     syncLayout()
+    updatePanelLabels()
   })
 }
 
@@ -902,7 +1045,7 @@ function updateChromeHitTarget(x: number, y: number) {
     return
   }
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar, .panel__controls, .panel__overlay, .panel--empty, .organize-panel, .confirm')))
+  setChromeInteractive(Boolean(target?.closest('.toolbar, .panel__controls, .panel__overlay, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm')))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -995,6 +1138,10 @@ function bindMoreMenu() {
   app.querySelector('#btn-auto')?.addEventListener('click', () => { organizeAutomatically(); setOpen(false) }, { signal })
   app.querySelector('#btn-undo')?.addEventListener('click', () => { undo(); setOpen(false) }, { signal })
   app.querySelector('#btn-clear-all')?.addEventListener('click', () => { clearAllPanels(); setOpen(false) }, { signal })
+  app.querySelector('#btn-match-labels')?.addEventListener('click', () => {
+    setShowMatchLabels(!showMatchLabels)
+    setOpen(false)
+  }, { signal })
   document.addEventListener('click', (event) => { if (!menu.contains(event.target as Node)) setOpen(false) }, { signal })
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false) }, { signal })
 }
@@ -1062,7 +1209,7 @@ function renderChoose() {
   setChromeInteractive(true)
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
-    <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a 16 jogos para acompanhar ao mesmo tempo.</p>
+    <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
     <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><span>Adicione outras telas quando quiser.</span><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><span id="update-status" role="status" aria-live="polite"></span></div>
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
@@ -1212,7 +1359,7 @@ function renderGrid() {
     <div class="toolbar" role="toolbar" aria-label="Controles">
       <button type="button" class="btn btn--load" id="btn-open-all">Abrir todos</button>
       <button type="button" class="btn btn--ghost" id="btn-mute-all" aria-pressed="${allPanelsMuted()}">${allPanelsMuted() ? 'Ativar som de todos' : 'Mutar todos'}</button>
-      <button type="button" class="btn btn--load" id="btn-add-panel"${panels.length >= MAX_PANELS ? ' disabled' : ''} aria-label="${panels.length >= MAX_PANELS ? 'Limite de 16 telas atingido' : 'Adicionar uma tela'}" title="${panels.length >= MAX_PANELS ? 'Limite de 16 telas atingido' : 'Adicionar uma tela'}">+ Adicionar tela</button>
+      <button type="button" class="btn btn--load" id="btn-add-panel"${panels.length >= MAX_PANELS ? ' disabled' : ''} aria-label="${panels.length >= MAX_PANELS ? `Limite de ${MAX_PANELS} telas atingido` : 'Adicionar uma tela'}" title="${panels.length >= MAX_PANELS ? `Limite de ${MAX_PANELS} telas atingido` : 'Adicionar uma tela'}">+ Adicionar tela</button>
       <button type="button" class="btn btn--danger" id="btn-remove-panel"${panels.length <= MIN_PANELS ? ' disabled' : ''} aria-label="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}" title="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}">- Remover tela</button>
       <button type="button" class="btn btn--ghost" id="btn-organize">${editorOpen ? 'Cancelar organização' : 'Organizar'}</button>
       <button type="button" class="btn btn--ghost" id="btn-layout">Voltar</button>
@@ -1222,6 +1369,7 @@ function renderGrid() {
         <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
           <button type="button" class="btn btn--ghost" id="btn-equal" role="menuitem">Sem destaques</button>
+          <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>
           <button type="button" class="btn btn--ghost" id="btn-undo" role="menuitem"${canUndo ? '' : ' disabled'}>Desfazer</button>
           <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">Limpar todos</button>
         </div>
@@ -1258,6 +1406,7 @@ function renderGrid() {
   bindMoreMenu()
   bindToolbar()
   renderPanelElements()
+  updatePanelLabels()
   focusPendingPanel()
 }
 
@@ -1282,6 +1431,20 @@ window.quadra?.onWeddbetsPlayerOpened(({ panelId, url }) => useWeddbetsPlayer(pa
 window.quadra?.onBllsportPlayerOpened(({ panelId, url }) => useBllsportPlayer(panelId, url))
 window.quadra?.onBllsportTargetRequired(() => {
   bllsportTargetId = null
+})
+window.quadra?.onPanelTitle(({ panelId, title }) => {
+  if (!panelById(panelId)) return
+  if (!title) {
+    panelTitles.delete(panelId)
+  } else {
+    panelTitles.set(panelId, title)
+  }
+  updatePanelLabels()
+})
+window.quadra?.onPanelVideoRect(({ panelId, rect }) => {
+  if (!panelById(panelId)) return
+  panelVideoRects.set(panelId, rect)
+  updatePanelLabels()
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return

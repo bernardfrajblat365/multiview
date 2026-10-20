@@ -2,7 +2,7 @@
 
 ## Resumo
 
-Quadra é um aplicativo desktop Windows feito com Electron. Ele abre de 1 a 16 páginas independentes em uma única janela, usando um `WebContentsView` do Chromium por painel. A UI controla a composição; o processo principal cria, posiciona, silencia, recarrega e destrói os conteúdos remotos.
+Quadra é um aplicativo desktop Windows feito com Electron. Ele abre de 1 a 18 páginas independentes em uma única janela, usando um `WebContentsView` do Chromium por painel. A UI controla a composição; o processo principal cria, posiciona, silencia, recarrega e destrói os conteúdos remotos.
 
 O diretório pai também contém `../comparacoes-layouts/`, um relatório offline separado que extrai a geometria de `src/layout.ts` e compara 124 combinações de layout. Não é outro backend nem outro aplicativo.
 
@@ -41,7 +41,7 @@ npm run test:packaged
 - `electron/main.ts`: processo principal. Cria uma `BaseWindow` preta e maximizada, uma `BrowserWindow` transparente de overlay para os controles e um `WebContentsView` para cada URL carregada.
 - `electron/preload.ts`: bridge segura `window.quadra`, expondo somente comandos/eventos IPC necessários.
 - `src/main.ts`: renderer vanilla TypeScript/DOM. Mantém painéis, URLs, rascunhos, mute, destaques, organização, undo, fullscreen e toolbar auto-hide.
-- `src/layout.ts`: árvore binária de divisões, catálogo de composições de 1–16 telas, destaques e posições; calcula e valida retângulos normalizados.
+- `src/layout.ts`: árvore binária de divisões, catálogo de composições de 1–18 telas, destaques e posições; calcula e valida retângulos normalizados.
 - `src/video-layout.ts`: otimização dos ratios dos splits com `yalps`, buscando ampliar vídeo 16:9 sem reduzir vídeos existentes nem perder a hierarquia de destaques; cache RAM de 256 resultados.
 - `src/organizer.ts`: rascunho do editor de organização, validação, miniaturas e agrupamento de posições equivalentes.
 - `src/routing.ts`: normaliza URLs, extrai `iframe`, adiciona HTTPS e converte formatos comuns do YouTube para URLs `watch`.
@@ -112,7 +112,7 @@ O login do BLL é feito pelo próprio site dentro da sessão persistente `quadra
 
 ## O que o usuário consegue fazer
 
-1. Escolher 1–16 telas ou começar com uma.
+1. Escolher 1–18 telas ou começar com uma.
 2. Colar URLs comuns, links/embeds do YouTube ou usar o catálogo BLL.
 3. Abrir um painel ou todos, editar/limpar URLs, adicionar/remover telas e mutar individualmente/coletivamente.
 4. Destacar jogos; o algoritmo redistribui os demais conforme quantidade e proporção da janela.
@@ -121,7 +121,7 @@ O login do BLL é feito pelo próprio site dentro da sessão persistente `quadra
 
 ## Testes e limites conhecidos
 
-O `typecheck`, `npm test` e o build passam no estado analisado. Os testes unitários cobrem routing, layouts até 16 painéis, 124 combinações de composição/posição, editor, otimização, histerese e validação geométrica. Os smokes Electron cobrem BLL, múltiplas views, `X-Frame-Options`, fechamento e executável empacotado.
+O `typecheck`, `npm test` e o build passam no estado analisado. Os testes unitários cobrem routing, layouts até 18 painéis, 142 combinações de composição/posição, editor, otimização, histerese e validação geométrica. Os smokes Electron cobrem BLL, múltiplas views, `X-Frame-Options`, fechamento e executável empacotado.
 
 O próprio README/DIAGNOSTICO registra limites: URLs inválidas ainda não têm validação de UX completa; há casos de reabertura da mesma URL, mensagens genéricas de navegação e perda de parâmetros em alguns links do YouTube. Reprodução, áudio e desempenho de serviços externos dependem do ambiente real e não são garantidos pelos testes locais.
 

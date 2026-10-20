@@ -36,10 +36,16 @@ export type ResolvedComposition = {
   variant: string
 }
 
-const CORNERS: HighlightPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
-const SIDES: HighlightPosition[] = ['left', 'right', 'top', 'bottom']
+export const MAX_PANELS = 18
+export const CORNERS: HighlightPosition[] = ['top-left', 'top-right', 'bottom-left', 'bottom-right']
+export const SIDES: HighlightPosition[] = ['left', 'right', 'top', 'bottom']
 const REFERENCE_ASPECT = 16 / 9
 const EPSILON = 1e-8
+
+/** Side-layout weight per panel count; resolveComposition tries weight±1. */
+export const SIDE_WEIGHTS: Record<number, number> = {
+  3: 4, 4: 3, 5: 4, 6: 3, 7: 4, 8: 3, 9: 4, 10: 4, 11: 5, 12: 4, 13: 4, 14: 4, 15: 4, 16: 4, 17: 6, 18: 6,
+}
 
 function safeAspect(aspect = REFERENCE_ASPECT) {
   return Number.isFinite(aspect) && aspect > 0 ? aspect : REFERENCE_ASPECT
@@ -55,12 +61,19 @@ function split(id: string, direction: SplitDirection, ratio: number, first: Layo
 
 export function defaultHighlightCount(count: number) {
   if ([3, 5, 7, 11, 13].includes(count)) return 1
-  if ([10, 14].includes(count)) return 2
+  if ([10, 14, 18].includes(count)) return 2
   return 0
 }
 
+function usesCornerPositions(count: number, highlightCount: number) {
+  return (count === 13 && highlightCount === 1)
+    || (count === 10 && highlightCount === 2)
+    || (count === 18 && highlightCount === 2)
+    || (count === 7 && highlightCount === 3)
+}
+
 export function getCompositions(count: number): Composition[] {
-  if (!Number.isInteger(count) || count < 1 || count > 16) throw new Error('Escolha entre 1 e 16 telas.')
+  if (!Number.isInteger(count) || count < 1 || count > MAX_PANELS) throw new Error(`Escolha entre 1 e ${MAX_PANELS} telas.`)
   const capacities = count < 3 ? [0] : count < 5 ? [0, 1] : count === 7 ? [0, 1, 2, 3] : [0, 1, 2]
   return capacities.map((highlightCount) => ({
     id: `${count}-${highlightCount}`,
@@ -68,7 +81,7 @@ export function getCompositions(count: number): Composition[] {
     label: highlightCount === 0
       ? `${count} ${count === 1 ? 'tela' : 'telas'} · Sem destaques`
       : `${count} telas · ${highlightCount} ${highlightCount === 1 ? 'grande' : 'grandes'} + ${count - highlightCount} pequenas`,
-    positions: highlightCount === 0 ? [] : (count === 13 && highlightCount === 1) || (count === 10 && highlightCount === 2) || (count === 7 && highlightCount === 3) ? [...CORNERS] : [...SIDES],
+    positions: highlightCount === 0 ? [] : usesCornerPositions(count, highlightCount) ? [...CORNERS] : [...SIDES],
   }))
 }
 
@@ -80,7 +93,7 @@ function lineTree(ids: string[], direction: SplitDirection, path: string): Layou
     lineTree(ids.slice(half), direction, `${path}b`))
 }
 
-function gridTree(ids: string[], rows: number, path: string): LayoutNode {
+export function gridTree(ids: string[], rows: number, path: string): LayoutNode {
   if (rows === 1) return lineTree(ids, 'row', path)
   const count = Math.ceil(ids.length / rows)
   return split(path, 'column', count / ids.length,
@@ -88,7 +101,7 @@ function gridTree(ids: string[], rows: number, path: string): LayoutNode {
     gridTree(ids.slice(count), rows - 1, `${path}b`))
 }
 
-function viewingScore(tree: LayoutNode, aspect: number) {
+export function viewingScore(tree: LayoutNode, aspect: number) {
   const useful = calculateLayout(tree).rects.map((rect) => {
     const ratio = aspect * rect.width / rect.height
     return rect.width * rect.height * Math.min(ratio / REFERENCE_ASPECT, REFERENCE_ASPECT / ratio)
@@ -96,7 +109,7 @@ function viewingScore(tree: LayoutNode, aspect: number) {
   return useful.reduce((sum, value) => sum + value, 0) * 0.7 + Math.min(...useful) * useful.length * 0.3
 }
 
-function bestGrid(ids: string[], aspect: number, path: string) {
+export function bestGrid(ids: string[], aspect: number, path: string) {
   let tree = gridTree(ids, 1, path)
   let score = viewingScore(tree, aspect)
   for (let rows = 2; rows <= ids.length; rows += 1) {
@@ -110,14 +123,19 @@ function bestGrid(ids: string[], aspect: number, path: string) {
   return tree
 }
 
-function quadrantTree(count: number, highlights: number, position: HighlightPosition) {
+export function quadrantTree(count: number, highlights: number, position: HighlightPosition) {
   const anchor = CORNERS.indexOf(position)
+  if (anchor < 0) throw new Error(`Posição de canto inválida: ${position}`)
+  const smallPerQuadrant = (count - highlights) / (4 - highlights)
+  if (!Number.isInteger(smallPerQuadrant) || smallPerQuadrant < 0) {
+    throw new Error(`Quadrantes inválidos para ${count} telas com ${highlights} destaques.`)
+  }
   const largeQuadrants = highlights === 1 ? [anchor] : highlights === 2 ? [anchor, anchor ^ 1] : [anchor, anchor ^ 1, anchor ^ 2]
   let largeIndex = 0
   let smallIndex = 0
   const quadrants = Array.from({ length: 4 }, (_, index) => {
     if (largeQuadrants.includes(index)) return leaf(`large-${largeIndex++}`)
-    const ids = Array.from({ length: (count - highlights) / (4 - highlights) }, () => `small-${smallIndex++}`)
+    const ids = Array.from({ length: smallPerQuadrant }, () => `small-${smallIndex++}`)
     return gridTree(ids, 2, `q${index}`)
   })
   return split('q', 'column', 0.5,
@@ -125,7 +143,7 @@ function quadrantTree(count: number, highlights: number, position: HighlightPosi
     split('qb', 'row', 0.5, quadrants[2], quadrants[3]))
 }
 
-function assignSlots(tree: LayoutNode, largeIds: string[], smallIds: string[]): LayoutNode {
+export function assignSlots(tree: LayoutNode, largeIds: string[], smallIds: string[]): LayoutNode {
   const slots = calculateLayout(tree).rects.sort((a, b) => Math.abs(a.y - b.y) > EPSILON ? a.y - b.y : a.x - b.x)
   const assignments = new Map<string, string>()
   let large = 0
@@ -137,7 +155,7 @@ function assignSlots(tree: LayoutNode, largeIds: string[], smallIds: string[]): 
   return visit(tree)
 }
 
-function applySplitRatios(tree: LayoutNode, ratios: ReadonlyMap<string, number>): LayoutNode {
+export function applySplitRatios(tree: LayoutNode, ratios: ReadonlyMap<string, number>): LayoutNode {
   if (tree.kind === 'leaf') return tree
   return {
     ...tree,
@@ -145,6 +163,23 @@ function applySplitRatios(tree: LayoutNode, ratios: ReadonlyMap<string, number>)
     first: applySplitRatios(tree.first, ratios),
     second: applySplitRatios(tree.second, ratios),
   }
+}
+
+export function makeSideSplit(
+  place: HighlightPosition,
+  weight: number,
+  largeSlots: string[],
+  smallSlots: string[],
+  aspect: number,
+): LayoutNode {
+  const direction = place === 'left' || place === 'right' ? 'row' : 'column'
+  const ratio = weight * largeSlots.length / (weight * largeSlots.length + smallSlots.length)
+  const largeAspect = direction === 'row' ? aspect * ratio : aspect / ratio
+  const smallAspect = direction === 'row' ? aspect * (1 - ratio) : aspect / (1 - ratio)
+  const large = bestGrid(largeSlots, largeAspect, 'l')
+  const small = bestGrid(smallSlots, smallAspect, 's')
+  const reverse = place === 'right' || place === 'bottom'
+  return split('root', direction, reverse ? 1 - ratio : ratio, reverse ? small : large, reverse ? large : small)
 }
 
 export function resolveComposition(panelIds: PanelId[], options: CompositionOptions = {}): ResolvedComposition {
@@ -173,17 +208,11 @@ export function resolveComposition(panelIds: PanelId[], options: CompositionOpti
     const positions = composition.positions.includes(options.position!) ? [options.position!] : ['left', 'top'] as HighlightPosition[]
     const largeSlots = largeIds.map((_, index) => `large-${index}`)
     const smallSlots = smallIds.map((_, index) => `small-${index}`)
-    const weights: Record<number, number> = { 3: 4, 4: 3, 5: 4, 6: 3, 7: 4, 8: 3, 9: 4, 10: 4, 11: 5, 12: 4, 13: 4, 14: 4, 15: 4, 16: 4 }
+    const baseWeight = SIDE_WEIGHTS[panelIds.length]
+    if (!Number.isFinite(baseWeight)) throw new Error(`Peso de layout ausente para ${panelIds.length} telas.`)
     for (const place of positions) {
-      const direction = place === 'left' || place === 'right' ? 'row' : 'column'
-      for (const weight of [weights[panelIds.length] - 1, weights[panelIds.length], weights[panelIds.length] + 1]) {
-        const ratio = weight * largeIds.length / (weight * largeIds.length + smallIds.length)
-        const largeAspect = direction === 'row' ? aspect * ratio : aspect / ratio
-        const smallAspect = direction === 'row' ? aspect * (1 - ratio) : aspect / (1 - ratio)
-        const large = bestGrid(largeSlots, largeAspect, 'l')
-        const small = bestGrid(smallSlots, smallAspect, 's')
-        const reverse = place === 'right' || place === 'bottom'
-        const tree = split('root', direction, reverse ? 1 - ratio : ratio, reverse ? small : large, reverse ? large : small)
+      for (const weight of [baseWeight - 1, baseWeight, baseWeight + 1]) {
+        const tree = makeSideSplit(place, weight, largeSlots, smallSlots, aspect)
         candidates.push({ tree, variant: `${composition.id}:${place}:${weight}`, score: viewingScore(tree, aspect), position: place })
       }
     }

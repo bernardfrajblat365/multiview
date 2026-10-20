@@ -8,7 +8,69 @@ import { createAutoUpdateController } from './update'
 
 const { autoUpdater } = electronUpdater
 
-type SlotViewState = { view: WebContentsView; url: string; cursorCssKey?: string; cursorRevision: number }
+type NormVideoRect = { x: number; y: number; width: number; height: number }
+type SlotViewState = {
+  view: WebContentsView
+  url: string
+  cursorCssKey?: string
+  cursorRevision: number
+  videoRect?: NormVideoRect | null
+  videoPollTimer?: ReturnType<typeof setInterval>
+}
+
+const VIDEO_RECT_POLL_MS = 1500
+const VIDEO_RECT_WORLD = 1002
+const MAX_PANEL_TITLE_LENGTH = 160
+const measureVideoRectScript = `(() => {
+  const videos = Array.from(document.querySelectorAll('video'))
+    .filter((video) => {
+      const style = window.getComputedStyle(video)
+      if (style.display === 'none' || style.visibility === 'hidden' || Number(style.opacity) === 0) return false
+      const rect = video.getBoundingClientRect()
+      return rect.width > 8 && rect.height > 8
+    })
+  if (!videos.length) return null
+  let best = videos[0]
+  let bestArea = 0
+  for (const video of videos) {
+    const rect = video.getBoundingClientRect()
+    const area = rect.width * rect.height
+    if (area > bestArea) {
+      best = video
+      bestArea = area
+    }
+  }
+  const box = best.getBoundingClientRect()
+  const vw = window.innerWidth || 1
+  const vh = window.innerHeight || 1
+  const mediaW = best.videoWidth || 0
+  const mediaH = best.videoHeight || 0
+  let contentX = box.left
+  let contentY = box.top
+  let contentW = box.width
+  let contentH = box.height
+  if (mediaW > 0 && mediaH > 0 && box.width > 0 && box.height > 0) {
+    const mediaAspect = mediaW / mediaH
+    const boxAspect = box.width / box.height
+    if (boxAspect > mediaAspect) {
+      contentH = box.height
+      contentW = box.height * mediaAspect
+      contentX = box.left + (box.width - contentW) / 2
+      contentY = box.top
+    } else {
+      contentW = box.width
+      contentH = box.width / mediaAspect
+      contentX = box.left
+      contentY = box.top + (box.height - contentH) / 2
+    }
+  }
+  return {
+    x: contentX / vw,
+    y: contentY / vh,
+    width: contentW / vw,
+    height: contentH / vh,
+  }
+})()`
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -340,6 +402,61 @@ function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string
   void catalog.window.loadURL(catalog.homeUrl).catch(() => {})
 }
 
+function sanitizePanelTitle(title: string) {
+  return title.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, MAX_PANEL_TITLE_LENGTH)
+}
+
+function sendPanelTitle(panelId: string, title: string) {
+  overlayWindow?.webContents.send('quadra:panel-title', { panelId, title: sanitizePanelTitle(title) })
+}
+
+function isSameNormRect(a: NormVideoRect | null | undefined, b: NormVideoRect | null) {
+  if (!a && !b) return true
+  if (!a || !b) return false
+  const epsilon = 0.002
+  return (
+    Math.abs(a.x - b.x) < epsilon &&
+    Math.abs(a.y - b.y) < epsilon &&
+    Math.abs(a.width - b.width) < epsilon &&
+    Math.abs(a.height - b.height) < epsilon
+  )
+}
+
+function isValidNormRect(value: unknown): value is NormVideoRect {
+  if (!value || typeof value !== 'object') return false
+  const rect = value as Partial<NormVideoRect>
+  return [rect.x, rect.y, rect.width, rect.height].every((part) => typeof part === 'number' && Number.isFinite(part)) &&
+    Number(rect.width) > 0 && Number(rect.height) > 0 &&
+    Number(rect.x) >= -0.05 && Number(rect.y) >= -0.05 &&
+    Number(rect.x) + Number(rect.width) <= 1.05 &&
+    Number(rect.y) + Number(rect.height) <= 1.05
+}
+
+async function measureSlotVideoRect(state: SlotViewState, panelId: string) {
+  if (state.view.webContents.isDestroyed()) return
+  const measured = await state.view.webContents
+    .executeJavaScriptInIsolatedWorld(VIDEO_RECT_WORLD, [{ code: measureVideoRectScript }])
+    .catch(() => null)
+  const next = isValidNormRect(measured) ? measured : null
+  if (isSameNormRect(state.videoRect, next)) return
+  state.videoRect = next
+  overlayWindow?.webContents.send('quadra:panel-video-rect', { panelId, rect: next })
+}
+
+function startVideoRectPolling(state: SlotViewState, panelId: string) {
+  if (state.videoPollTimer) return
+  state.videoPollTimer = setInterval(() => {
+    void measureSlotVideoRect(state, panelId)
+  }, VIDEO_RECT_POLL_MS)
+  void measureSlotVideoRect(state, panelId)
+}
+
+function stopVideoRectPolling(state: SlotViewState) {
+  if (!state.videoPollTimer) return
+  clearInterval(state.videoPollTimer)
+  state.videoPollTimer = undefined
+}
+
 function configureRemoteContents(contents: Electron.WebContents, slotId?: string) {
   contents.setUserAgent(electronUserAgent)
   contents.on('did-finish-load', () => {
@@ -350,11 +467,25 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
         // Navigation clears inserted CSS; drop the stale key and re-apply cursor policy.
         state.cursorCssKey = undefined
         void syncSlotCursor(state)
+        void measureSlotVideoRect(state, slotId)
       }
     }
     if (!matchSportsPlayerUrl(contents.getURL())) return
     void contents.insertCSS(sportsPlayerCss, { cssOrigin: 'user' }).catch(() => {})
   })
+  if (slotId) {
+    contents.on('page-title-updated', (_event, title) => {
+      sendPanelTitle(slotId, title)
+    })
+    contents.on('did-start-navigation', (details) => {
+      if (!details.isMainFrame || details.isSameDocument) return
+      sendPanelTitle(slotId, '')
+      const state = slotViews.get(slotId)
+      if (!state) return
+      state.videoRect = undefined
+      overlayWindow?.webContents.send('quadra:panel-video-rect', { panelId: slotId, rect: null })
+    })
+  }
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!slotId || !isMainFrame || errorCode === -3) return
     const match = matchSportsPlayerUrl(validatedURL)
@@ -390,6 +521,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
 function destroySlotView(id: string) {
   const state = slotViews.get(id)
   if (!state) return
+  stopVideoRectPolling(state)
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
   if (!state.view.webContents.isDestroyed()) state.view.webContents.close()
   slotViews.delete(id)
@@ -460,8 +592,9 @@ function createSlotView(id: string, url: string, muted: boolean) {
   configureRemoteContents(view.webContents, id)
   view.webContents.setAudioMuted(muted)
   mainWindow?.contentView.addChildView(view)
-  const state: SlotViewState = { view, url, cursorRevision: 0 }
+  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined }
   slotViews.set(id, state)
+  startVideoRectPolling(state, id)
   void syncSlotCursor(state)
   void view.webContents.loadURL(url).catch(() => {})
   return state
@@ -479,9 +612,11 @@ function isValidLayoutPayload(value: unknown): value is LayoutPayload {
   if (!value || typeof value !== 'object') return false
   const payload = value as Partial<LayoutPayload>
   if (payload.view !== 'choose' && payload.view !== 'grid') return false
-  if (!Number.isInteger(payload.panelCount) || Number(payload.panelCount) < 1 || Number(payload.panelCount) > 16) return false
+  // Keep in sync with MAX_PANELS in src/layout.ts
+  const maxPanels = 18
+  if (!Number.isInteger(payload.panelCount) || Number(payload.panelCount) < 1 || Number(payload.panelCount) > maxPanels) return false
   if (payload.mode !== 'auto' && payload.mode !== 'equal' && payload.mode !== 'highlights') return false
-  if (!Array.isArray(payload.panels) || payload.panels.length > 16) return false
+  if (!Array.isArray(payload.panels) || payload.panels.length > maxPanels) return false
   if (payload.view === 'grid' && payload.panels.length !== payload.panelCount) return false
   const ids = new Set<string>()
   return payload.panels.every((panel) => {
@@ -542,6 +677,7 @@ function applyLayout(payload: LayoutPayload) {
       height: Math.max(1, Math.round(panel.bounds.height)),
     })
     state.view.setVisible(true)
+    void measureSlotVideoRect(state, panel.id)
   }
   for (const id of [...slotViews.keys()]) {
     if (!visibleSlots.has(id)) destroySlotView(id)

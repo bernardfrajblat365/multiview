@@ -1,6 +1,6 @@
 # Quadra — Multi-view
 
-App desktop (Electron) para assistir de 1 a 16 páginas ao mesmo tempo em uma única janela. Cada painel é uma `WebContentsView` completa do Chromium, então até sites que bloqueiam incorporação (`X-Frame-Options`) abrem normalmente.
+App desktop (Electron) para assistir de 1 a 18 páginas ao mesmo tempo em uma única janela. Cada painel é uma `WebContentsView` completa do Chromium, então até sites que bloqueiam incorporação (`X-Frame-Options`) abrem normalmente.
 
 ![Tela inicial do Quadra](docs/images/tela-inicial.png)
 
@@ -20,17 +20,18 @@ npm run dist:release
 
 ## Como usar
 
-1. Na tela inicial, escolha quantas telas quer (1 a 16) ou clique em **Começar com uma tela**.
+1. Na tela inicial, escolha quantas telas quer (1 a 18) ou clique em **Começar com uma tela**.
 2. Cole uma URL em cada painel e clique em **Abrir** (ou **Abrir todos**).
    - **BLL:** clique no botão **BLL** do painel, faça login uma vez e escolha o jogo. Os próximos jogos vão para a próxima tela vazia.
 3. **+ Adicionar tela** cria um painel novo; a lixeira remove um painel. O layout se reorganiza sozinho.
 4. **Organizar** permite escolher a composição, marcar telas principais (destaques) e a posição delas. **Aplicar** confirma; **Cancelar** ou Esc descarta.
-5. Outros controles: **Sem destaques**, **Organizar automaticamente**, **Desfazer**, seletor **Telas**, **Voltar**, **Tela Cheia** e editar URL do painel.
+5. Outros controles: **Sem destaques**, **Organizar automaticamente**, **Mostrar/Ocultar nomes dos jogos**, **Desfazer**, seletor **Telas**, **Voltar**, **Tela Cheia** e editar URL do painel.
 
 ### Como o layout funciona
 
 - O tamanho dos painéis é calculado automaticamente para maximizar a área visível de vídeo (referência 16:9), sem cortar a imagem — por isso painéis da mesma composição podem ter tamanhos diferentes.
 - Players esportivos são ajustados ao painel mantendo a proporção, com barras pretas quando necessário.
+- Quando o título da página traz um confronto (`Time A x Time B` — típico do BLL e de muitos links YouTube), o Quadra mostra esse nome no painel: na faixa preta se houver sobra, ou numa faixa discreta na base se o vídeo ocupar tudo. Marcadores de áudio no título (ex.: 🔊) são removidos. O **×** no rótulo oculta só aquele painel; **Abrir** de novo restaura. O menu **⋯** oculta/mostra todos. Zapping e páginas sem confronto no título ficam sem rótulo.
 - Destacar um jogo (estrela) coloca ele no espaço grande; um segundo destaque troca para uma composição que comporte dois.
 - Não há divisórias manuais. Ao redimensionar a janela, tudo é recalculado preservando destaques e posições.
 - A barra de controles fica sempre visível, inclusive em tela cheia.
@@ -88,7 +89,7 @@ npm run test:close     # fechamento
 npm run test:packaged  # app empacotado
 ```
 
-Cobrem todas as quantidades de 1 a 16, composições e destaques, adição/remoção de telas, edição, abertura de várias páginas e páginas com `X-Frame-Options`. O `test:toolbar` valida o encaixe dos players esportivos (16:9, 4:3, 3:4, 16:4) em vários tipos de player, além de tela cheia, redimensionamento, barra de controles e as 124 combinações de composição/posição. As capturas ficam em `artifacts/toolbar-checks/`.
+Cobrem todas as quantidades de 1 a 18, composições e destaques, adição/remoção de telas, edição, abertura de várias páginas e páginas com `X-Frame-Options`. O `test:toolbar` valida o encaixe dos players esportivos (16:9, 4:3, 3:4, 16:4) em vários tipos de player, além de tela cheia, redimensionamento, barra de controles e as 142 combinações de composição/posição. As capturas ficam em `artifacts/toolbar-checks/`.
 
 ### Limitações conhecidas
 

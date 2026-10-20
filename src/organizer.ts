@@ -68,7 +68,7 @@ export function organizerDraftKey(
 
   if (draft.count === 0) position = undefined
 
-  if (panelCount === 10 && draft.count === 2) {
+  if ((panelCount === 10 || panelCount === 18) && draft.count === 2) {
     if (position === 'top-right') position = 'top-left'
     if (position === 'bottom-right') position = 'bottom-left'
   }
@@ -103,7 +103,7 @@ function choiceLabel(
     return SMALL_CORNER_LABELS[positions[0]]
   }
 
-  if (panelCount === 10 && highlightCount === 2 && positions.length > 1) {
+  if ((panelCount === 10 || panelCount === 18) && highlightCount === 2 && positions.length > 1) {
     return positions[0].startsWith('top-')
       ? 'Principais em cima'
       : 'Principais embaixo'

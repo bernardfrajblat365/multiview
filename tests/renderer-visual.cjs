@@ -108,6 +108,9 @@ async function run() {
     } else if (scenario === 'grid-16') {
       await choose(16)
       await capture('grid-16-empty')
+    } else if (scenario === 'grid-18') {
+      await choose(18)
+      await capture('grid-18-empty')
     } else if (scenario === 'grid-13-hero') {
       await choose(13)
       await window.webContents.executeJavaScript(`(() => {

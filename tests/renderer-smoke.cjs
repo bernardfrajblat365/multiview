@@ -69,12 +69,22 @@ async function run() {
               if (width > 0.5 && height > 0.5) noOverlap = false
             }
           }
+          const barsFit = panels.every((panel) => {
+            const bar = panel.querySelector('.panel__bar')
+            if (!bar) return false
+            const panelRect = panel.getBoundingClientRect()
+            const barRect = bar.getBoundingClientRect()
+            return barRect.left >= panelRect.left - 1
+              && barRect.right <= panelRect.right + 1
+              && bar.scrollWidth <= bar.clientWidth + 1
+          })
           return {
             count: panels.length,
             mode: stage.dataset.layoutMode,
             toolbarHasNoLayoutDescription: !document.querySelector('.toolbar__status'),
             allHaveArea: panels.every((panel) => panel.getBoundingClientRect().width > 0 && panel.getBoundingClientRect().height > 0),
             forms: panels.every((panel) => Boolean(panel.querySelector('input[name="url"]'))),
+            barsFit,
             noOverlap,
             rects,
           }
@@ -127,16 +137,17 @@ async function run() {
         document.querySelector('.panel[data-slot="0"] [data-highlight]').click()
         document.querySelector('#btn-organize').click()
         muteButtons()[0].click()
-        while (document.querySelectorAll('.panel').length < 16) {
+        while (document.querySelectorAll('.panel').length < 18) {
           document.querySelector('#btn-add-panel').click()
           await waitFrame()
         }
-        result.interactions.addsUntilSixteen = document.querySelectorAll('.panel').length === 16
+        result.interactions.addsUntilEighteen = document.querySelectorAll('.panel').length === 18
         result.interactions.disablesAtLimit = document.querySelector('#btn-add-panel').disabled
-        const toolbarRemovedId = document.querySelector('.panel[data-slot="15"]').dataset.panelId
+        result.interactions.limitLabel = document.querySelector('#btn-add-panel').getAttribute('title')
+        const toolbarRemovedId = document.querySelector('.panel[data-slot="17"]').dataset.panelId
         document.querySelector('#btn-remove-panel').click()
         await waitFrame()
-        result.interactions.removesLastPanelFromToolbar = document.querySelectorAll('.panel').length === 15 &&
+        result.interactions.removesLastPanelFromToolbar = document.querySelectorAll('.panel').length === 17 &&
           !document.querySelector('[data-panel-id="' + toolbarRemovedId + '"]') &&
           document.querySelector('#btn-remove-panel').disabled === false
         document.querySelector('#btn-add-panel').click()
@@ -147,21 +158,21 @@ async function run() {
         await waitFrame()
         const afterRemove = readLayout()
         const idsAfterRemove = [...document.querySelectorAll('.panel')].map((panel) => panel.dataset.panelId)
-        result.interactions.removesChosenPanel = afterRemove.count === 15 && !idsAfterRemove.includes(removedId) &&
+        result.interactions.removesChosenPanel = afterRemove.count === 17 && !idsAfterRemove.includes(removedId) &&
           idsAfterRemove.every((id) => idsBeforeRemove.includes(id))
         result.interactions.removeRestoresAutomaticLayout = afterRemove.mode === 'auto' && afterRemove.noOverlap &&
           document.querySelectorAll('.panel.is-highlighted').length === 0
         document.querySelector('#btn-more').click()
         document.querySelector('#btn-undo').click()
         await waitFrame()
-        result.interactions.undoRestoresRemovedPanel = document.querySelectorAll('.panel').length === 16 &&
+        result.interactions.undoRestoresRemovedPanel = document.querySelectorAll('.panel').length === 18 &&
           Boolean(document.querySelector('[data-panel-id="' + removedId + '"]'))
         document.querySelector('#btn-layout').click()
         await waitFrame()
         document.querySelector('.confirm [data-ok]').click()
         await waitFrame()
 
-        for (let count = 1; count <= 16; count += 1) {
+        for (let count = 1; count <= 18; count += 1) {
           document.querySelector('[data-count="' + count + '"]').click()
           await waitFrame()
           const layout = readLayout()
@@ -382,6 +393,19 @@ async function run() {
         document.querySelector('#btn-more').click()
         await waitFrame()
         result.interactions.moreMenuOpens = !document.querySelector('#toolbar-more-menu').hidden
+        const matchLabelsButton = document.querySelector('#btn-match-labels')
+        result.interactions.matchLabelsToggleExists = Boolean(matchLabelsButton)
+          && matchLabelsButton.getAttribute('aria-pressed') === 'true'
+        matchLabelsButton?.click()
+        await waitFrame()
+        result.interactions.matchLabelsToggleHides = document.querySelector('#btn-match-labels')?.getAttribute('aria-pressed') === 'false'
+        document.querySelector('#btn-more').click()
+        await waitFrame()
+        document.querySelector('#btn-match-labels')?.click()
+        await waitFrame()
+        result.interactions.matchLabelsToggleRestores = document.querySelector('#btn-match-labels')?.getAttribute('aria-pressed') === 'true'
+        document.querySelector('#btn-more').click()
+        await waitFrame()
         document.querySelector('#btn-equal').click()
         await waitFrame()
         result.interactions.equalMode = document.querySelector('.layout-stage').dataset.layoutMode === 'equal'
@@ -418,12 +442,13 @@ async function run() {
     if (result.error) throw new Error(result.error)
 
     assert.equal(result.version, 'v' + require('../package.json').version)
-    assert.equal(result.layouts.length, 16)
+    assert.equal(result.layouts.length, 18)
     for (const layout of result.layouts) {
       assert.equal(layout.count, layout.expectedCount)
       assert.equal(layout.allHaveArea, true, JSON.stringify(layout))
       assert.equal(layout.toolbarHasNoLayoutDescription, true, JSON.stringify(layout))
       assert.equal(layout.forms, true, JSON.stringify(layout))
+      assert.equal(layout.barsFit, true, JSON.stringify(layout))
       assert.equal(layout.noOverlap, true, JSON.stringify(layout))
       assert.match(layout.className, new RegExp('grid--' + layout.count + '(?: |$)'))
     }
@@ -440,8 +465,9 @@ async function run() {
     for (const name of ['individualMute', 'globalMute', 'newPanelInheritsMute', 'individualUnmute', 'globalUnmute', 'muteSurvivesRender']) {
       assert.equal(result.interactions[name], true, name)
     }
-    assert.equal(result.interactions.addsUntilSixteen, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.addsUntilEighteen, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.disablesAtLimit, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.limitLabel, 'Limite de 18 telas atingido', JSON.stringify(result.interactions))
     assert.equal(result.interactions.removesLastPanelFromToolbar, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.removesChosenPanel, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.removeRestoresAutomaticLayout, true, JSON.stringify(result.interactions))
@@ -470,6 +496,9 @@ async function run() {
     assert.equal(result.interactions.editOpens, true)
     assert.equal(result.interactions.clearRestoresEmpty, true)
     assert.equal(result.interactions.moreMenuOpens, true)
+    assert.equal(result.interactions.matchLabelsToggleExists, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.matchLabelsToggleHides, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.matchLabelsToggleRestores, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.equalMode, true)
     assert.equal(result.interactions.thirteenHasHeroQuadrant, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.removeChoosesOptimalPreviousCount, true, JSON.stringify(result.interactions))

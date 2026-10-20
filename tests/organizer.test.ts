@@ -3,6 +3,7 @@ import assert from 'node:assert/strict'
 import {
   calculateLayout,
   getCompositions,
+  MAX_PANELS,
   resolveComposition,
   validateLayout,
   type HighlightPosition,
@@ -19,11 +20,11 @@ function ids(count: number) {
   return Array.from({ length: count }, (_, index) => `panel-${index + 1}`)
 }
 
-test('organizer cobre todas as 124 combinações do catálogo', () => {
+test('organizer cobre todas as 142 combinações do catálogo', () => {
   const aspects = [16 / 9, 9 / 16, 21 / 9]
   let combinations = 0
 
-  for (let count = 1; count <= 16; count++) {
+  for (let count = 1; count <= MAX_PANELS; count++) {
     const order = ids(count)
 
     for (const composition of getCompositions(count)) {
@@ -72,24 +73,26 @@ test('organizer cobre todas as 124 combinações do catálogo', () => {
     }
   }
 
-  assert.equal(combinations, 124)
+  assert.equal(combinations, 142)
 })
 
-test('organizer agrupa os pares equivalentes de 10 telas', () => {
-  const order = ids(10)
-  const choices = buildOrganizerChoices(order, {
-    count: 2,
-    ids: ['panel-1', 'panel-10'],
-    position: 'top-left',
-    previousVariant: undefined,
-  }, 16 / 9)
+test('organizer agrupa os pares equivalentes de 10 e 18 telas', () => {
+  for (const count of [10, 18]) {
+    const order = ids(count)
+    const choices = buildOrganizerChoices(order, {
+      count: 2,
+      ids: ['panel-1', `panel-${count}`],
+      position: 'top-left',
+      previousVariant: undefined,
+    }, 16 / 9)
 
-  assert.equal(choices.length, 2)
-  assert.deepEqual(new Set(choices.flatMap((choice) => choice.positions)), new Set(['top-left', 'top-right', 'bottom-left', 'bottom-right']))
-  assert.equal(choices.filter((choice) => choice.label === 'Principais em cima').length, 1)
-  assert.equal(choices.filter((choice) => choice.label === 'Principais embaixo').length, 1)
-  assert.deepEqual(choices.find((choice) => choice.label === 'Principais em cima')?.positions, ['top-left', 'top-right'])
-  assert.deepEqual(choices.find((choice) => choice.label === 'Principais embaixo')?.positions, ['bottom-left', 'bottom-right'])
+    assert.equal(choices.length, 2, `${count} choices`)
+    assert.deepEqual(new Set(choices.flatMap((choice) => choice.positions)), new Set(['top-left', 'top-right', 'bottom-left', 'bottom-right']))
+    assert.equal(choices.filter((choice) => choice.label === 'Principais em cima').length, 1)
+    assert.equal(choices.filter((choice) => choice.label === 'Principais embaixo').length, 1)
+    assert.deepEqual(choices.find((choice) => choice.label === 'Principais em cima')?.positions, ['top-left', 'top-right'])
+    assert.deepEqual(choices.find((choice) => choice.label === 'Principais embaixo')?.positions, ['bottom-left', 'bottom-right'])
+  }
 })
 
 test('organizer descreve os quatro arranjos em L', () => {
@@ -162,6 +165,9 @@ test('organizer reconhece posições equivalentes no rascunho', () => {
   assert.equal(organizerDraftKey(topLeft, 10), organizerDraftKey(topRight, 10))
   assert.equal(organizerDraftKey(bottomLeft, 10), organizerDraftKey(bottomRight, 10))
   assert.notEqual(organizerDraftKey(topLeft, 10), organizerDraftKey(bottomLeft, 10))
+  assert.equal(organizerDraftKey(topLeft, 18), organizerDraftKey(topRight, 18))
+  assert.equal(organizerDraftKey(bottomLeft, 18), organizerDraftKey(bottomRight, 18))
+  assert.notEqual(organizerDraftKey(topLeft, 18), organizerDraftKey(bottomLeft, 18))
 })
 
 test('organizer não reúne jogos em posições diferentes', () => {

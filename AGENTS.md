@@ -82,7 +82,7 @@ Persistência: **somente memória** para painéis/URLs/layout (undo ≤ 24). Ún
 | Framework UI | — | Vanilla TypeScript/DOM (sem React/Vue) |
 | ESLint / Prettier | — | **Não configurados**; qualidade via `tsc` + testes |
 
-Fonte de verdade das versões de pacote: `package.json` / `package-lock.json`. Versão do produto atual: **1.0.15**.
+Fonte de verdade das versões de pacote: `package.json` / `package-lock.json`. Versão do produto atual: **1.0.16**.
 
 ### Variáveis de ambiente relevantes
 
@@ -283,6 +283,7 @@ Tabela viva — **todo agente deve acrescentar uma linha ao concluir (ou bloquea
 
 | Data | Tarefa / Escopo | Status (Concluído / Parcial / Bloqueado) | Arquivos Principais Afetados | Detalhes & Decisões Tomadas | Próximos Passos |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| 2026-10-20 | Bump Quadra para 1.0.16 + tag de release | Concluído | `package.json`, `package-lock.json`, `AGENTS.md` | Versão alinhada a tag `v1.0.16` para disparar `windows-release.yml` (draft no GitHub). | Validar draft release, hashes e smoke Disney+ se relevante; publicar `latest` só após validação manual. |
 | 2026-10-20 | Rótulo: sem emoji de som + dismiss por painel | Concluído | `src/match-label.ts`, `src/main.ts`, `src/style.css`, `tests/match-label.test.ts`, `tests/app-integration.cjs`, README | Strip 🔊/🔈/🔉/🔇/📢/📣; × no rótulo (`dismissedMatchLabels`); restaura ao Abrir/reload da URL (não só troca de URL). `syncLayout()` antes de abrir BLL/WeddBets evita race com `visiblePanelIds`. | — |
 | 2026-10-20 | Nomes dos jogos nos painéis (rótulo A x B) | Concluído | `src/match-label.ts`, `electron/main.ts`, `electron/preload.ts`, `src/main.ts`, `src/style.css`, `src/electron.d.ts`, fixtures/smokes, README | Título do player via `page-title-updated` (BLL já põe `evento.nome`); posicionamento `bar-*` nas barras pretas ou `overlay-bottom` se o vídeo preenche; toggle no menu ⋯; sem reload de views. | Validar manualmente com BLL logado em `npm run dev`. |
 | 2026-10-20 | Barra URL/botões dos painéis sempre cabendo | Concluído | `src/style.css`, `tests/renderer-smoke.cjs` | Escala fluida via `cqw` + `flex-wrap`; em painéis ≤420px o input ocupa a linha e os botões quebram; smoke valida `barsFit` em 1–18. | — |

@@ -25,13 +25,14 @@ npm run dist:release
    - **BLL:** clique no botão **BLL** do painel, faça login uma vez e escolha o jogo. Os próximos jogos vão para a próxima tela vazia.
 3. **+ Adicionar tela** cria um painel novo; a lixeira remove um painel. O layout se reorganiza sozinho.
 4. **Organizar** permite escolher a composição, marcar telas principais (destaques) e a posição delas. **Aplicar** confirma; **Cancelar** ou Esc descarta.
-5. Outros controles: **Sem destaques**, **Organizar automaticamente**, **Mostrar/Ocultar nomes dos jogos**, **Desfazer**, seletor **Telas**, **Voltar**, **Tela Cheia** e editar URL do painel.
+5. Outros controles: **Sem destaques**, **Organizar automaticamente**, **Mostrar/Ocultar nomes dos jogos**, **Alertas de lances** / **Som dos alertas**, **Desfazer**, seletor **Telas**, **Voltar**, **Tela Cheia** e editar URL do painel.
 
 ### Como o layout funciona
 
 - O tamanho dos painéis é calculado automaticamente para maximizar a área visível de vídeo (referência 16:9), sem cortar a imagem — por isso painéis da mesma composição podem ter tamanhos diferentes.
 - Players esportivos são ajustados ao painel mantendo a proporção, com barras pretas quando necessário.
 - Quando o título da página traz um confronto (`Time A x Time B` — típico do BLL e de muitos links YouTube), o Quadra mostra esse nome no painel: na faixa preta se houver sobra, ou numa faixa discreta na base se o vídeo ocupar tudo. Marcadores de áudio no título (ex.: 🔊) são removidos. O **×** no rótulo oculta só aquele painel; **Abrir** de novo restaura. O menu **⋯** oculta/mostra todos. Zapping e páginas sem confronto no título ficam sem rótulo.
+- Em jogos do BLL, o Quadra pode alertar gol, pênalti, cartão vermelho e possíveis revisões (VAR inferido): o painel pisca, mostra um selo por alguns segundos e toca um bipe. O menu **⋯** liga/desliga alertas e o som. O feed de lances é um serviço externo não oficial ligado ao player BLL — pode adiantar o vídeo e, se mudar de formato, os alertas param sem afetar a imagem.
 - Destacar um jogo (estrela) coloca ele no espaço grande; um segundo destaque troca para uma composição que comporte dois.
 - Não há divisórias manuais. Ao redimensionar a janela, tudo é recalculado preservando destaques e posições.
 - A barra de controles fica sempre visível, inclusive em tela cheia.

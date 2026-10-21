@@ -65,6 +65,24 @@ const quadra = {
     ipcRenderer.on('quadra:panel-video-rect', listener)
     return () => ipcRenderer.removeListener('quadra:panel-video-rect', listener)
   },
+  onPanelAlert: (callback: (payload: {
+    panelId: string
+    kind: 'goal' | 'penalty' | 'red' | 'var'
+    team: 'home' | 'away' | null
+    label: string
+  }) => void) => {
+    const listener = (
+      _event: Electron.IpcRendererEvent,
+      payload: {
+        panelId: string
+        kind: 'goal' | 'penalty' | 'red' | 'var'
+        team: 'home' | 'away' | null
+        label: string
+      },
+    ) => callback(payload)
+    ipcRenderer.on('quadra:panel-alert', listener)
+    return () => ipcRenderer.removeListener('quadra:panel-alert', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('quadra', quadra)

@@ -13,6 +13,7 @@ dist-ssr
 out
 artifacts/toolbar-checks
 artifacts/layout-study
+artifacts/bll-feed
 release
 release-*
 *.local

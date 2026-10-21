@@ -20,6 +20,13 @@ import {
   type NormRect,
 } from './match-label'
 import {
+  alertBadgeLabel,
+  alertTeamLabel,
+  playAlertTone,
+  type PanelAlertKind,
+  type PanelAlertPayload,
+} from './panel-alert'
+import {
   buildOrganizerChoices,
   organizerDraftKey,
   organizerDraftValid,
@@ -72,22 +79,73 @@ let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
 let showMatchLabels = true
+let showPanelAlerts = true
+let playPanelAlertSound = true
+const PANEL_ALERT_MS = 10_000
 const forceReloadIds = new Set<PanelId>()
 const panelTitles = new Map<PanelId, string>()
 const panelVideoRects = new Map<PanelId, NormRect | null>()
 /** Per-panel dismiss; restored when the user opens/reloads the panel URL. */
 const dismissedMatchLabels = new Set<PanelId>()
+const panelAlertTimers = new Map<PanelId, ReturnType<typeof setTimeout>>()
+
+function clearPanelAlert(id: PanelId) {
+  const timer = panelAlertTimers.get(id)
+  if (timer) clearTimeout(timer)
+  panelAlertTimers.delete(id)
+  const panelElement = app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(id)}"]`)
+  if (!panelElement) return
+  panelElement.classList.remove('panel--alert')
+  panelElement.removeAttribute('data-alert-kind')
+  panelElement.querySelector('.panel__alert')?.remove()
+}
 
 function clearPanelMatchState(id: PanelId) {
   panelTitles.delete(id)
   panelVideoRects.delete(id)
   dismissedMatchLabels.delete(id)
+  clearPanelAlert(id)
 }
 
 function clearAllPanelMatchState() {
   panelTitles.clear()
   panelVideoRects.clear()
   dismissedMatchLabels.clear()
+  for (const id of [...panelAlertTimers.keys()]) clearPanelAlert(id)
+}
+
+function showPanelAlert(payload: PanelAlertPayload) {
+  if (!showPanelAlerts) return
+  if (!panelById(payload.panelId)) return
+  const panelElement = app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(payload.panelId)}"]`)
+  if (!panelElement || !panelElement.classList.contains('panel--loaded')) return
+
+  clearPanelAlert(payload.panelId)
+  const kind: PanelAlertKind = payload.kind
+  panelElement.classList.add('panel--alert')
+  panelElement.dataset.alertKind = kind
+
+  const badge = document.createElement('div')
+  badge.className = 'panel__alert'
+  badge.dataset.kind = kind
+  const title = document.createElement('span')
+  title.className = 'panel__alert-title'
+  title.textContent = alertBadgeLabel(kind, payload.label)
+  badge.appendChild(title)
+  const team = alertTeamLabel(payload.team)
+  if (team) {
+    const teamEl = document.createElement('span')
+    teamEl.className = 'panel__alert-team'
+    teamEl.textContent = team
+    badge.appendChild(teamEl)
+  }
+  panelElement.appendChild(badge)
+
+  if (playPanelAlertSound) playAlertTone(kind)
+  panelAlertTimers.set(
+    payload.panelId,
+    setTimeout(() => clearPanelAlert(payload.panelId), PANEL_ALERT_MS),
+  )
 }
 
 function ensureMatchLabelDismiss(labelElement: HTMLElement, panelId: PanelId) {
@@ -680,6 +738,27 @@ function clearAllPanels() {
   renderGrid()
 }
 
+function setShowPanelAlerts(next: boolean) {
+  showPanelAlerts = next
+  const button = app.querySelector<HTMLButtonElement>('#btn-panel-alerts')
+  if (button) {
+    button.setAttribute('aria-pressed', String(showPanelAlerts))
+    button.textContent = showPanelAlerts ? 'Desativar alertas de lances' : 'Ativar alertas de lances'
+  }
+  if (!showPanelAlerts) {
+    for (const id of [...panelAlertTimers.keys()]) clearPanelAlert(id)
+  }
+}
+
+function setPlayPanelAlertSound(next: boolean) {
+  playPanelAlertSound = next
+  const button = app.querySelector<HTMLButtonElement>('#btn-panel-alert-sound')
+  if (button) {
+    button.setAttribute('aria-pressed', String(playPanelAlertSound))
+    button.textContent = playPanelAlertSound ? 'Silenciar som dos alertas' : 'Ativar som dos alertas'
+  }
+}
+
 function setShowMatchLabels(next: boolean) {
   showMatchLabels = next
   const button = app.querySelector<HTMLButtonElement>('#btn-match-labels')
@@ -1142,6 +1221,14 @@ function bindMoreMenu() {
     setShowMatchLabels(!showMatchLabels)
     setOpen(false)
   }, { signal })
+  app.querySelector('#btn-panel-alerts')?.addEventListener('click', () => {
+    setShowPanelAlerts(!showPanelAlerts)
+    setOpen(false)
+  }, { signal })
+  app.querySelector('#btn-panel-alert-sound')?.addEventListener('click', () => {
+    setPlayPanelAlertSound(!playPanelAlertSound)
+    setOpen(false)
+  }, { signal })
   document.addEventListener('click', (event) => { if (!menu.contains(event.target as Node)) setOpen(false) }, { signal })
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false) }, { signal })
 }
@@ -1370,6 +1457,8 @@ function renderGrid() {
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
           <button type="button" class="btn btn--ghost" id="btn-equal" role="menuitem">Sem destaques</button>
           <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>
+          <button type="button" class="btn btn--ghost" id="btn-panel-alerts" role="menuitem" aria-pressed="${showPanelAlerts}">${showPanelAlerts ? 'Desativar alertas de lances' : 'Ativar alertas de lances'}</button>
+          <button type="button" class="btn btn--ghost" id="btn-panel-alert-sound" role="menuitem" aria-pressed="${playPanelAlertSound}">${playPanelAlertSound ? 'Silenciar som dos alertas' : 'Ativar som dos alertas'}</button>
           <button type="button" class="btn btn--ghost" id="btn-undo" role="menuitem"${canUndo ? '' : ' disabled'}>Desfazer</button>
           <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">Limpar todos</button>
         </div>
@@ -1445,6 +1534,9 @@ window.quadra?.onPanelVideoRect(({ panelId, rect }) => {
   if (!panelById(panelId)) return
   panelVideoRects.set(panelId, rect)
   updatePanelLabels()
+})
+window.quadra?.onPanelAlert((payload) => {
+  showPanelAlert(payload)
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return

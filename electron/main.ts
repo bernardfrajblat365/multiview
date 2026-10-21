@@ -3,6 +3,7 @@ import electronUpdater from 'electron-updater'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Bounds, LayoutPayload, PanelPayload } from '../src/layout'
+import { createFeedManager, type FeedManager } from './live-feed'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createAutoUpdateController } from './update'
 
@@ -16,11 +17,41 @@ type SlotViewState = {
   cursorRevision: number
   videoRect?: NormVideoRect | null
   videoPollTimer?: ReturnType<typeof setInterval>
+  feedEventId?: string | null
+  feedProbeTimer?: ReturnType<typeof setTimeout>
+  feedProbeAttempts: number
 }
 
 const VIDEO_RECT_POLL_MS = 1500
 const VIDEO_RECT_WORLD = 1002
 const MAX_PANEL_TITLE_LENGTH = 160
+const FEED_PROBE_MAX_ATTEMPTS = 5
+const FEED_PROBE_INTERVAL_MS = 3000
+const WILLIAM_HILL_ID_RE = /^\d{5,12}$/
+const readWilliamHillIdScript = `(() => {
+  const root = document.querySelector('#app')
+  const vm = root && root.__vue__
+  if (!vm) return null
+  const seen = new Set()
+  const queue = [vm]
+  while (queue.length) {
+    const node = queue.shift()
+    if (!node || typeof node !== 'object' || seen.has(node)) continue
+    seen.add(node)
+    const data = node.$data
+    if (data && typeof data === 'object') {
+      const evento = data.item && data.item.evento
+      const id = evento && evento.williamHillId
+      if (id != null && /^\\d{5,12}$/.test(String(id))) return String(id)
+      if (data.williamHillId != null && /^\\d{5,12}$/.test(String(data.williamHillId))) return String(data.williamHillId)
+    }
+    const children = node.$children
+    if (Array.isArray(children)) {
+      for (const child of children) queue.push(child)
+    }
+  }
+  return null
+})()`
 const measureVideoRectScript = `(() => {
   const videos = Array.from(document.querySelectorAll('video'))
     .filter((video) => {
@@ -193,6 +224,7 @@ let cursorHidden = false
 let visiblePanelIds = new Set<string>()
 let fullscreenPrioritySyncPending = false
 let autoUpdateController: ReturnType<typeof createAutoUpdateController> | null = null
+let feedManager: FeedManager | null = null
 
 const sportsCatalogs: Record<SportsCatalogId, SportsCatalog> = {
   weddbets: {
@@ -410,6 +442,71 @@ function sendPanelTitle(panelId: string, title: string) {
   overlayWindow?.webContents.send('quadra:panel-title', { panelId, title: sanitizePanelTitle(title) })
 }
 
+function clearFeedProbe(state: SlotViewState) {
+  if (!state.feedProbeTimer) return
+  clearTimeout(state.feedProbeTimer)
+  state.feedProbeTimer = undefined
+}
+
+function detachPanelFeed(panelId: string, state?: SlotViewState) {
+  const slot = state ?? slotViews.get(panelId)
+  if (slot) {
+    clearFeedProbe(slot)
+    slot.feedEventId = null
+    slot.feedProbeAttempts = 0
+  }
+  feedManager?.detach(panelId)
+}
+
+function applyPanelFeedEventId(panelId: string, eventId: string | null) {
+  const state = slotViews.get(panelId)
+  if (!state) return
+  if (!eventId || !WILLIAM_HILL_ID_RE.test(eventId)) {
+    if (state.feedEventId) detachPanelFeed(panelId, state)
+    return
+  }
+  if (state.feedEventId === eventId) return
+  state.feedEventId = eventId
+  clearFeedProbe(state)
+  feedManager?.attach(panelId, eventId)
+}
+
+function scheduleFeedProbe(panelId: string, reset = false) {
+  const state = slotViews.get(panelId)
+  if (!state || state.view.webContents.isDestroyed()) return
+  if (!matchSportsPlayerUrl(state.url)) {
+    detachPanelFeed(panelId, state)
+    return
+  }
+  if (reset) {
+    clearFeedProbe(state)
+    state.feedProbeAttempts = 0
+  }
+  if (state.feedProbeTimer) return
+
+  const run = async () => {
+    state.feedProbeTimer = undefined
+    if (state.view.webContents.isDestroyed()) return
+    if (!matchSportsPlayerUrl(state.view.webContents.getURL() || state.url)) {
+      detachPanelFeed(panelId, state)
+      return
+    }
+    const raw = await state.view.webContents.executeJavaScript(readWilliamHillIdScript).catch(() => null)
+    const eventId = typeof raw === 'string' && WILLIAM_HILL_ID_RE.test(raw) ? raw : null
+    if (eventId) {
+      applyPanelFeedEventId(panelId, eventId)
+      return
+    }
+    state.feedProbeAttempts += 1
+    if (state.feedProbeAttempts >= FEED_PROBE_MAX_ATTEMPTS) return
+    state.feedProbeTimer = setTimeout(() => {
+      void run()
+    }, FEED_PROBE_INTERVAL_MS)
+  }
+
+  void run()
+}
+
 function isSameNormRect(a: NormVideoRect | null | undefined, b: NormVideoRect | null) {
   if (!a && !b) return true
   if (!a || !b) return false
@@ -470,12 +567,17 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
         void measureSlotVideoRect(state, slotId)
       }
     }
-    if (!matchSportsPlayerUrl(contents.getURL())) return
+    if (!matchSportsPlayerUrl(contents.getURL())) {
+      if (slotId) detachPanelFeed(slotId)
+      return
+    }
     void contents.insertCSS(sportsPlayerCss, { cssOrigin: 'user' }).catch(() => {})
+    if (slotId) scheduleFeedProbe(slotId, true)
   })
   if (slotId) {
     contents.on('page-title-updated', (_event, title) => {
       sendPanelTitle(slotId, title)
+      if (matchSportsPlayerUrl(contents.getURL())) scheduleFeedProbe(slotId)
     })
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return
@@ -484,6 +586,11 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
       if (!state) return
       state.videoRect = undefined
       overlayWindow?.webContents.send('quadra:panel-video-rect', { panelId: slotId, rect: null })
+      if (!matchSportsPlayerUrl(details.url)) detachPanelFeed(slotId, state)
+      else {
+        clearFeedProbe(state)
+        state.feedProbeAttempts = 0
+      }
     })
   }
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
@@ -522,6 +629,7 @@ function destroySlotView(id: string) {
   const state = slotViews.get(id)
   if (!state) return
   stopVideoRectPolling(state)
+  detachPanelFeed(id, state)
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
   if (!state.view.webContents.isDestroyed()) state.view.webContents.close()
   slotViews.delete(id)
@@ -561,6 +669,8 @@ function destroyAllSlotViews() {
 
 function closeOwnedWindows() {
   destroyAllSlotViews()
+  feedManager?.dispose()
+  feedManager = null
   for (const catalog of Object.values(sportsCatalogs)) {
     if (catalog.window && !catalog.window.isDestroyed()) catalog.window.close()
   }
@@ -592,7 +702,7 @@ function createSlotView(id: string, url: string, muted: boolean) {
   configureRemoteContents(view.webContents, id)
   view.webContents.setAudioMuted(muted)
   mainWindow?.contentView.addChildView(view)
-  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined }
+  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, feedProbeAttempts: 0 }
   slotViews.set(id, state)
   startVideoRectPolling(state, id)
   void syncSlotCursor(state)
@@ -843,6 +953,16 @@ app.whenReady().then(async () => {
   )
   quadraSession = session.fromPartition('persist:quadra')
   quadraSession.setUserAgent(electronUserAgent)
+  feedManager = createFeedManager({
+    onAlert: (alert) => {
+      overlayWindow?.webContents.send('quadra:panel-alert', {
+        panelId: alert.panelId,
+        kind: alert.kind,
+        team: alert.team,
+        label: alert.label,
+      })
+    },
+  })
   if (process.platform === 'win32') app.setAppUserModelId('com.quadra.multiview')
   installNativeFullscreenHandlers()
   installIpcHandlers()

@@ -16,6 +16,9 @@ function createSportsPlayerFixture(requestUrl) {
   const empty = url.searchParams.get('fixture') === 'empty'
   const titleParam = url.searchParams.get('title')
   const canal = url.searchParams.get('canal')
+  const williamHillId = /^\d{5,12}$/.test(url.searchParams.get('whId') ?? '')
+    ? url.searchParams.get('whId')
+    : '41574699'
   const pageTitle = titleParam
     ? (canal ? `(${canal}) ${titleParam}` : titleParam)
     : 'Sports player video fixture'
@@ -77,6 +80,17 @@ function createSportsPlayerFixture(requestUrl) {
       const deferredTitle = ${JSON.stringify(pageTitle)};
       if (deferredTitle !== 'Sports player video fixture') {
         setTimeout(() => { document.title = deferredTitle }, 200);
+      }
+      const appRoot = document.querySelector('#app');
+      if (appRoot) {
+        appRoot.__vue__ = {
+          $data: {},
+          $children: [{
+            $options: { name: 'ViewEvento' },
+            $data: { item: { evento: { williamHillId: ${JSON.stringify(williamHillId)} } } },
+            $children: [],
+          }],
+        };
       }
     </script>`
 }

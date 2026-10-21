@@ -21,6 +21,12 @@ type QuadraBridge = {
   onBllsportError: (callback: (payload: { message: string; panelId?: string; url?: string }) => void) => () => void
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => () => void
   onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => () => void
+  onPanelAlert: (callback: (payload: {
+    panelId: string
+    kind: 'goal' | 'penalty' | 'red' | 'var'
+    team: 'home' | 'away' | null
+    label: string
+  }) => void) => () => void
 }
 
 type UpdateCheckResult = 'updated' | 'available' | 'ready' | 'busy' | 'disabled' | 'error'

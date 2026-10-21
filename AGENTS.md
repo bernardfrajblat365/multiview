@@ -54,6 +54,7 @@ Contrato central: o renderer envia `LayoutPayload` com bounds reais do DOM; o ma
 | Editor de organização | `src/organizer.ts` | Rascunho, validação, miniaturas, posições equivalentes |
 | Normalização de URL | `src/routing.ts` | HTTPS, iframe src, conversão YouTube → `watch` |
 | Catálogo esportivo | main + UI | BLL ativo na UI; canais WeddBets mantidos no código **sem botão** |
+| Alertas de lances BLL | `electron/feed-protocol.ts`, `electron/live-feed.ts`, overlay | Pareia painel ao scoreboard via `williamHillId`; alertas gol/pênalti/vermelho/VAR |
 | Testes | `tests/` | Unitários (Node test runner), smokes Electron, ECS/EVS/DRM, instalador |
 | CI / release | `.github/workflows/` | PR checks Windows + draft release em tag `v*` |
 
@@ -90,6 +91,7 @@ Fonte de verdade das versões de pacote: `package.json` / `package-lock.json`. V
 | --- | --- |
 | `QUADRA_BLLSPORT_URL` | Override da home do catálogo BLL (testes/fixtures) |
 | `QUADRA_WEDDBETS_URL` | Override WeddBets (legado no código) |
+| `QUADRA_FEED_SCOREBOARD_URL` | Override do scoreboard de alertas (use `{eventId}` na URL) |
 | `QUADRA_TEST_USER_DATA` | Isola perfil Chromium nos smokes |
 | `QUADRA_PACKAGED_EXE` | Caminho do `.exe` para `test:packaged` |
 | `ELECTRON_RENDERER_URL` | Injetada pelo electron-vite em dev |
@@ -283,6 +285,8 @@ Tabela viva — **todo agente deve acrescentar uma linha ao concluir (ou bloquea
 
 | Data | Tarefa / Escopo | Status (Concluído / Parcial / Bloqueado) | Arquivos Principais Afetados | Detalhes & Decisões Tomadas | Próximos Passos |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| 2026-10-21 | Alertas de lances BLL (gol/pênalti/vermelho/VAR) | Concluído | `electron/feed-protocol.ts`, `electron/live-feed.ts`, `electron/main.ts`, `electron/preload.ts`, `src/panel-alert.ts`, `src/main.ts`, `src/style.css`, `src/electron.d.ts`, testes, README/ONBOARDING | Painel continua em `view=clean`; `williamHillId` lido da árvore Vue; FeedManager abre scoreboard oculto (partição `quadra-feed`), decodifica Diffusion/CBOR, baseline sem alertar histórico; overlay pisca + selo 10s + bipe; toggles no menu ⋯. VAR por tipos com nome VAR/cancel e queda de placar. | Validar manualmente adiantamento vs vídeo e uso com 9 painéis; evoluir atraso/spoiler se necessário. |
+| 2026-10-20 | Investigação: feed de lances BLL para alertas por painel (branch `panel-alerts`) | Concluído | `tests/bll-feed-diagnostic.cjs`, `.gitignore` | Página `/view/{id}` completa = vídeo + iframe Sofascore (gráfico) + iframe `score.kwddw.com/scoreboards/app/football/index.html?eventId={williamHillId}` (feed, público, sem login). Feed chega por WebSocket Diffusion `wss://score.kwddw.com/diffusion`, payload CBOR, tópico `scoreboards/v1/OB_EV{id}/incidents`; incidentes com `id` único, `type` (`GOAL`, `YELLOW_CARD`, `RED_CARD`, `POSSIBLE_RED_CARD`, `PENALTY`, `PENALTY_MISSED`, `SHOT_WOODWORK`, `SUBSTITUTION`…), `teamType`, `time`, `timestamp`. Sem tipo VAR explícito. `view=clean` não carrega iframes, mas o componente Vue `ViewEvento` expõe `item.evento.williamHillId` e `sofaScoreId`. `api/evento/view` exige token da página (não usado). WebSocket `tape*.kwddw.com` é sinalização WebRTC do vídeo, não o feed. Diagnóstico copia `persist:quadra` para temp e apaga ao fim. | Implementado em 2026-10-21 via scoreboard oculto + CBOR/CDP. |
 | 2026-10-20 | Bump Quadra para 1.0.16 + tag de release | Concluído | `package.json`, `package-lock.json`, `AGENTS.md` | Versão alinhada a tag `v1.0.16` para disparar `windows-release.yml` (draft no GitHub). | Validar draft release, hashes e smoke Disney+ se relevante; publicar `latest` só após validação manual. |
 | 2026-10-20 | Rótulo: sem emoji de som + dismiss por painel | Concluído | `src/match-label.ts`, `src/main.ts`, `src/style.css`, `tests/match-label.test.ts`, `tests/app-integration.cjs`, README | Strip 🔊/🔈/🔉/🔇/📢/📣; × no rótulo (`dismissedMatchLabels`); restaura ao Abrir/reload da URL (não só troca de URL). `syncLayout()` antes de abrir BLL/WeddBets evita race com `visiblePanelIds`. | — |
 | 2026-10-20 | Nomes dos jogos nos painéis (rótulo A x B) | Concluído | `src/match-label.ts`, `electron/main.ts`, `electron/preload.ts`, `src/main.ts`, `src/style.css`, `src/electron.d.ts`, fixtures/smokes, README | Título do player via `page-title-updated` (BLL já põe `evento.nome`); posicionamento `bar-*` nas barras pretas ou `overlay-bottom` se o vídeo preenche; toggle no menu ⋯; sem reload de views. | Validar manualmente com BLL logado em `npm run dev`. |

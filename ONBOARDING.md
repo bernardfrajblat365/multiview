@@ -92,7 +92,12 @@ Não existe REST, GraphQL, tRPC ou servidor local de negócio. A API interna é 
 | `quadra:bllsport-player-opened` | main → renderer | entrega URL do player ao painel escolhido |
 | `quadra:bllsport-target-required` | main → renderer | informa que falta escolher um painel |
 | `quadra:bllsport-error` | main → renderer | relata falha de catálogo/player |
+| `quadra:panel-title` | main → renderer | título da página do painel (rótulo A x B) |
+| `quadra:panel-video-rect` | main → renderer | retângulo normalizado do vídeo no painel |
+| `quadra:panel-alert` | main → renderer | alerta de lance (gol/pênalti/vermelho/VAR) no painel |
 | `quadra:*-weddbets*` | ambos | mesmos canais para o WeddBets; mantidos no código, mas sem botão na UI |
+
+Alertas BLL: `electron/live-feed.ts` abre uma janela oculta por `williamHillId` no scoreboard público, intercepta frames Diffusion/CBOR via CDP e emite `quadra:panel-alert`. O protocolo fica em `electron/feed-protocol.ts`. `QUADRA_FEED_SCOREBOARD_URL` substitui a URL do scoreboard nos testes.
 
 O main só aceita comandos enviados pelo overlay. URLs carregadas nos painéis precisam ser HTTP(S), têm limite de 4096 caracteres e navegações não HTTP(S) são bloqueadas. Conteúdos remotos são páginas Chromium completas, não iframes; por isso páginas com `X-Frame-Options: DENY` continuam podendo abrir como view direta.
 
@@ -108,7 +113,7 @@ O login do BLL é feito pelo próprio site dentro da sessão persistente `quadra
 - Única dependência de runtime: `yalps 0.6.4` para otimização linear/MIP dos layouts.
 - `electron.vite.config.ts` separa bundles main, preload e renderer; dev/preview usam a porta `43123`.
 - `electron-builder` gera NSIS Windows com appId `com.quadra.multiview`, produto `Quadra`, ícone `public/quadra.ico` e saída em `release/`.
-- `QUADRA_BLLSPORT_URL` (e `QUADRA_WEDDBETS_URL`) substitui a URL do catálogo; `QUADRA_TEST_USER_DATA` isola o perfil Chromium em testes.
+- `QUADRA_BLLSPORT_URL` (e `QUADRA_WEDDBETS_URL`) substitui a URL do catálogo; `QUADRA_TEST_USER_DATA` isola o perfil Chromium em testes; `QUADRA_FEED_SCOREBOARD_URL` aponta o scoreboard de alertas (com `{eventId}`).
 
 ## O que o usuário consegue fazer
 

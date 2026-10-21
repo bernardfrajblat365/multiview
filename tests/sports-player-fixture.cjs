@@ -16,9 +16,12 @@ function createSportsPlayerFixture(requestUrl) {
   const empty = url.searchParams.get('fixture') === 'empty'
   const titleParam = url.searchParams.get('title')
   const canal = url.searchParams.get('canal')
-  const williamHillId = /^\d{5,12}$/.test(url.searchParams.get('whId') ?? '')
-    ? url.searchParams.get('whId')
-    : '41574699'
+  const whRaw = url.searchParams.get('whId')
+  const noWilliamHillId = whRaw === 'none' || whRaw === ''
+  const williamHillId = noWilliamHillId
+    ? null
+    : (/^\d{5,12}$/.test(whRaw ?? '') ? whRaw : '41574699')
+  const whDelayMs = Math.max(0, Number(url.searchParams.get('whDelayMs') || 0) || 0)
   const pageTitle = titleParam
     ? (canal ? `(${canal}) ${titleParam}` : titleParam)
     : 'Sports player video fixture'
@@ -82,15 +85,26 @@ function createSportsPlayerFixture(requestUrl) {
         setTimeout(() => { document.title = deferredTitle }, 200);
       }
       const appRoot = document.querySelector('#app');
+      const williamHillId = ${JSON.stringify(williamHillId)};
+      const whDelayMs = ${JSON.stringify(whDelayMs)};
       if (appRoot) {
-        appRoot.__vue__ = {
-          $data: {},
-          $children: [{
-            $options: { name: 'ViewEvento' },
-            $data: { item: { evento: { williamHillId: ${JSON.stringify(williamHillId)} } } },
-            $children: [],
-          }],
+        const mountId = (id) => {
+          appRoot.__vue__ = {
+            $data: {},
+            $children: [{
+              $options: { name: 'ViewEvento' },
+              $data: { item: { evento: id == null ? {} : { williamHillId: id } } },
+              $children: [],
+            }],
+          };
         };
+        if (williamHillId == null) mountId(null);
+        else if (whDelayMs > 0) {
+          mountId(null);
+          setTimeout(() => mountId(williamHillId), whDelayMs);
+        } else {
+          mountId(williamHillId);
+        }
       }
     </script>`
 }

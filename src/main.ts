@@ -20,12 +20,28 @@ import {
   type NormRect,
 } from './match-label'
 import {
-  alertBadgeLabel,
-  alertTeamLabel,
+  alertSoundGroups,
+  getAlertSoundId,
+  getAlertSoundOption,
+  playAlertSound,
+  setAlertSoundId,
+} from './alert-sounds'
+import {
+  formatAlertBadgeLine,
   playAlertTone,
   type PanelAlertKind,
   type PanelAlertPayload,
 } from './panel-alert'
+import {
+  SPOTLIGHT_MIN_PANELS,
+  deriveHighlights,
+  expire,
+  formatSpotlightCountdown,
+  nextExpiry,
+  registerAlert,
+  removePanelEntry,
+  type SpotlightState,
+} from './goal-spotlight'
 import {
   buildOrganizerChoices,
   organizerDraftKey,
@@ -81,6 +97,11 @@ let bllsportTargetId: PanelId | null = null
 let showMatchLabels = true
 let showPanelAlerts = true
 let playPanelAlertSound = true
+let autoSpotlight = true
+let chooserSoundBind: AbortController | null = null
+let spotlight: SpotlightState | null = null
+let spotlightTimer: ReturnType<typeof setTimeout> | null = null
+let spotlightTicker: ReturnType<typeof setInterval> | null = null
 const PANEL_ALERT_MS = 10_000
 const forceReloadIds = new Set<PanelId>()
 const panelTitles = new Map<PanelId, string>()
@@ -105,6 +126,7 @@ function clearPanelMatchState(id: PanelId) {
   panelVideoRects.delete(id)
   dismissedMatchLabels.delete(id)
   clearPanelAlert(id)
+  dropSpotlightPanel(id)
 }
 
 function clearAllPanelMatchState() {
@@ -112,6 +134,7 @@ function clearAllPanelMatchState() {
   panelVideoRects.clear()
   dismissedMatchLabels.clear()
   for (const id of [...panelAlertTimers.keys()]) clearPanelAlert(id)
+  discardSpotlight()
 }
 
 function showPanelAlert(payload: PanelAlertPayload) {
@@ -128,17 +151,7 @@ function showPanelAlert(payload: PanelAlertPayload) {
   const badge = document.createElement('div')
   badge.className = 'panel__alert'
   badge.dataset.kind = kind
-  const title = document.createElement('span')
-  title.className = 'panel__alert-title'
-  title.textContent = alertBadgeLabel(kind, payload.label)
-  badge.appendChild(title)
-  const team = alertTeamLabel(payload.team)
-  if (team) {
-    const teamEl = document.createElement('span')
-    teamEl.className = 'panel__alert-team'
-    teamEl.textContent = team
-    badge.appendChild(teamEl)
-  }
+  badge.textContent = formatAlertBadgeLine(kind, payload.label, payload.team)
   panelElement.appendChild(badge)
 
   if (playPanelAlertSound) playAlertTone(kind)
@@ -146,6 +159,266 @@ function showPanelAlert(payload: PanelAlertPayload) {
     payload.panelId,
     setTimeout(() => clearPanelAlert(payload.panelId), PANEL_ALERT_MS),
   )
+}
+
+function spotlightCapacity() {
+  return getCompositions(panels.length).at(-1)?.highlightCount ?? 0
+}
+
+function clearSpotlightTimers() {
+  if (spotlightTimer !== null) {
+    clearTimeout(spotlightTimer)
+    spotlightTimer = null
+  }
+  if (spotlightTicker !== null) {
+    clearInterval(spotlightTicker)
+    spotlightTicker = null
+  }
+}
+
+function discardSpotlight() {
+  clearSpotlightTimers()
+  spotlight = null
+  removeSpotlightBadges()
+}
+
+function commitSpotlight() {
+  clearSpotlightTimers()
+  spotlight = null
+  removeSpotlightBadges()
+}
+
+function captureSpotlightCurrent() {
+  return {
+    highlighted: [...highlighted],
+    mode: layoutMode,
+    position: highlightPosition,
+    variant: compositionVariant,
+    order: [...panelOrder],
+    tree: layoutTree,
+    aspect: viewportAspect(),
+    panelCount: panels.length,
+  }
+}
+
+function syncHighlightDom() {
+  if (view !== 'grid') return
+  const stage = app.querySelector<HTMLElement>('#layout-stage')
+  if (!stage) return
+  stage.dataset.layoutMode = layoutMode
+
+  for (const panelElement of stage.querySelectorAll<HTMLElement>('.panel')) {
+    const id = panelElement.dataset.panelId
+    if (!id) continue
+    const isHighlighted = highlighted.has(id)
+    panelElement.classList.toggle('is-highlighted', isHighlighted)
+    const button = panelElement.querySelector<HTMLButtonElement>('[data-highlight]')
+    if (button) {
+      button.setAttribute('aria-pressed', String(isHighlighted))
+      const label = isHighlighted ? 'Remover destaque' : 'Destacar jogo'
+      button.setAttribute('aria-label', label)
+      button.title = label
+      button.textContent = isHighlighted ? '★' : '☆'
+    }
+  }
+
+  renderPanelElements()
+  updateSpotlightBadges()
+}
+
+function applyHighlightsInPlace() {
+  if (view !== 'grid') return
+  buildCurrentLayout(highlighted.size > 0 ? 'highlights' : layoutMode === 'auto' ? 'auto' : 'equal', true)
+  syncHighlightDom()
+}
+
+function restoreSpotlightBaseline() {
+  if (!spotlight) {
+    discardSpotlight()
+    return
+  }
+  const baseline = spotlight.baseline
+  highlighted = new Set(baseline.highlighted)
+  layoutMode = baseline.mode
+  highlightPosition = baseline.position
+  compositionVariant = baseline.variant
+  panelOrder = [...baseline.order]
+  const aspectChanged = Math.abs(viewportAspect() - baseline.aspect) > 1e-8
+  if (!aspectChanged && panels.length === baseline.panelCount) {
+    layoutTree = baseline.tree
+    resolvedHighlightPosition = baseline.highlighted.length > 0 ? baseline.position : undefined
+  } else {
+    buildCurrentLayout(baseline.mode, true)
+  }
+  discardSpotlight()
+  syncHighlightDom()
+}
+
+function applySpotlightState(next: SpotlightState) {
+  const capacity = spotlightCapacity()
+  const nextHighlights = deriveHighlights(next.baseline, next.entries, capacity)
+  spotlight = next
+  highlighted = new Set(nextHighlights)
+  layoutMode = nextHighlights.length > 0 ? 'highlights' : next.baseline.mode === 'auto' ? 'auto' : 'equal'
+  if (next.baseline.highlighted.length > 0) {
+    highlightPosition = next.baseline.position
+    compositionVariant = next.baseline.variant
+  } else {
+    highlightPosition = undefined
+    compositionVariant = undefined
+  }
+  applyHighlightsInPlace()
+  scheduleSpotlightExpiry()
+}
+
+function scheduleSpotlightExpiry() {
+  clearSpotlightTimers()
+  if (!spotlight) return
+  const until = nextExpiry(spotlight)
+  if (until === null) return
+  const delay = Math.max(0, until - Date.now())
+  spotlightTimer = setTimeout(() => {
+    spotlightTimer = null
+    handleSpotlightExpiry()
+  }, delay)
+  spotlightTicker = setInterval(() => updateSpotlightBadges(), 1000)
+}
+
+function handleSpotlightExpiry() {
+  if (!spotlight) return
+  if (editorOpen || dragState) {
+    spotlightTimer = setTimeout(() => {
+      spotlightTimer = null
+      handleSpotlightExpiry()
+    }, 1000)
+    return
+  }
+  const result = expire(spotlight, Date.now())
+  if (!result.changed) {
+    scheduleSpotlightExpiry()
+    return
+  }
+  if (result.restored || !result.state) {
+    restoreSpotlightBaseline()
+    return
+  }
+  applySpotlightState(result.state)
+}
+
+function dropSpotlightPanel(id: PanelId) {
+  if (!spotlight) return
+  const result = removePanelEntry(spotlight, id)
+  if (!result.changed) return
+  if (result.restored || !result.state) {
+    restoreSpotlightBaseline()
+    return
+  }
+  applySpotlightState(result.state)
+}
+
+function handleSpotlightAlert(payload: PanelAlertPayload) {
+  if (!autoSpotlight) return
+  if (view !== 'grid' || editorOpen || dragState) return
+  if (panels.length < SPOTLIGHT_MIN_PANELS) return
+  const panelElement = app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(payload.panelId)}"]`)
+  if (!panelElement?.classList.contains('panel--loaded')) return
+
+  const capacity = spotlightCapacity()
+  const next = registerAlert(spotlight, {
+    panelId: payload.panelId,
+    kind: payload.kind,
+    now: Date.now(),
+    current: captureSpotlightCurrent(),
+    capacity,
+  })
+  if (!next) return
+  applySpotlightState(next)
+}
+
+function removeSpotlightBadges() {
+  for (const badge of app.querySelectorAll('.panel__spotlight')) badge.remove()
+}
+
+function updateSpotlightBadges() {
+  removeSpotlightBadges()
+  if (!spotlight || view !== 'grid') return
+  const now = Date.now()
+  for (const entry of spotlight.entries) {
+    const panelElement = app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(entry.panelId)}"]`)
+    if (!panelElement || !highlighted.has(entry.panelId)) continue
+    const badge = document.createElement('div')
+    badge.className = 'panel__spotlight'
+    badge.dataset.panelId = entry.panelId
+    const title = document.createElement('span')
+    title.className = 'panel__spotlight-title'
+    title.textContent = `Destaque automático · ${formatSpotlightCountdown(entry.until - now)}`
+    const actions = document.createElement('div')
+    actions.className = 'panel__spotlight-actions'
+    const pin = document.createElement('button')
+    pin.type = 'button'
+    pin.className = 'btn btn--ghost btn--icon'
+    pin.dataset.spotlightPin = ''
+    pin.setAttribute('aria-label', 'Fixar destaque')
+    pin.title = 'Fixar (não volta sozinho)'
+    pin.textContent = 'Fixar'
+    pin.addEventListener('pointerenter', () => setChromeInteractive(true))
+    pin.addEventListener('pointerdown', (event) => {
+      event.stopPropagation()
+      setChromeInteractive(true)
+    })
+    pin.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      pinSpotlight()
+    })
+    const revert = document.createElement('button')
+    revert.type = 'button'
+    revert.className = 'btn btn--ghost btn--icon'
+    revert.dataset.spotlightRevert = ''
+    revert.setAttribute('aria-label', 'Voltar agora')
+    revert.title = 'Voltar à organização anterior'
+    revert.textContent = 'Voltar agora'
+    revert.addEventListener('pointerenter', () => setChromeInteractive(true))
+    revert.addEventListener('pointerdown', (event) => {
+      event.stopPropagation()
+      setChromeInteractive(true)
+    })
+    revert.addEventListener('click', (event) => {
+      event.preventDefault()
+      event.stopPropagation()
+      restoreSpotlightBaseline()
+    })
+    actions.append(pin, revert)
+    badge.append(title, actions)
+    panelElement.appendChild(badge)
+  }
+}
+
+function syncUndoButton() {
+  const button = app.querySelector<HTMLButtonElement>('#btn-undo')
+  if (!button) return
+  button.disabled = history.length === 0
+}
+
+function pinSpotlight() {
+  if (!spotlight) return
+  // Snapshot the pre-spotlight layout so Undo returns there, then keep the current highlights.
+  const baseline = spotlight.baseline
+  history = [
+    ...history.slice(-(HISTORY_LIMIT - 1)),
+    {
+      panels: panels.map((panel) => ({ ...panel })),
+      highlighted: [...baseline.highlighted],
+      tree: baseline.tree,
+      mode: baseline.mode,
+      position: baseline.position,
+      variant: baseline.variant,
+      order: [...baseline.order],
+    },
+  ]
+  commitSpotlight()
+  updateSpotlightBadges()
+  syncUndoButton()
 }
 
 function ensureMatchLabelDismiss(labelElement: HTMLElement, panelId: PanelId) {
@@ -282,6 +555,18 @@ function viewportAspect() {
 }
 
 function cloneSnapshot(): LayoutSnapshot {
+  if (spotlight) {
+    const baseline = spotlight.baseline
+    return {
+      panels: panels.map((panel) => ({ ...panel })),
+      highlighted: [...baseline.highlighted],
+      tree: baseline.tree,
+      mode: baseline.mode,
+      position: baseline.position,
+      variant: baseline.variant,
+      order: [...baseline.order],
+    }
+  }
   return {
     panels: panels.map((panel) => ({ ...panel })),
     highlighted: [...highlighted],
@@ -296,9 +581,11 @@ function cloneSnapshot(): LayoutSnapshot {
 function pushHistory() {
   captureDrafts()
   history = [...history.slice(-(HISTORY_LIMIT - 1)), cloneSnapshot()]
+  if (spotlight) commitSpotlight()
 }
 
 function restoreSnapshot(snapshot: LayoutSnapshot) {
+  discardSpotlight()
   panels = snapshot.panels.map((panel) => ({ ...panel }))
   highlighted = new Set(snapshot.highlighted)
   layoutTree = snapshot.tree
@@ -370,6 +657,7 @@ function setPanelCount(count: number, options: { recordHistory?: boolean } = {})
 }
 
 function selectCount(count: number) {
+  discardSpotlight()
   highlighted.clear()
   layoutMode = 'auto'
   highlightPosition = undefined
@@ -383,6 +671,7 @@ function selectCount(count: number) {
 }
 
 function startWithOnePanel() {
+  discardSpotlight()
   highlighted.clear()
   layoutMode = 'auto'
   highlightPosition = undefined
@@ -738,13 +1027,35 @@ function clearAllPanels() {
   renderGrid()
 }
 
+function toolbarToggleHtml(id: string, label: string, on: boolean, actionOn: string, actionOff: string): string {
+  const action = on ? actionOn : actionOff
+  return `<button type="button" class="btn btn--ghost toolbar__toggle" id="${id}" role="menuitemcheckbox" aria-checked="${on}" aria-pressed="${on}" aria-label="${escapeHtml(action)}" title="${escapeHtml(action)}"><span class="toolbar__toggle-label">${escapeHtml(label)}</span><span class="toolbar__toggle-badge" aria-hidden="true">${on ? 'Ligado' : 'Desligado'}</span></button>`
+}
+
+function syncToolbarToggle(
+  button: HTMLButtonElement | null,
+  on: boolean,
+  actionOn: string,
+  actionOff: string,
+) {
+  if (!button) return
+  const action = on ? actionOn : actionOff
+  button.setAttribute('aria-pressed', String(on))
+  button.setAttribute('aria-checked', String(on))
+  button.setAttribute('aria-label', action)
+  button.title = action
+  const badge = button.querySelector('.toolbar__toggle-badge')
+  if (badge) badge.textContent = on ? 'Ligado' : 'Desligado'
+}
+
 function setShowPanelAlerts(next: boolean) {
   showPanelAlerts = next
-  const button = app.querySelector<HTMLButtonElement>('#btn-panel-alerts')
-  if (button) {
-    button.setAttribute('aria-pressed', String(showPanelAlerts))
-    button.textContent = showPanelAlerts ? 'Desativar alertas de lances' : 'Ativar alertas de lances'
-  }
+  syncToolbarToggle(
+    app.querySelector('#btn-panel-alerts'),
+    showPanelAlerts,
+    'Desativar alertas de lances',
+    'Ativar alertas de lances',
+  )
   if (!showPanelAlerts) {
     for (const id of [...panelAlertTimers.keys()]) clearPanelAlert(id)
   }
@@ -752,20 +1063,33 @@ function setShowPanelAlerts(next: boolean) {
 
 function setPlayPanelAlertSound(next: boolean) {
   playPanelAlertSound = next
-  const button = app.querySelector<HTMLButtonElement>('#btn-panel-alert-sound')
-  if (button) {
-    button.setAttribute('aria-pressed', String(playPanelAlertSound))
-    button.textContent = playPanelAlertSound ? 'Silenciar som dos alertas' : 'Ativar som dos alertas'
-  }
+  syncToolbarToggle(
+    app.querySelector('#btn-panel-alert-sound'),
+    playPanelAlertSound,
+    'Silenciar som dos alertas',
+    'Ativar som dos alertas',
+  )
+}
+
+function setAutoSpotlight(next: boolean) {
+  autoSpotlight = next
+  syncToolbarToggle(
+    app.querySelector('#btn-auto-spotlight'),
+    autoSpotlight,
+    'Desativar destaque automático no gol',
+    'Ativar destaque automático no gol',
+  )
+  if (!autoSpotlight && spotlight) restoreSpotlightBaseline()
 }
 
 function setShowMatchLabels(next: boolean) {
   showMatchLabels = next
-  const button = app.querySelector<HTMLButtonElement>('#btn-match-labels')
-  if (button) {
-    button.setAttribute('aria-pressed', String(showMatchLabels))
-    button.textContent = showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'
-  }
+  syncToolbarToggle(
+    app.querySelector('#btn-match-labels'),
+    showMatchLabels,
+    'Ocultar nomes dos jogos',
+    'Mostrar nomes dos jogos',
+  )
   updatePanelLabels()
 }
 
@@ -1117,14 +1441,20 @@ function cancelPanelDrag() {
   app.querySelector(`[data-panel-id="${CSS.escape(sourceId)}"]`)?.classList.remove('is-drag-source')
 }
 
+const CHROME_HIT_SELECTOR = '.chrome-home, .toolbar, .panel__controls, .panel__overlay, .panel__label-dismiss, .panel__spotlight, .panel--empty, .organize-panel, .confirm'
+
+function needsClickPassThrough() {
+  return view === 'grid' && panels.some((panel) => Boolean(panel.url))
+}
+
 function updateChromeHitTarget(x: number, y: number) {
   if (dragState) return
-  if (view !== 'grid') {
+  if (view !== 'grid' || !needsClickPassThrough()) {
     setChromeInteractive(true)
     return
   }
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar, .panel__controls, .panel__overlay, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm')))
+  setChromeInteractive(Boolean(target?.closest(CHROME_HIT_SELECTOR)))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -1143,7 +1473,11 @@ function setToolbarVisible(visible: boolean) {
   shell?.classList.toggle('is-toolbar-visible', visible)
   document.body.classList.toggle('is-cursor-hidden', !visible)
   window.quadra?.setCursorHidden(!visible)
-  if (!visible) setChromeInteractive(false)
+  if (!visible) {
+    // Empty grids have no WebContentsView under the overlay. Ignoring mouse events
+    // there can leave the UI stuck when Windows stops forwarding moves.
+    setChromeInteractive(!needsClickPassThrough())
+  }
 }
 
 function scheduleToolbarHide() {
@@ -1152,7 +1486,7 @@ function scheduleToolbarHide() {
   toolbarHideTimer = window.setTimeout(() => {
     toolbarHideTimer = null
     const protectedUiOpen = Boolean(document.querySelector(
-      '.toolbar:hover, .toolbar__menu:not([hidden]), .organize-panel, .confirm',
+      '.chrome-home:hover, .toolbar:hover, .toolbar__menu:not([hidden]), .organize-panel, .confirm',
     ))
     if (protectedUiOpen) {
       scheduleToolbarHide()
@@ -1168,6 +1502,26 @@ function revealToolbar() {
   scheduleToolbarHide()
 }
 
+function handleChromePointer(x: number, y: number) {
+  revealToolbar()
+  updateChromeHitTarget(x, y)
+}
+
+function goHome() {
+  void confirmAction('Voltar à escolha de telas?', 'Voltar').then((ok) => {
+    if (!ok) return
+    if (document.fullscreenElement) void document.exitFullscreen()
+    if (window.quadra && nativeFullscreen) {
+      nativeFullscreen = false
+      window.quadra.setFullscreen(false)
+    }
+    discardSpotlight()
+    view = 'choose'
+    editorOpen = false
+    render()
+  })
+}
+
 function bindToolbar() {
   toolbarAbort?.abort()
   toolbarResizeObserver?.disconnect()
@@ -1175,6 +1529,7 @@ function bindToolbar() {
   const { signal } = toolbarAbort
   const shell = app.querySelector<HTMLElement>('.grid-shell')
   const toolbar = app.querySelector<HTMLElement>('.toolbar')
+  const home = app.querySelector<HTMLElement>('.chrome-home')
   if (!shell || !toolbar) return
   const updateToolbarHeight = () => {
     shell.style.setProperty('--toolbar-height', `${toolbar.getBoundingClientRect().height}px`)
@@ -1185,18 +1540,23 @@ function bindToolbar() {
   revealToolbar()
   // Windows forwards mouse movement while the transparent overlay passes
   // clicks through to a video. Re-enable input as soon as it reaches a control.
+  // Main also proxies cursor position while pass-through is active (forward can stall).
   document.addEventListener('mousemove', (event) => {
-    revealToolbar()
-    updateChromeHitTarget(event.clientX, event.clientY)
+    handleChromePointer(event.clientX, event.clientY)
   }, { signal, passive: true })
   document.addEventListener('pointerdown', (event) => {
-    updateChromeHitTarget(event.clientX, event.clientY)
-    revealToolbar()
+    handleChromePointer(event.clientX, event.clientY)
   }, { signal, passive: true })
   document.addEventListener('keydown', revealToolbar, { signal, passive: true })
   toolbar.addEventListener('pointerenter', () => setChromeInteractive(true), { signal })
   toolbar.addEventListener('focusin', () => setChromeInteractive(true), { signal })
-  setChromeInteractive(Boolean(toolbar.matches(':hover')))
+  home?.addEventListener('pointerenter', () => setChromeInteractive(true), { signal })
+  home?.addEventListener('focusin', () => setChromeInteractive(true), { signal })
+  home?.addEventListener('click', goHome, { signal })
+  // Opening the grid from the chooser leaves the pointer over panels, not the
+  // toolbar. Never force pass-through here — empty grids have nothing under the
+  // overlay, and with videos we keep chrome clickable until the next move.
+  setChromeInteractive(true)
 }
 
 function bindMoreMenu() {
@@ -1217,17 +1577,18 @@ function bindMoreMenu() {
   app.querySelector('#btn-auto')?.addEventListener('click', () => { organizeAutomatically(); setOpen(false) }, { signal })
   app.querySelector('#btn-undo')?.addEventListener('click', () => { undo(); setOpen(false) }, { signal })
   app.querySelector('#btn-clear-all')?.addEventListener('click', () => { clearAllPanels(); setOpen(false) }, { signal })
+  // Toggles keep the menu open so the Ligado/Desligado state is visible; outside click / Esc still close.
   app.querySelector('#btn-match-labels')?.addEventListener('click', () => {
     setShowMatchLabels(!showMatchLabels)
-    setOpen(false)
   }, { signal })
   app.querySelector('#btn-panel-alerts')?.addEventListener('click', () => {
     setShowPanelAlerts(!showPanelAlerts)
-    setOpen(false)
   }, { signal })
   app.querySelector('#btn-panel-alert-sound')?.addEventListener('click', () => {
     setPlayPanelAlertSound(!playPanelAlertSound)
-    setOpen(false)
+  }, { signal })
+  app.querySelector('#btn-auto-spotlight')?.addEventListener('click', () => {
+    setAutoSpotlight(!autoSpotlight)
   }, { signal })
   document.addEventListener('click', (event) => { if (!menu.contains(event.target as Node)) setOpen(false) }, { signal })
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false) }, { signal })
@@ -1294,18 +1655,82 @@ function renderChoose() {
   window.quadra?.setBllsportTarget(null)
   document.body.classList.remove('is-grid')
   setChromeInteractive(true)
+  const selectedSound = getAlertSoundOption()
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
     <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><span>Adicione outras telas quando quiser.</span><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__sound">
+      <span class="chooser__sound-label" id="alert-sound-label">Som do alerta</span>
+      <div class="chooser__sound-picker">
+        <button type="button" class="chooser__sound-trigger" id="alert-sound-trigger" aria-haspopup="listbox" aria-expanded="false" aria-controls="alert-sound-menu" aria-labelledby="alert-sound-label alert-sound-trigger">${selectedSound.id}. ${escapeHtml(selectedSound.name)}</button>
+        <div class="chooser__sound-menu" id="alert-sound-menu" role="listbox" aria-labelledby="alert-sound-label" hidden>
+          ${alertSoundGroups().map((group) => `<div class="chooser__sound-group" role="group" aria-label="${escapeHtml(group.label)}"><div class="chooser__sound-group-label">${escapeHtml(group.label)}</div>${group.options.map((sound) => `<button type="button" class="chooser__sound-option${sound.id === selectedSound.id ? ' is-selected' : ''}" role="option" data-sound-id="${sound.id}" aria-selected="${sound.id === selectedSound.id}"><span class="chooser__sound-option-name">${sound.id}. ${escapeHtml(sound.name)}</span><span class="chooser__sound-option-play" aria-hidden="true">▶</span></button>`).join('')}</div>`).join('')}
+        </div>
+      </div>
+    </div>
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
     </div>
   </div></main>`
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
   bindUpdateCheck()
+  bindChooserAlertSound()
   app.querySelectorAll<HTMLButtonElement>('.chooser__card').forEach((button) => button.addEventListener('click', () => selectCount(Number(button.dataset.count))))
   scheduleSyncLayout()
+}
+
+function bindChooserAlertSound() {
+  chooserSoundBind?.abort()
+  chooserSoundBind = new AbortController()
+  const { signal } = chooserSoundBind
+
+  const root = app.querySelector<HTMLElement>('.chooser__sound')
+  const trigger = app.querySelector<HTMLButtonElement>('#alert-sound-trigger')
+  const menu = app.querySelector<HTMLElement>('#alert-sound-menu')
+  if (!root || !trigger || !menu) return
+
+  const syncSelection = () => {
+    const option = getAlertSoundOption(getAlertSoundId())
+    trigger.textContent = `${option.id}. ${option.name}`
+    for (const button of menu.querySelectorAll<HTMLButtonElement>('.chooser__sound-option')) {
+      const selected = Number(button.dataset.soundId) === option.id
+      button.classList.toggle('is-selected', selected)
+      button.setAttribute('aria-selected', String(selected))
+    }
+  }
+
+  const setOpen = (open: boolean) => {
+    menu.hidden = !open
+    trigger.setAttribute('aria-expanded', String(open))
+    root.classList.toggle('is-open', open)
+    if (open) {
+      menu.querySelector<HTMLButtonElement>('.chooser__sound-option.is-selected')?.focus()
+    }
+  }
+
+  trigger.addEventListener('click', () => setOpen(trigger.getAttribute('aria-expanded') !== 'true'), { signal })
+
+  menu.addEventListener('click', (event) => {
+    const button = (event.target as Element | null)?.closest<HTMLButtonElement>('.chooser__sound-option')
+    if (!button) return
+    setAlertSoundId(Number(button.dataset.soundId))
+    syncSelection()
+    playAlertSound(getAlertSoundId(), 'goal')
+    // Keep the list open so consecutive previews are one click each.
+  }, { signal })
+
+  document.addEventListener('pointerdown', (event) => {
+    if (!root.classList.contains('is-open')) return
+    if (root.contains(event.target as Node)) return
+    setOpen(false)
+  }, { signal })
+  document.addEventListener('keydown', (event) => {
+    if (event.key === 'Escape' && root.classList.contains('is-open')) {
+      setOpen(false)
+      trigger.focus()
+    }
+  }, { signal })
 }
 
 function organizerPreviewHtml(choice: OrganizerChoice): string {
@@ -1443,22 +1868,23 @@ function renderGrid() {
   document.body.classList.add('is-grid')
   const canUndo = history.length > 0
   app.innerHTML = `<div class="grid-shell is-toolbar-visible${editorOpen ? ' is-editor-open' : ''}">
+    <button type="button" class="btn btn--ghost chrome-home" id="btn-layout" aria-label="Voltar à tela inicial" title="Voltar à tela inicial">Início</button>
     <div class="toolbar" role="toolbar" aria-label="Controles">
       <button type="button" class="btn btn--load" id="btn-open-all">Abrir todos</button>
       <button type="button" class="btn btn--ghost" id="btn-mute-all" aria-pressed="${allPanelsMuted()}">${allPanelsMuted() ? 'Ativar som de todos' : 'Mutar todos'}</button>
       <button type="button" class="btn btn--load" id="btn-add-panel"${panels.length >= MAX_PANELS ? ' disabled' : ''} aria-label="${panels.length >= MAX_PANELS ? `Limite de ${MAX_PANELS} telas atingido` : 'Adicionar uma tela'}" title="${panels.length >= MAX_PANELS ? `Limite de ${MAX_PANELS} telas atingido` : 'Adicionar uma tela'}">+ Adicionar tela</button>
       <button type="button" class="btn btn--danger" id="btn-remove-panel"${panels.length <= MIN_PANELS ? ' disabled' : ''} aria-label="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}" title="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}">- Remover tela</button>
       <button type="button" class="btn btn--ghost" id="btn-organize">${editorOpen ? 'Cancelar organização' : 'Organizar'}</button>
-      <button type="button" class="btn btn--ghost" id="btn-layout">Voltar</button>
       <label class="toolbar__count"><span>Telas <output id="panel-count-status" aria-live="polite">${panels.length}/${MAX_PANELS}</output></span><select id="panel-count" aria-label="Quantidade de telas">${Array.from({ length: MAX_PANELS }, (_, index) => `<option value="${index + 1}"${index + 1 === panels.length ? ' selected' : ''}>${index + 1}</option>`).join('')}</select></label>
       <button type="button" class="btn btn--ghost" id="btn-fullscreen">${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}</button>
-      <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon" id="btn-more" aria-label="Mais opções" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu">⋯</button>
+      <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon" id="btn-more" aria-label="Mais opções" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu"><span class="toolbar__ellipsis" aria-hidden="true"><i></i><i></i><i></i></span></button>
         <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
           <button type="button" class="btn btn--ghost" id="btn-equal" role="menuitem">Sem destaques</button>
-          <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>
-          <button type="button" class="btn btn--ghost" id="btn-panel-alerts" role="menuitem" aria-pressed="${showPanelAlerts}">${showPanelAlerts ? 'Desativar alertas de lances' : 'Ativar alertas de lances'}</button>
-          <button type="button" class="btn btn--ghost" id="btn-panel-alert-sound" role="menuitem" aria-pressed="${playPanelAlertSound}">${playPanelAlertSound ? 'Silenciar som dos alertas' : 'Ativar som dos alertas'}</button>
+          ${toolbarToggleHtml('btn-match-labels', 'Nomes dos jogos', showMatchLabels, 'Ocultar nomes dos jogos', 'Mostrar nomes dos jogos')}
+          ${toolbarToggleHtml('btn-panel-alerts', 'Alertas de lances', showPanelAlerts, 'Desativar alertas de lances', 'Ativar alertas de lances')}
+          ${toolbarToggleHtml('btn-panel-alert-sound', 'Som dos alertas', playPanelAlertSound, 'Silenciar som dos alertas', 'Ativar som dos alertas')}
+          ${toolbarToggleHtml('btn-auto-spotlight', 'Destaque automático no gol', autoSpotlight, 'Desativar destaque automático no gol', 'Ativar destaque automático no gol')}
           <button type="button" class="btn btn--ghost" id="btn-undo" role="menuitem"${canUndo ? '' : ' disabled'}>Desfazer</button>
           <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">Limpar todos</button>
         </div>
@@ -1478,24 +1904,12 @@ function renderGrid() {
   app.querySelector<HTMLButtonElement>('#btn-organize')?.addEventListener('click', () => setEditor(!editorOpen))
   app.querySelector<HTMLSelectElement>('#panel-count')?.addEventListener('change', (event) => setPanelCount(Number((event.target as HTMLSelectElement).value)))
   app.querySelector<HTMLButtonElement>('#btn-fullscreen')?.addEventListener('click', toggleFullscreen)
-  app.querySelector<HTMLButtonElement>('#btn-layout')?.addEventListener('click', () => {
-    void confirmAction('Voltar à escolha de telas?', 'Voltar').then((ok) => {
-      if (!ok) return
-      if (document.fullscreenElement) void document.exitFullscreen()
-      if (window.quadra && nativeFullscreen) {
-        nativeFullscreen = false
-        window.quadra.setFullscreen(false)
-      }
-      view = 'choose'
-      editorOpen = false
-      render()
-    })
-  })
   bindOrganizerControls()
   bindMoreMenu()
   bindToolbar()
   renderPanelElements()
   updatePanelLabels()
+  updateSpotlightBadges()
   focusPendingPanel()
 }
 
@@ -1536,7 +1950,12 @@ window.quadra?.onPanelVideoRect(({ panelId, rect }) => {
   updatePanelLabels()
 })
 window.quadra?.onPanelAlert((payload) => {
+  handleSpotlightAlert(payload)
   showPanelAlert(payload)
+})
+window.quadra?.onPointerProxy(({ x, y }) => {
+  if (view !== 'grid') return
+  handleChromePointer(x, y)
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return

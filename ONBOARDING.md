@@ -40,7 +40,8 @@ npm run test:packaged
 
 - `electron/main.ts`: processo principal. Cria uma `BaseWindow` preta e maximizada, uma `BrowserWindow` transparente de overlay para os controles e um `WebContentsView` para cada URL carregada.
 - `electron/preload.ts`: bridge segura `window.quadra`, expondo somente comandos/eventos IPC necessários.
-- `src/main.ts`: renderer vanilla TypeScript/DOM. Mantém painéis, URLs, rascunhos, mute, destaques, organização, undo, fullscreen e toolbar auto-hide.
+- `src/main.ts`: renderer vanilla TypeScript/DOM. Mantém painéis, URLs, rascunhos, mute, destaques, organização, undo, fullscreen, botão **Início** (canto superior esquerdo) e toolbar auto-hide.
+- `src/alert-sounds.ts`: catálogo de 30 sons de alerta (Web Audio), seleção persistida em `localStorage` (`quadra.alertSoundId`) e preview na tela inicial.
 - `src/layout.ts`: árvore binária de divisões, catálogo de composições de 1–18 telas, destaques e posições; calcula e valida retângulos normalizados.
 - `src/video-layout.ts`: otimização dos ratios dos splits com `yalps`, buscando ampliar vídeo 16:9 sem reduzir vídeos existentes nem perder a hierarquia de destaques; cache RAM de 256 resultados.
 - `src/organizer.ts`: rascunho do editor de organização, validação, miniaturas e agrupamento de posições equivalentes.
@@ -59,7 +60,7 @@ flowchart LR
   V --> W[Página remota / vídeo]
 ```
 
-O renderer envia bounds reais do DOM. O main valida o payload e reaproveita views existentes por `panelId`; reorganizar, redimensionar, mutar ou mudar a toolbar não deve recriar a página. O overlay fica transparente e alterna `setIgnoreMouseEvents` para deixar cliques passarem ao vídeo quando o cursor não está sobre controles.
+O renderer envia bounds reais do DOM. O main valida o payload e reaproveita views existentes por `panelId`; reorganizar, redimensionar, mutar ou mudar a toolbar não deve recriar a página. O overlay fica transparente e alterna `setIgnoreMouseEvents` para deixar cliques passarem ao vídeo quando o cursor não está sobre controles. Pass-through só com alguma URL carregada; grade vazia e a abertura da grade mantêm o chrome clicável. Com pass-through ativo, o main envia `quadra:pointer-proxy` para o overlay não ficar preso se o forward do Windows falhar.
 
 ## Dados e persistência
 
@@ -72,7 +73,7 @@ Não há banco, ORM, schema de aplicação, migration, seed, API server ou repos
 - `slotViews` associa `panelId` a `WebContentsView` viva;
 - o cache do otimizador também é apenas RAM.
 
-Ao fechar o programa, painéis, URLs, composição e histórico são destruídos. A única persistência deliberada é a sessão Chromium `persist:quadra`, compartilhada pelo catálogo e pelos players do BLL, para manter cookies/login/localStorage. Isso pertence ao Electron, não a um modelo de dados do Quadra.
+Ao fechar o programa, painéis, URLs, composição e histórico são destruídos. Persistências deliberadas: a sessão Chromium `persist:quadra` (catálogo/players BLL) e a preferência `quadra.alertSoundId` no `localStorage` do renderer (som dos alertas).
 
 ## API, IPC e rede
 
@@ -97,7 +98,7 @@ Não existe REST, GraphQL, tRPC ou servidor local de negócio. A API interna é 
 | `quadra:panel-alert` | main → renderer | alerta de lance (gol/pênalti/vermelho/VAR) no painel |
 | `quadra:*-weddbets*` | ambos | mesmos canais para o WeddBets; mantidos no código, mas sem botão na UI |
 
-Alertas BLL: `electron/live-feed.ts` abre uma janela oculta por `williamHillId` no scoreboard público, intercepta frames Diffusion/CBOR via CDP e emite `quadra:panel-alert`. O protocolo fica em `electron/feed-protocol.ts`. `QUADRA_FEED_SCOREBOARD_URL` substitui a URL do scoreboard nos testes.
+Alertas BLL: `electron/live-feed.ts` abre uma janela oculta por `williamHillId` no scoreboard público, intercepta frames Diffusion/CBOR via CDP e emite `quadra:panel-alert`. O protocolo fica em `electron/feed-protocol.ts`. `QUADRA_FEED_SCOREBOARD_URL` substitui a URL do scoreboard nos testes. No renderer, `src/goal-spotlight.ts` promove o painel a destaque temporário (60 s, ≥5 telas) e restaura o baseline; toggle no menu ⋯.
 
 O main só aceita comandos enviados pelo overlay. URLs carregadas nos painéis precisam ser HTTP(S), têm limite de 4096 caracteres e navegações não HTTP(S) são bloqueadas. Conteúdos remotos são páginas Chromium completas, não iframes; por isso páginas com `X-Frame-Options: DENY` continuam podendo abrir como view direta.
 

@@ -204,3 +204,106 @@ test('IncidentTracker emits var alert when score drops', () => {
   assert.equal(alerts[0]?.kind, 'var')
   assert.equal(alerts[0]?.label, 'Gol anulado')
 })
+
+test('IncidentTracker emits goal when score rises without incident', () => {
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 0, away: 0 } })
+  const alerts = tracker.ingest({ incidents: [], score: { home: 1, away: 0 } })
+  assert.equal(alerts.length, 1)
+  assert.deepEqual(alerts[0], {
+    kind: 'goal',
+    team: 'home',
+    label: 'GOL',
+    incidentId: 'score-goal:home:1',
+  })
+})
+
+test('IncidentTracker does not alert baseline score', () => {
+  const tracker = new IncidentTracker()
+  const first = tracker.ingest({ incidents: [], score: { home: 2, away: 1 } })
+  assert.deepEqual(first, [])
+  const second = tracker.ingest({ incidents: [], score: { home: 2, away: 1 } })
+  assert.deepEqual(second, [])
+})
+
+test('IncidentTracker dedupes score rise followed by GOAL incident', () => {
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 0, away: 0 } })
+  const fromScore = tracker.ingest({ incidents: [], score: { home: 0, away: 1 } })
+  assert.equal(fromScore.length, 1)
+  assert.equal(fromScore[0]?.kind, 'goal')
+  const fromIncident = tracker.ingest({
+    incidents: [incident({ id: 'goal-1', type: 'GOAL', teamType: 'AWAY' })],
+    score: { home: 0, away: 1 },
+  })
+  assert.deepEqual(fromIncident, [])
+})
+
+test('IncidentTracker dedupes GOAL incident followed by score rise', () => {
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 0, away: 0 } })
+  const fromIncident = tracker.ingest({
+    incidents: [incident({ id: 'goal-1', type: 'GOAL', teamType: 'HOME' })],
+    score: null,
+  })
+  assert.equal(fromIncident.length, 1)
+  assert.equal(fromIncident[0]?.kind, 'goal')
+  const fromScore = tracker.ingest({ incidents: [], score: { home: 1, away: 0 } })
+  assert.deepEqual(fromScore, [])
+})
+
+test('IncidentTracker alerts two consecutive goals for the same team', () => {
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 0, away: 0 } })
+  const first = tracker.ingest({ incidents: [], score: { home: 1, away: 0 } })
+  const second = tracker.ingest({ incidents: [], score: { home: 2, away: 0 } })
+  assert.equal(first.length, 1)
+  assert.equal(second.length, 1)
+  assert.equal(first[0]?.incidentId, 'score-goal:home:1')
+  assert.equal(second[0]?.incidentId, 'score-goal:home:2')
+})
+
+test('IncidentTracker clamps counters after score drop VAR', () => {
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 1, away: 0 } })
+  tracker.ingest({ incidents: [], score: { home: 2, away: 0 } })
+  const varAlerts = tracker.ingest({ incidents: [], score: { home: 1, away: 0 } })
+  assert.equal(varAlerts[0]?.kind, 'var')
+  const again = tracker.ingest({ incidents: [], score: { home: 2, away: 0 } })
+  assert.equal(again.length, 1)
+  assert.equal(again[0]?.kind, 'goal')
+  assert.equal(again[0]?.team, 'home')
+})
+
+test('IncidentTracker suppresses teamless GOAL after recent score goal', () => {
+  const now = Date.now()
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 0, away: 0 } }, now)
+  const fromScore = tracker.ingest({ incidents: [], score: { home: 1, away: 0 } }, now + 1000)
+  assert.equal(fromScore.length, 1)
+  const teamless = tracker.ingest({
+    incidents: [incident({ id: 'goal-x', type: 'GOAL', teamType: null })],
+    score: { home: 1, away: 0 },
+  }, now + 2000)
+  assert.deepEqual(teamless, [])
+})
+
+test('IncidentTracker ignores historical GOAL dump after score-only baseline', () => {
+  const tracker = new IncidentTracker()
+  tracker.ingest({ incidents: [], score: { home: 1, away: 1 } })
+  const historical = tracker.ingest({
+    incidents: [
+      incident({ id: 'h1', type: 'GOAL', teamType: 'HOME' }),
+      incident({ id: 'a1', type: 'GOAL', teamType: 'AWAY' }),
+    ],
+    score: { home: 1, away: 1 },
+  })
+  assert.deepEqual(historical, [])
+  const live = tracker.ingest({
+    incidents: [incident({ id: 'h2', type: 'GOAL', teamType: 'HOME' })],
+    score: { home: 1, away: 1 },
+  })
+  assert.equal(live.length, 1)
+  assert.equal(live[0]?.kind, 'goal')
+  assert.equal(live[0]?.team, 'home')
+})

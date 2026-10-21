@@ -91,6 +91,8 @@ async function run() {
         }
         const result = { version: document.querySelector('.app-version')?.textContent ?? '', layouts: [], interactions: {} }
         result.interactions.chooserHasNoCurrentHighlight = document.querySelectorAll('.chooser__card.is-current').length === 0
+        result.interactions.chooserAlertSoundOptions = document.querySelectorAll('#alert-sound-menu [data-sound-id]').length
+        result.interactions.chooserAlertSoundPreview = Boolean(document.querySelector('#alert-sound-trigger'))
         const updateButton = document.querySelector('#btn-check-updates')
         const updateStatus = document.querySelector('#update-status')
         result.interactions.updateButtonIsAccessible = updateButton?.getAttribute('aria-describedby') === 'update-status' &&
@@ -103,6 +105,22 @@ async function run() {
         await waitFrame()
         result.interactions.startsWithOne = document.querySelectorAll('.panel').length === 1 &&
           document.querySelector('.panel[data-slot="0"] input[name="url"]') === document.activeElement
+        const homeButton = document.querySelector('#btn-layout')
+        const homeRect = homeButton?.getBoundingClientRect()
+        result.interactions.homeButtonTopLeft = Boolean(
+          homeButton?.classList.contains('chrome-home') &&
+          !homeButton.closest('.toolbar') &&
+          homeRect &&
+          homeRect.width > 0 &&
+          homeRect.height > 0 &&
+          homeRect.top < 120 &&
+          homeRect.left <= 220,
+        )
+        result.interactions.emptyGridKeepsPanelChrome = Boolean(
+          document.querySelector('.panel--empty') &&
+          document.querySelector('#btn-add-panel') &&
+          document.querySelector('#btn-layout.chrome-home'),
+        )
         result.interactions.singlePanelTrashDisabled = document.querySelector('.panel[data-slot="0"] [data-remove]').disabled
         result.interactions.toolbarRemoveDisabledAtOne = document.querySelector('#btn-remove-panel').disabled
         const firstDraft = document.querySelector('.panel[data-slot="0"] input[name="url"]')
@@ -394,21 +412,43 @@ async function run() {
         await waitFrame()
         result.interactions.moreMenuOpens = !document.querySelector('#toolbar-more-menu').hidden
         const matchLabelsButton = document.querySelector('#btn-match-labels')
+        const alertToggle = document.querySelector('#btn-panel-alerts')
+        const alertSoundToggle = document.querySelector('#btn-panel-alert-sound')
+        const spotlightToggle = document.querySelector('#btn-auto-spotlight')
+        const toggleBadge = (button) => button?.querySelector('.toolbar__toggle-badge')?.textContent
         result.interactions.matchLabelsToggleExists = Boolean(matchLabelsButton)
           && matchLabelsButton.getAttribute('aria-pressed') === 'true'
+          && toggleBadge(matchLabelsButton) === 'Ligado'
+        result.interactions.alertTogglesDefaultOn = Boolean(alertToggle)
+          && alertToggle.getAttribute('aria-pressed') === 'true'
+          && toggleBadge(alertToggle) === 'Ligado'
+          && alertSoundToggle?.getAttribute('aria-pressed') === 'true'
+          && spotlightToggle?.getAttribute('aria-pressed') === 'true'
+          && toggleBadge(spotlightToggle) === 'Ligado'
         matchLabelsButton?.click()
         await waitFrame()
         result.interactions.matchLabelsToggleHides = document.querySelector('#btn-match-labels')?.getAttribute('aria-pressed') === 'false'
-        document.querySelector('#btn-more').click()
-        await waitFrame()
+          && toggleBadge(document.querySelector('#btn-match-labels')) === 'Desligado'
+          && !document.querySelector('#toolbar-more-menu').hidden
         document.querySelector('#btn-match-labels')?.click()
         await waitFrame()
         result.interactions.matchLabelsToggleRestores = document.querySelector('#btn-match-labels')?.getAttribute('aria-pressed') === 'true'
-        document.querySelector('#btn-more').click()
+          && toggleBadge(document.querySelector('#btn-match-labels')) === 'Ligado'
+          && !document.querySelector('#toolbar-more-menu').hidden
+        document.querySelector('#btn-panel-alerts')?.click()
         await waitFrame()
+        result.interactions.alertToggleOff = document.querySelector('#btn-panel-alerts')?.getAttribute('aria-pressed') === 'false'
+          && toggleBadge(document.querySelector('#btn-panel-alerts')) === 'Desligado'
+          && !document.querySelector('#toolbar-more-menu').hidden
+        document.querySelector('#btn-panel-alerts')?.click()
+        await waitFrame()
+        result.interactions.alertToggleRestores = document.querySelector('#btn-panel-alerts')?.getAttribute('aria-pressed') === 'true'
+          && toggleBadge(document.querySelector('#btn-panel-alerts')) === 'Ligado'
+          && !document.querySelector('#toolbar-more-menu').hidden
         document.querySelector('#btn-equal').click()
         await waitFrame()
         result.interactions.equalMode = document.querySelector('.layout-stage').dataset.layoutMode === 'equal'
+        result.interactions.equalClosesMenu = document.querySelector('#toolbar-more-menu').hidden
 
         const countSelect = document.querySelector('#panel-count')
         countSelect.value = '13'
@@ -454,7 +494,11 @@ async function run() {
     }
     assert.equal(result.interactions.twoHighlightsHaveMoreArea, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.startsWithOne, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.homeButtonTopLeft, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.emptyGridKeepsPanelChrome, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.chooserHasNoCurrentHighlight, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.chooserAlertSoundOptions, 30, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.chooserAlertSoundPreview, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.updateButtonIsAccessible, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.updateButtonReportsUnavailableInDev, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.singlePanelTrashDisabled, true, JSON.stringify(result.interactions))
@@ -499,7 +543,11 @@ async function run() {
     assert.equal(result.interactions.matchLabelsToggleExists, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.matchLabelsToggleHides, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.matchLabelsToggleRestores, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.alertTogglesDefaultOn, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.alertToggleOff, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.alertToggleRestores, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.equalMode, true)
+    assert.equal(result.interactions.equalClosesMenu, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.thirteenHasHeroQuadrant, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.removeChoosesOptimalPreviousCount, true, JSON.stringify(result.interactions))
     console.log(JSON.stringify(result))

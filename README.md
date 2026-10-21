@@ -20,26 +20,27 @@ npm run dist:release
 
 ## Como usar
 
-1. Na tela inicial, escolha quantas telas quer (1 a 18) ou clique em **Começar com uma tela**.
+1. Na tela inicial, escolha quantas telas quer (1 a 18) ou clique em **Começar com uma tela**. Também dá para escolher o **som do alerta** (30 opções; clique em cada item da lista para ouvir); a escolha fica salva no perfil local.
 2. Cole uma URL em cada painel e clique em **Abrir** (ou **Abrir todos**).
    - **BLL:** clique no botão **BLL** do painel, faça login uma vez e escolha o jogo. Os próximos jogos vão para a próxima tela vazia.
 3. **+ Adicionar tela** cria um painel novo; a lixeira remove um painel. O layout se reorganiza sozinho.
 4. **Organizar** permite escolher a composição, marcar telas principais (destaques) e a posição delas. **Aplicar** confirma; **Cancelar** ou Esc descarta.
-5. Outros controles: **Sem destaques**, **Organizar automaticamente**, **Mostrar/Ocultar nomes dos jogos**, **Alertas de lances** / **Som dos alertas**, **Desfazer**, seletor **Telas**, **Voltar**, **Tela Cheia** e editar URL do painel.
+5. Outros controles: **Sem destaques**, **Organizar automaticamente**, **Mostrar/Ocultar nomes dos jogos**, **Alertas de lances** / **Som dos alertas**, **Destaque automático no gol**, **Desfazer**, seletor **Telas**, **Tela Cheia** e editar URL do painel. O botão **Início** (canto superior esquerdo) volta à tela inicial.
 
 ### Como o layout funciona
 
 - O tamanho dos painéis é calculado automaticamente para maximizar a área visível de vídeo (referência 16:9), sem cortar a imagem — por isso painéis da mesma composição podem ter tamanhos diferentes.
 - Players esportivos são ajustados ao painel mantendo a proporção, com barras pretas quando necessário.
 - Quando o título da página traz um confronto (`Time A x Time B` — típico do BLL e de muitos links YouTube), o Quadra mostra esse nome no painel: na faixa preta se houver sobra, ou numa faixa discreta na base se o vídeo ocupar tudo. Marcadores de áudio no título (ex.: 🔊) são removidos. O **×** no rótulo oculta só aquele painel; **Abrir** de novo restaura. O menu **⋯** oculta/mostra todos. Zapping e páginas sem confronto no título ficam sem rótulo.
-- Em jogos do BLL, o Quadra pode alertar gol, pênalti, cartão vermelho e possíveis revisões (VAR inferido): o painel pisca, mostra um selo por alguns segundos e toca um bipe. O menu **⋯** liga/desliga alertas e o som. O feed de lances é um serviço externo não oficial ligado ao player BLL — pode adiantar o vídeo e, se mudar de formato, os alertas param sem afetar a imagem.
+- Em jogos do BLL, o Quadra pode alertar gol, pênalti, cartão vermelho e possíveis revisões (VAR inferido): o painel pisca, mostra um selo por alguns segundos e toca o som escolhido na tela inicial. O gol também é detectado quando o placar sobe (mesmo sem lance `GOAL` na lista). O menu **⋯** liga/desliga alertas e o som. O feed de lances é um serviço externo não oficial ligado ao player BLL — pode adiantar o vídeo e, se mudar de formato, os alertas param sem afetar a imagem.
+- Com **5 ou mais telas**, gol, pênalti ou cartão vermelho também promovem o jogo a principal por **60 segundos** (novos lances, inclusive VAR, reiniciam a janela). Depois o layout volta ao que estava. No selo do painel: **Fixar** (mantém o destaque) ou **Voltar agora**. O menu **⋯** desliga o destaque automático. Só vale para jogos BLL com feed; o vídeo não é recarregado.
 - Destacar um jogo (estrela) coloca ele no espaço grande; um segundo destaque troca para uma composição que comporte dois.
 - Não há divisórias manuais. Ao redimensionar a janela, tudo é recalculado preservando destaques e posições.
 - A barra de controles fica sempre visível, inclusive em tela cheia.
 
 ### Sessão e dados
 
-- URLs ficam só em memória durante a execução.
+- URLs ficam só em memória durante a execução. A preferência do som de alerta fica em `localStorage` do perfil do app.
 - O BLL usa a sessão persistente `quadra` (login uma única vez). Outros serviços não têm integração específica.
 - Credenciais, cookies, tokens e licenças não são coletados.
 

@@ -1,9 +1,9 @@
-import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, session, WebContentsView } from 'electron'
+import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, screen, session, WebContentsView } from 'electron'
 import electronUpdater from 'electron-updater'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import type { Bounds, LayoutPayload, PanelPayload } from '../src/layout'
-import { createFeedManager, type FeedManager } from './live-feed'
+import { createFeedManager, logLiveFeed, type FeedManager } from './live-feed'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createAutoUpdateController } from './update'
 
@@ -27,6 +27,7 @@ const VIDEO_RECT_WORLD = 1002
 const MAX_PANEL_TITLE_LENGTH = 160
 const FEED_PROBE_MAX_ATTEMPTS = 5
 const FEED_PROBE_INTERVAL_MS = 3000
+const FEED_PROBE_SLOW_INTERVAL_MS = 15_000
 const WILLIAM_HILL_ID_RE = /^\d{5,12}$/
 const readWilliamHillIdScript = `(() => {
   const root = document.querySelector('#app')
@@ -468,6 +469,7 @@ function applyPanelFeedEventId(panelId: string, eventId: string | null) {
   if (state.feedEventId === eventId) return
   state.feedEventId = eventId
   clearFeedProbe(state)
+  logLiveFeed('info', `panel ${panelId} -> event ${eventId}`)
   feedManager?.attach(panelId, eventId)
 }
 
@@ -478,6 +480,7 @@ function scheduleFeedProbe(panelId: string, reset = false) {
     detachPanelFeed(panelId, state)
     return
   }
+  if (state.feedEventId) return
   if (reset) {
     clearFeedProbe(state)
     state.feedProbeAttempts = 0
@@ -491,6 +494,7 @@ function scheduleFeedProbe(panelId: string, reset = false) {
       detachPanelFeed(panelId, state)
       return
     }
+    if (state.feedEventId) return
     const raw = await state.view.webContents.executeJavaScript(readWilliamHillIdScript).catch(() => null)
     const eventId = typeof raw === 'string' && WILLIAM_HILL_ID_RE.test(raw) ? raw : null
     if (eventId) {
@@ -498,10 +502,16 @@ function scheduleFeedProbe(panelId: string, reset = false) {
       return
     }
     state.feedProbeAttempts += 1
-    if (state.feedProbeAttempts >= FEED_PROBE_MAX_ATTEMPTS) return
+    if (state.feedProbeAttempts === FEED_PROBE_MAX_ATTEMPTS) {
+      logLiveFeed('warn', `panel ${panelId} still without williamHillId after fast probe; retrying slowly`)
+    }
+    const delay =
+      state.feedProbeAttempts >= FEED_PROBE_MAX_ATTEMPTS
+        ? FEED_PROBE_SLOW_INTERVAL_MS
+        : FEED_PROBE_INTERVAL_MS
     state.feedProbeTimer = setTimeout(() => {
       void run()
-    }, FEED_PROBE_INTERVAL_MS)
+    }, delay)
   }
 
   void run()
@@ -663,11 +673,57 @@ function setCursorHidden(hidden: boolean) {
   for (const state of slotViews.values()) void syncSlotCursor(state)
 }
 
+/** While the overlay ignores mouse events, Windows sometimes stops forwarding moves. */
+let chromePassThrough = false
+let pointerProxyTimer: ReturnType<typeof setInterval> | null = null
+let lastPointerProxy = { x: Number.NaN, y: Number.NaN }
+
+function stopPointerProxy() {
+  if (pointerProxyTimer !== null) clearInterval(pointerProxyTimer)
+  pointerProxyTimer = null
+  lastPointerProxy = { x: Number.NaN, y: Number.NaN }
+}
+
+function startPointerProxy() {
+  stopPointerProxy()
+  pointerProxyTimer = setInterval(() => {
+    if (!chromePassThrough || !overlayWindow || overlayWindow.isDestroyed()) {
+      stopPointerProxy()
+      return
+    }
+    const point = screen.getCursorScreenPoint()
+    const bounds = overlayWindow.getBounds()
+    if (
+      point.x < bounds.x ||
+      point.y < bounds.y ||
+      point.x >= bounds.x + bounds.width ||
+      point.y >= bounds.y + bounds.height
+    ) {
+      return
+    }
+    const x = point.x - bounds.x
+    const y = point.y - bounds.y
+    if (x === lastPointerProxy.x && y === lastPointerProxy.y) return
+    lastPointerProxy = { x, y }
+    overlayWindow.webContents.send('quadra:pointer-proxy', { x, y })
+  }, 50)
+}
+
+function setOverlayMousePassThrough(passThrough: boolean) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  chromePassThrough = passThrough
+  overlayWindow.setIgnoreMouseEvents(passThrough, { forward: true })
+  if (passThrough) startPointerProxy()
+  else stopPointerProxy()
+}
+
 function destroyAllSlotViews() {
   for (const index of [...slotViews.keys()]) destroySlotView(index)
 }
 
 function closeOwnedWindows() {
+  stopPointerProxy()
+  chromePassThrough = false
   destroyAllSlotViews()
   feedManager?.dispose()
   feedManager = null
@@ -817,8 +873,10 @@ function createOverlay() {
   })
   watchFullscreenPriority(overlayWindow)
   overlayWindow.setBackgroundColor('#00000000')
-  overlayWindow.setIgnoreMouseEvents(false)
+  setOverlayMousePassThrough(false)
   overlayWindow.on('closed', () => {
+    stopPointerProxy()
+    chromePassThrough = false
     overlayWindow = null
     overlayReady = false
     scheduleFullscreenPrioritySync()
@@ -850,7 +908,7 @@ function installIpcHandlers() {
   })
   ipcMain.on('quadra:set-chrome-interactive', (event, interactive: unknown, refocusPlayers: unknown) => {
     if (!isUiSender(event) || typeof interactive !== 'boolean' || !overlayWindow) return
-    overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true })
+    setOverlayMousePassThrough(!interactive)
     // A focused overlay leaves the panel views in the background, where live players stop painting.
     if (!interactive && refocusPlayers === true && overlayWindow.isFocused() && mainWindow && !mainWindow.isDestroyed()) {
       mainWindow.focus()

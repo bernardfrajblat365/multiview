@@ -62,6 +62,9 @@ jobs:
       - name: Application integration smoke
         run: npm run test:app
 
+      - name: Live feed adverse smoke
+        run: npm run test:feed
+
       - name: Window close smoke
         run: npm run test:close
 

@@ -83,6 +83,11 @@ const quadra = {
     ipcRenderer.on('quadra:panel-alert', listener)
     return () => ipcRenderer.removeListener('quadra:panel-alert', listener)
   },
+  onPointerProxy: (callback: (payload: { x: number; y: number }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { x: number; y: number }) => callback(payload)
+    ipcRenderer.on('quadra:pointer-proxy', listener)
+    return () => ipcRenderer.removeListener('quadra:pointer-proxy', listener)
+  },
 }
 
 contextBridge.exposeInMainWorld('quadra', quadra)

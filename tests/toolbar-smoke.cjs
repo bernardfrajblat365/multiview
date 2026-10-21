@@ -20,10 +20,20 @@ async function until(check, label, timeoutMs = 15000) {
 // Calling element.click() alone would also pass when the toolbar is covered.
 function inspectToolbar() {
   const toolbar = document.querySelector('.toolbar')
+  const home = document.querySelector('#btn-layout')
   const rect = toolbar.getBoundingClientRect()
   const style = getComputedStyle(toolbar)
   const errors = []
   if (style.opacity !== '1' || style.visibility !== 'visible') errors.push('hidden toolbar')
+  if (!home?.classList.contains('chrome-home') || home.closest('.toolbar')) errors.push('home button missing top-left')
+  else {
+    const homeRect = home.getBoundingClientRect()
+    if (homeRect.top < 0 || homeRect.left < 0 || homeRect.top > 96 || homeRect.left > 200) {
+      errors.push('home button not top-left')
+    }
+    const homeHit = document.elementFromPoint(homeRect.left + homeRect.width / 2, homeRect.top + homeRect.height / 2)
+    if (!home.contains(homeHit)) errors.push(`covered home by ${homeHit?.className}`)
+  }
   for (const element of [toolbar, ...toolbar.querySelectorAll('button, select')]) {
     if (element.closest('[hidden]')) continue
     const r = element.getBoundingClientRect()

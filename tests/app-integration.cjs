@@ -1,82 +1,15 @@
 const assert = require('node:assert/strict')
 const { spawn } = require('node:child_process')
-const crypto = require('node:crypto')
 const fs = require('node:fs')
-const http = require('node:http')
 const os = require('node:os')
 const path = require('node:path')
-const { createSportsPlayerFixture } = require('./sports-player-fixture.cjs')
+const { FEED_EVENT_ID, startBllFeedServer } = require('./fixtures/bll-feed-server.cjs')
 
 const projectRoot = path.resolve(__dirname, '..')
 const expectedAppVersion = `v${require('../package.json').version}`
 const electronPath = path.join(projectRoot, 'node_modules', 'electron', 'dist', 'electron.exe')
 const mainPath = path.join(projectRoot, 'out', 'main', 'main.js')
 const wait = (milliseconds) => new Promise((resolve) => setTimeout(resolve, milliseconds))
-const FEED_EVENT_ID = '41574699'
-
-function encodeCbor(value) {
-  if (value === false) return Buffer.from([0xf4])
-  if (value === true) return Buffer.from([0xf5])
-  if (value === null) return Buffer.from([0xf6])
-  if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 24) return Buffer.from([value])
-  if (typeof value === 'number' && Number.isInteger(value) && value >= 0 && value < 256) return Buffer.from([0x18, value])
-  if (typeof value === 'string') {
-    const text = Buffer.from(value, 'utf8')
-    if (text.length < 24) return Buffer.concat([Buffer.from([0x60 | text.length]), text])
-    return Buffer.concat([Buffer.from([0x78, text.length]), text])
-  }
-  if (Array.isArray(value)) {
-    const parts = value.map((item) => encodeCbor(item))
-    if (value.length < 24) return Buffer.concat([Buffer.from([0x80 | value.length]), ...parts])
-    return Buffer.concat([Buffer.from([0x98, value.length]), ...parts])
-  }
-  if (value && typeof value === 'object') {
-    const entries = Object.entries(value)
-    const parts = entries.flatMap(([key, item]) => [encodeCbor(key), encodeCbor(item)])
-    if (entries.length < 24) return Buffer.concat([Buffer.from([0xa0 | entries.length]), ...parts])
-    return Buffer.concat([Buffer.from([0xb8, entries.length]), ...parts])
-  }
-  throw new Error(`unsupported cbor value: ${String(value)}`)
-}
-
-function wsAcceptKey(key) {
-  return crypto.createHash('sha1').update(`${key}258EAFA5-E914-47DA-95CA-C5AB0DC85B11`).digest('base64')
-}
-
-function encodeWsBinaryFrame(payload) {
-  const length = payload.length
-  if (length < 126) return Buffer.concat([Buffer.from([0x82, length]), payload])
-  const header = Buffer.alloc(4)
-  header[0] = 0x82
-  header[1] = 126
-  header.writeUInt16BE(length, 2)
-  return Buffer.concat([header, payload])
-}
-
-function feedFrame(incidents, score) {
-  const body = encodeCbor({
-    data: incidents,
-    id: `OB_EV${FEED_EVENT_ID}`,
-    score,
-  })
-  return Buffer.concat([Buffer.alloc(4, 0x04), body])
-}
-
-function createScoreboardFixture(requestUrl) {
-  const url = requestUrl instanceof URL ? requestUrl : new URL(requestUrl, 'http://127.0.0.1')
-  const eventId = url.searchParams.get('eventId') || FEED_EVENT_ID
-  return `<!doctype html><title>Scoreboard fixture</title>
-    <body data-event-id="${eventId}">
-    <script>
-      const eventId = new URLSearchParams(location.search).get('eventId') || ${JSON.stringify(FEED_EVENT_ID)};
-      const ws = new WebSocket((location.protocol === 'https:' ? 'wss://' : 'ws://') + location.host + '/diffusion');
-      ws.binaryType = 'arraybuffer';
-      window.__quadraFeedReady = false;
-      ws.addEventListener('open', () => { window.__quadraFeedReady = true; });
-      ws.addEventListener('message', () => { window.__quadraFeedFrames = (window.__quadraFeedFrames || 0) + 1; });
-    </script>
-    </body>`
-}
 
 async function fetchJson(url) {
   const response = await fetch(url)
@@ -107,7 +40,7 @@ function evaluate(webSocketUrl, expression) {
 }
 
 async function waitForRendererTarget(port) {
-  const deadline = Date.now() + 20000
+  const deadline = Date.now() + 45000
   while (Date.now() < deadline) {
     try {
       const targets = await fetchJson(`http://127.0.0.1:${port}/json`)
@@ -152,84 +85,16 @@ async function run() {
 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-app-integration-'))
   const port = 46000 + Math.floor(Math.random() * 1000)
-  const feedSockets = new Set()
-  const server = http.createServer((request, response) => {
-    if (request.url?.startsWith('/bll/')) {
+  const feed = await startBllFeedServer({
+    handleExtraRequest(request, response) {
+      const title = request.url?.startsWith('/blocked') ? 'Quadra Blocked Page' : 'Quadra Integration Page'
+      if (request.url?.startsWith('/blocked')) response.setHeader('X-Frame-Options', 'DENY')
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html><title>BLL Test Catalog</title>
-        <button id="game-a" onclick="window.open('/view/game-a?canal=2&whId=${FEED_EVENT_ID}&title=' + encodeURIComponent('Time A x Time B'), 'game-a')">Jogo A</button>
-        <button id="game-b" onclick="window.open('/view/game-b?whId=41574700&title=' + encodeURIComponent('Time C x Time D'), 'game-b')">Jogo B</button>`)
-      return
-    }
-    if (request.url?.startsWith('/scoreboard')) {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(createScoreboardFixture(new URL(request.url, `http://${request.headers.host}`)))
-      return
-    }
-    if (request.url?.startsWith('/view/')) {
-      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(createSportsPlayerFixture(new URL(request.url, `http://${request.headers.host}`)))
-      return
-    }
-    const title = request.url?.startsWith('/blocked') ? 'Quadra Blocked Page' : 'Quadra Integration Page'
-    if (request.url?.startsWith('/blocked')) response.setHeader('X-Frame-Options', 'DENY')
-    response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-    response.end(`<!doctype html><title>${title}</title><button id="click-target">Page</button>`)
+      response.end(`<!doctype html><title>${title}</title><button id="click-target">Page</button>`)
+      return true
+    },
   })
-  server.on('upgrade', (request, socket) => {
-    if (!request.url?.startsWith('/diffusion')) {
-      socket.destroy()
-      return
-    }
-    const key = request.headers['sec-websocket-key']
-    if (!key) {
-      socket.destroy()
-      return
-    }
-    socket.write(
-      'HTTP/1.1 101 Switching Protocols\r\n' +
-      'Upgrade: websocket\r\n' +
-      'Connection: Upgrade\r\n' +
-      `Sec-WebSocket-Accept: ${wsAcceptKey(key)}\r\n\r\n`,
-    )
-    feedSockets.add(socket)
-    const baseline = feedFrame([
-      {
-        id: `OB_EV${FEED_EVENT_ID}#baseline-goal`,
-        eventId: `OB_EV${FEED_EVENT_ID}`,
-        type: 'GOAL',
-        teamType: 'HOME',
-        timestamp: new Date().toISOString(),
-      },
-    ], { home: 1, away: 0 })
-    socket.write(encodeWsBinaryFrame(baseline))
-    const goalTimer = setTimeout(() => {
-      if (socket.destroyed) return
-      const goal = feedFrame([
-        {
-          id: `OB_EV${FEED_EVENT_ID}#live-goal`,
-          eventId: `OB_EV${FEED_EVENT_ID}`,
-          type: 'GOAL',
-          teamType: 'AWAY',
-          timestamp: new Date().toISOString(),
-        },
-      ], { home: 1, away: 1 })
-      socket.write(encodeWsBinaryFrame(goal))
-    }, 800)
-    socket.on('close', () => {
-      clearTimeout(goalTimer)
-      feedSockets.delete(socket)
-    })
-    socket.on('error', () => {
-      clearTimeout(goalTimer)
-      feedSockets.delete(socket)
-    })
-  })
-  await new Promise((resolve, reject) => {
-    server.once('error', reject)
-    server.listen(0, '127.0.0.1', resolve)
-  })
-  const baseUrl = `http://127.0.0.1:${server.address().port}`
+  const { baseUrl } = feed
   const childEnv = { ...process.env }
   delete childEnv.ELECTRON_RUN_AS_NODE
   const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
@@ -295,11 +160,10 @@ async function run() {
       const badge = panel.querySelector('.panel__alert')
       return {
         kind: panel.dataset.alertKind ?? null,
-        title: badge?.querySelector('.panel__alert-title')?.textContent ?? null,
-        team: badge?.querySelector('.panel__alert-team')?.textContent ?? null,
+        text: badge?.textContent ?? null,
       }
     })()`)
-    assert.deepEqual(alertState, { kind: 'goal', title: 'GOL', team: 'Fora' })
+    assert.deepEqual(alertState, { kind: 'goal', text: 'Gol - fora' })
 
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-dismiss-label]').click()`)
     await waitForExpression(target, `!document.querySelector('.panel[data-slot="0"] .panel__label')`)
@@ -534,10 +398,7 @@ async function run() {
     process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportPanelAlert: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
-    for (const socket of feedSockets) {
-      try { socket.destroy() } catch { /* ignore */ }
-    }
-    await new Promise((resolve) => server.close(() => resolve()))
+    await feed.close()
     await wait(600)
     for (let attempt = 0; attempt < 20 && fs.existsSync(userData); attempt += 1) {
       try { fs.rmSync(userData, { recursive: true, force: true }) } catch { await wait(250) }

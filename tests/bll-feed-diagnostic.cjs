@@ -5,19 +5,29 @@
 const { spawnSync } = require('node:child_process')
 const { cpSync, existsSync, mkdirSync, mkdtempSync, rmSync, writeFileSync } = require('node:fs')
 const { tmpdir } = require('node:os')
-const { join } = require('node:path')
+const { dirname, join } = require('node:path')
 
 const DEFAULT_URL = 'https://www.bllsport.com/view/6ad6304a59ba8dce6cacb1c3'
 
 if (!process.versions.electron) {
   const sourceProfile = join(process.env.APPDATA ?? '', 'quadra-multiview')
   const profile = mkdtempSync(join(tmpdir(), 'quadra-bll-feed-'))
-  if (existsSync(join(sourceProfile, 'Local State'))) cpSync(join(sourceProfile, 'Local State'), join(profile, 'Local State'))
-  if (existsSync(join(sourceProfile, 'Partitions', 'quadra'))) {
-    cpSync(join(sourceProfile, 'Partitions', 'quadra'), join(profile, 'Partitions', 'quadra'), {
-      recursive: true,
-      filter: (src) => !/[\\/](Cache|Code Cache|GPUCache|DawnGraphiteCache|DawnWebGPUCache)([\\/]|$)/.test(src),
-    })
+  const targetHint = process.env.QUADRA_FEED_URL ?? DEFAULT_URL
+  const needsBllLogin = !/score\.kwddw\.com/i.test(targetHint)
+  if (needsBllLogin) {
+    if (existsSync(join(sourceProfile, 'Local State'))) {
+      try { cpSync(join(sourceProfile, 'Local State'), join(profile, 'Local State')) } catch { /* profile may be locked by a running app */ }
+    }
+    if (existsSync(join(sourceProfile, 'Partitions', 'quadra'))) {
+      try {
+        cpSync(join(sourceProfile, 'Partitions', 'quadra'), join(profile, 'Partitions', 'quadra'), {
+          recursive: true,
+          filter: (src) => !/[\\/](Cache|Code Cache|GPUCache|DawnGraphiteCache|DawnWebGPUCache|Cookies|Cookies-journal|Network Persistent State)([\\/]|$)/.test(src),
+        })
+      } catch (error) {
+        console.warn('[bll-feed-diagnostic] profile copy skipped:', error.message)
+      }
+    }
   }
   const env = { ...process.env, QUADRA_FEED_PROFILE: profile }
   delete env.ELECTRON_RUN_AS_NODE
@@ -29,11 +39,19 @@ if (!process.versions.electron) {
   process.exit(result.status ?? 1)
 } else {
   const { app, BrowserWindow, session } = require('electron')
-  const args = process.argv.slice(2).filter((arg) => !arg.startsWith('--'))
+  const rawArgs = process.argv.slice(2)
+  const saveFramesIdx = rawArgs.indexOf('--save-frames')
+  const saveFramesPath = saveFramesIdx >= 0 ? rawArgs[saveFramesIdx + 1] : null
+  const args = rawArgs.filter((arg, index) => {
+    if (arg.startsWith('--')) return false
+    if (saveFramesIdx >= 0 && index === saveFramesIdx + 1) return false
+    return true
+  })
   const targetUrl = process.env.QUADRA_FEED_URL ?? DEFAULT_URL
   const seconds = Number(args.find((arg) => /^\d+$/.test(arg)) ?? 120)
   const outDir = join(__dirname, '..', 'artifacts', 'bll-feed')
   mkdirSync(outDir, { recursive: true })
+  if (saveFramesPath) mkdirSync(dirname(saveFramesPath), { recursive: true })
   app.setPath('userData', process.env.QUADRA_FEED_PROFILE)
 
   const SENSITIVE_RE = /login|logout|auth|token|session|senha|password|license|widevine|cookie/i
@@ -42,6 +60,8 @@ if (!process.versions.electron) {
   const log = []
   const bodies = []
   const wsFrames = []
+  const savedFrames = []
+  const diffusionRequestIds = new Set()
   const domSnapshots = []
 
   function redactUrl(raw) {
@@ -140,12 +160,24 @@ if (!process.versions.electron) {
       }
       if (method === 'Network.webSocketCreated') {
         log.push({ t: Date.now(), type: 'websocket', url: redactUrl(params.url) })
+        if (/score\.kwddw\.com\/diffusion/i.test(params.url || '') && params.requestId) {
+          diffusionRequestIds.add(params.requestId)
+        }
         return
       }
       if (method === 'Network.webSocketFrameReceived' || method === 'Network.webSocketFrameSent') {
         const payload = params.response?.payloadData ?? ''
         if (SENSITIVE_RE.test(payload.slice(0, 200)) && method.endsWith('Sent')) return
         if (wsFrames.length < 3000) wsFrames.push({ t: Date.now(), dir: method.endsWith('Received') ? 'in' : 'out', size: payload.length, data: payload.slice(0, 500000) })
+        if (
+          saveFramesPath &&
+          method.endsWith('Received') &&
+          typeof payload === 'string' &&
+          payload.length >= 40 &&
+          (!diffusionRequestIds.size || !params.requestId || diffusionRequestIds.has(params.requestId))
+        ) {
+          savedFrames.push({ t: Date.now(), size: payload.length, data: payload })
+        }
       }
     })
     await enableSession(undefined)
@@ -155,6 +187,13 @@ if (!process.versions.electron) {
       writeFileSync(join(outDir, 'response-bodies.json'), JSON.stringify(bodies, null, 2))
       writeFileSync(join(outDir, 'websocket-frames.json'), JSON.stringify(wsFrames, null, 2))
       writeFileSync(join(outDir, 'dom-snapshots.json'), JSON.stringify(domSnapshots, null, 2))
+      if (saveFramesPath) {
+        writeFileSync(saveFramesPath, JSON.stringify({
+          capturedAt: new Date().toISOString(),
+          sourceUrl: targetUrl,
+          frames: savedFrames,
+        }, null, 2))
+      }
     }
 
     console.log(`Loading ${targetUrl} for ${seconds}s → ${outDir}`)

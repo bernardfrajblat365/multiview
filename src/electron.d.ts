@@ -27,6 +27,7 @@ type QuadraBridge = {
     team: 'home' | 'away' | null
     label: string
   }) => void) => () => void
+  onPointerProxy: (callback: (payload: { x: number; y: number }) => void) => () => void
 }
 
 type UpdateCheckResult = 'updated' | 'available' | 'ready' | 'busy' | 'disabled' | 'error'

@@ -38,6 +38,24 @@ export type ClassifyResult = {
 const BREAK = Symbol('cbor-break')
 const MAX_FRAME_SCAN = 24
 const INCIDENT_MAX_AGE_MS = 3 * 60 * 1000
+const SCORE_GOAL_SUPPRESS_MS = 90_000
+
+type GoalCounters = { home: number; away: number }
+
+function emptyGoalCounters(): GoalCounters {
+  return { home: 0, away: 0 }
+}
+
+function countGoalsByTeam(incidents: FeedIncident[]): GoalCounters {
+  const counts = emptyGoalCounters()
+  for (const incident of incidents) {
+    if (classifyIncident(incident.type)?.kind !== 'goal') continue
+    const team = teamFromIncident(incident.teamType)
+    if (team === 'home') counts.home += 1
+    else if (team === 'away') counts.away += 1
+  }
+  return counts
+}
 
 function halfToFloat(h: number) {
   const s = h & 0x8000 ? -1 : 1
@@ -296,13 +314,23 @@ export class IncidentTracker {
   private primed = false
   private seenIds = new Set<string>()
   private lastScore: FeedScore | null = null
+  private baselineGoals: GoalCounters = emptyGoalCounters()
+  private alertedGoals: GoalCounters = emptyGoalCounters()
+  private liveGoalIncidents: GoalCounters = emptyGoalCounters()
+  private lastScoreGoalAt = 0
 
   ingest(updates: FeedUpdates, now = Date.now()): PanelAlert[] {
     const alerts: PanelAlert[] = []
 
     if (!this.primed) {
       for (const incident of updates.incidents) this.seenIds.add(incident.id)
-      if (updates.score) this.lastScore = updates.score
+      if (updates.score) {
+        this.lastScore = updates.score
+        this.baselineGoals = { home: updates.score.home, away: updates.score.away }
+      } else {
+        this.baselineGoals = countGoalsByTeam(updates.incidents)
+      }
+      this.alertedGoals = { ...this.baselineGoals }
       this.primed = true
       return alerts
     }
@@ -313,6 +341,30 @@ export class IncidentTracker {
       if (!isRecent(incident.timestamp, now)) continue
       const classified = classifyIncident(incident.type)
       if (!classified) continue
+
+      if (classified.kind === 'goal') {
+        const team = teamFromIncident(incident.teamType)
+        if (team) {
+          this.liveGoalIncidents[team] += 1
+          // Score-first baseline: later historical GOAL dumps must not count on top of
+          // baselineGoals. Treat post-prime GOAL counts as absolute match goals and only
+          // alert when they exceed both the known scoreboard and what we already alerted.
+          const knownScore = this.lastScore?.[team] ?? this.baselineGoals[team]
+          if (this.liveGoalIncidents[team] <= knownScore) continue
+          if (this.liveGoalIncidents[team] <= this.alertedGoals[team]) continue
+          this.alertedGoals[team] = this.liveGoalIncidents[team]
+        } else if (now - this.lastScoreGoalAt <= SCORE_GOAL_SUPPRESS_MS) {
+          continue
+        }
+        alerts.push({
+          kind: 'goal',
+          team,
+          label: classified.label,
+          incidentId: incident.id,
+        })
+        continue
+      }
+
       alerts.push({
         kind: classified.kind,
         team: teamFromIncident(incident.teamType),
@@ -333,6 +385,27 @@ export class IncidentTracker {
             label: 'Gol anulado',
             incidentId,
           })
+          for (const team of ['home', 'away'] as const) {
+            this.alertedGoals[team] = Math.min(this.alertedGoals[team], updates.score[team])
+            this.liveGoalIncidents[team] = Math.max(
+              0,
+              Math.min(this.liveGoalIncidents[team], updates.score[team] - this.baselineGoals[team]),
+            )
+          }
+        }
+
+        for (const team of ['home', 'away'] as const) {
+          const next = updates.score[team]
+          if (next > this.alertedGoals[team]) {
+            alerts.push({
+              kind: 'goal',
+              team,
+              label: 'GOL',
+              incidentId: `score-goal:${team}:${next}`,
+            })
+            this.alertedGoals[team] = next
+            this.lastScoreGoalAt = now
+          }
         }
       }
       this.lastScore = updates.score

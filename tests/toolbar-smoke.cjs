@@ -483,6 +483,9 @@ async function worker() {
   await runSportsGeometryScenarios()
   await runMatchLabelScenarios()
   async function click(selector) {
+    // The toolbar slides back in for 0.2 s after being hidden; clicking mid-slide hits nothing.
+    await ui("document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))")
+    await until(() => ui("!document.querySelector('.toolbar')?.getAnimations().length"), `${selector}: toolbar settled`, 2000)
     const result = await ui(`(() => {
       try {
         document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))

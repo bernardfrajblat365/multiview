@@ -154,7 +154,7 @@ async function run() {
         mode: document.querySelector('.layout-stage').dataset.layoutMode,
       }
     })()`)
-    assert.deepEqual(removal, { count: 15, removed: true, mode: 'auto' })
+    assert.deepEqual(removal, { count: 17, removed: true, mode: 'auto' })
     await assertToolbar()
 
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-layout').click()`)

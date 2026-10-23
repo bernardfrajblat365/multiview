@@ -205,7 +205,7 @@ multiview-desktop/
 
 **Commits**
 
-Estilo observado no histórico: Conventional Commits em inglês — `feat:`, `fix:`, `chore:`, `docs:`. Bumps de versão: `chore: bump Quadra to x.y.z`. Tags de release: `v*` alinhadas a `package.json` `version`.
+Estilo observado no histórico: Conventional Commits em inglês — `feat:`, `fix:`, `chore:`, `docs:`. Bumps de versão: `chore: bump Quadra to x.y.z`. Tags de release: `v*` alinhadas a `package.json` `version`. Todo bump de versão inclui a entrada da nova versão no topo de `RELEASES` em `src/release-notes.ts` (pop-up "Novidades da versão"), com título e descrição de cada novidade em linguagem para o usuário final; `tests/release-notes.test.ts` falha se a versão do `package.json` não tiver notas.
 
 **UI / plataforma**
 
@@ -242,6 +242,8 @@ Todo agente que receber uma tarefa neste repositório **DEVE** seguir este ciclo
 4. Manter o diff focado no escopo da issue; não “limpar” arquivos não relacionados.
 
 ### 3. Fase de Registro (imediatamente após terminar)
+
+Se a tarefa adiciona ou muda algo visível ao usuário, acrescentar/atualizar a nota correspondente na entrada da próxima versão em `src/release-notes.ts` (criando a entrada se ainda não existir).
 
 Atualizar a tabela da seção **6** com: data, escopo, status, arquivos principais, decisões e próximos passos. Se a tarefa ficar bloqueada, registrar o bloqueio e a evidência (comando, erro, doc de referência).
 

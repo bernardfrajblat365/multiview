@@ -1,6 +1,13 @@
 import './style.css'
 import { version } from '../package.json'
 import { normalizeUrl } from './routing'
+import { batchCapacity, groupByCompetition, planBatchOpen, type BllEvent, type BllEventGroup } from './bll-batch'
+import type { YoutubeLivesResult } from './youtube-lives'
+import { alertControlsHtml, applyAlertStates, bindAlertControls, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
+import { LIVE_DELAY_OPTIONS } from './alert-settings'
+import { RELEASES, markVersionSeen, readLastSeenVersion, releaseToShow, type Release } from './release-notes'
+import type { LiveMatchStatus } from './livescore-365'
+import { AUTO_MIN_PANELS, composeHighlighted, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
 import {
   buildLayoutTree,
   calculateLayout,
@@ -16,9 +23,15 @@ import {
 } from './layout'
 import {
   extractMatchLabel,
+  formatScore,
+  orientScore,
+  parseScore,
   placeMatchLabel,
+  splitMatchTeams,
+  type MatchScore,
   type NormRect,
 } from './match-label'
+import { createScoreTimeline, nextScoreChangeAt, pushScore, visibleScore, type ScoreTimeline } from './score-delay'
 import {
   buildOrganizerChoices,
   organizerDraftKey,
@@ -44,6 +57,9 @@ const APP_VERSION = `v${version}`
 const MIN_PANELS = 1
 const HISTORY_LIMIT = 24
 const TOOLBAR_IDLE_MS = 5_000
+const BACK_IDLE_MS = 2_000
+/** Top-left hot zone (px) where the mouse summons the back button. */
+const BACK_ZONE = { width: 170, height: 90 }
 const DRAG_THRESHOLD_PX = 6
 type DragState = { sourceId: PanelId; pointerId: number; startX: number; startY: number; active: boolean; targetId: PanelId | null; abort: AbortController }
 let dragState: DragState | null = null
@@ -73,21 +89,120 @@ let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
 let showMatchLabels = true
 const forceReloadIds = new Set<PanelId>()
+/** Panels promoted to highlights by a goal; they return to the user's layout after 45 s. */
+type AutoBaseline = { highlighted: PanelId[]; mode: LayoutMode; position: HighlightPosition | undefined; variant: string | undefined }
+let autoEntries: AutoEntry[] = []
+let autoBaseline: AutoBaseline | null = null
+let autoTimer: number | null = null
 const panelTitles = new Map<PanelId, string>()
 const panelVideoRects = new Map<PanelId, NormRect | null>()
 /** Per-panel dismiss; restored when the user opens/reloads the panel URL. */
 const dismissedMatchLabels = new Set<PanelId>()
+/** Teams and score history from the William Hill feed, per panel. */
+const panelFeeds = new Map<PanelId, { home: string; away: string; timeline: ScoreTimeline }>()
+/** Last score shown per panel, to flash the label when it changes. */
+const shownScores = new Map<PanelId, string>()
+const scoreFlashUntil = new Map<PanelId, number>()
+const SCORE_FLASH_MS = 6000
+let labelRefreshTimer: number | null = null
+/** 365Scores link of each YouTube panel, as reported by the main process. */
+const panelLive = new Map<PanelId, LiveMatchStatus>()
+/** Per-panel delay (s) chosen on a linked YouTube panel; memory only, like the rest of the panel state. */
+const panelDelayOverride = new Map<PanelId, number>()
+/** Alerts of YouTube panels waiting for the video to catch up with the data. */
+const pendingAlerts = new Map<PanelId, Set<number>>()
+
+function clearPendingAlerts(id: PanelId) {
+  for (const timer of pendingAlerts.get(id) ?? []) window.clearTimeout(timer)
+  pendingAlerts.delete(id)
+}
 
 function clearPanelMatchState(id: PanelId) {
+  panelLive.delete(id)
+  panelDelayOverride.delete(id)
+  clearPendingAlerts(id)
   panelTitles.delete(id)
   panelVideoRects.delete(id)
   dismissedMatchLabels.delete(id)
+  panelFeeds.delete(id)
+  shownScores.delete(id)
+  scoreFlashUntil.delete(id)
 }
 
 function clearAllPanelMatchState() {
+  for (const id of [...pendingAlerts.keys()]) clearPendingAlerts(id)
+  panelLive.clear()
+  panelDelayOverride.clear()
   panelTitles.clear()
   panelVideoRects.clear()
   dismissedMatchLabels.clear()
+  panelFeeds.clear()
+  shownScores.clear()
+  scoreFlashUntil.clear()
+}
+
+function scoreDelayMs() {
+  const delay = getAlertSettings().scoreDelaySec
+  return delay === null ? null : delay * 1000
+}
+
+function isLiveLinked(id: PanelId) {
+  return panelLive.get(id)?.status === 'linked'
+}
+
+/** Score delay of one panel: a linked YouTube panel may have its own; null hides the score everywhere. */
+function panelScoreDelayMs(id: PanelId) {
+  const global = scoreDelayMs()
+  if (global === null) return null
+  const own = isLiveLinked(id) ? panelDelayOverride.get(id) : undefined
+  return own === undefined ? global : own * 1000
+}
+
+/** YouTube lives trail the 365Scores data, so their alerts wait as long as their score. BLL alerts stay immediate. */
+function panelAlertDelayMs(id: PanelId) {
+  if (!isLiveLinked(id)) return 0
+  const own = panelDelayOverride.get(id)
+  return own !== undefined ? own * 1000 : scoreDelayMs() ?? 0
+}
+
+/** Wakes the labels up when a held-back score or a goal flash is due. */
+function scheduleLabelRefresh(now: number) {
+  if (labelRefreshTimer !== null) window.clearTimeout(labelRefreshTimer)
+  labelRefreshTimer = null
+  let next: number | null = null
+  const consider = (at: number | null) => {
+    if (at !== null && at > now && (next === null || at < next)) next = at
+  }
+  for (const [id, feed] of panelFeeds) {
+    const delay = panelScoreDelayMs(id)
+    if (delay !== null) consider(nextScoreChangeAt(feed.timeline, now, delay))
+  }
+  for (const until of scoreFlashUntil.values()) consider(until)
+  if (next === null) return
+  labelRefreshTimer = window.setTimeout(() => {
+    labelRefreshTimer = null
+    updatePanelLabels()
+  }, Math.max(0, next - now) + 30)
+}
+
+function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null } | null {
+  const feed = panelFeeds.get(id)
+  const titleLabel = extractMatchLabel(panelTitles.get(id) ?? '')
+  const titleTeams = titleLabel ? splitMatchTeams(titleLabel) : null
+  const feedTeams = feed?.home && feed.away ? { home: feed.home, away: feed.away } : null
+  const teams = titleTeams ?? feedTeams
+  if (!teams) return null
+  const delay = panelScoreDelayMs(id)
+  let score = feed && delay !== null ? visibleScore(feed.timeline, now, delay) : null
+  if (score && titleTeams && feedTeams) score = orientScore(titleTeams, feedTeams, score)
+  return { ...teams, score }
+}
+
+function labelSpan(className: string, text: string) {
+  const span = document.createElement('span')
+  span.className = className
+  span.textContent = text
+  return span
 }
 
 function ensureMatchLabelDismiss(labelElement: HTMLElement, panelId: PanelId) {
@@ -117,67 +232,89 @@ function ensureMatchLabelDismiss(labelElement: HTMLElement, panelId: PanelId) {
 function updatePanelLabels() {
   const stage = app.querySelector<HTMLElement>('#layout-stage')
   if (!stage) return
+  const now = Date.now()
   for (const panelElement of stage.querySelectorAll<HTMLElement>('.panel')) {
     const id = panelElement.dataset.panelId
     if (!id) continue
     const panel = panelById(id)
     const existing = panelElement.querySelector<HTMLElement>('.panel__label')
-    if (
-      !showMatchLabels ||
-      !panel?.url ||
-      !panelElement.classList.contains('panel--loaded') ||
-      dismissedMatchLabels.has(id)
-    ) {
+    const match =
+      showMatchLabels && panel?.url && panelElement.classList.contains('panel--loaded') && !dismissedMatchLabels.has(id)
+        ? panelMatch(id, now)
+        : null
+    if (!match) {
       existing?.remove()
       continue
     }
-    const title = panelTitles.get(id) ?? ''
-    const label = extractMatchLabel(title)
-    if (!label) {
-      existing?.remove()
-      continue
-    }
-    const width = panelElement.clientWidth || 1
-    const height = panelElement.clientHeight || 1
+    const scoreText = match.score ? formatScore(match.score) : ''
+    const previousScore = shownScores.get(id)
+    if (scoreText && previousScore && previousScore !== scoreText) scoreFlashUntil.set(id, now + SCORE_FLASH_MS)
+    if (scoreText) shownScores.set(id, scoreText)
+    const flashUntil = scoreFlashUntil.get(id) ?? 0
+    if (flashUntil && flashUntil <= now) scoreFlashUntil.delete(id)
+    const flashing = flashUntil > now
+
     const placement = placeMatchLabel({
-      panelWidth: width,
-      panelHeight: height,
+      panelWidth: panelElement.clientWidth || 1,
+      panelHeight: panelElement.clientHeight || 1,
       videoRect: panelVideoRects.has(id) ? panelVideoRects.get(id) ?? null : null,
-      label,
+      home: match.home,
+      away: match.away,
+      score: match.score,
     })
     const labelElement = existing ?? document.createElement('div')
     if (!existing) {
       labelElement.className = 'panel__label'
       panelElement.appendChild(labelElement)
     }
+    const label = `${match.home} x ${match.away}`
     labelElement.dataset.mode = placement.mode
+    labelElement.dataset.layout = placement.layout
     labelElement.dataset.label = label
+    labelElement.dataset.score = scoreText
+    labelElement.classList.toggle('panel__label--flash', flashing)
+    labelElement.setAttribute('aria-label', scoreText ? `${match.home} ${scoreText} ${match.away}` : label)
     labelElement.style.setProperty('--label-x', `${placement.box.x * 100}%`)
     labelElement.style.setProperty('--label-y', `${placement.box.y * 100}%`)
     labelElement.style.setProperty('--label-w', `${placement.box.width * 100}%`)
     labelElement.style.setProperty('--label-h', `${placement.box.height * 100}%`)
     labelElement.style.setProperty('--label-font', `${placement.fontPx}px`)
+
+    // Rebuild the content only when it changes, so the flash animation is not restarted by every poll.
+    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText].join('|')
+    if (labelElement.dataset.contentKey === contentKey) continue
+    labelElement.dataset.contentKey = contentKey
     const dismiss = ensureMatchLabelDismiss(labelElement, id)
-    const textNodes =
-      placement.mode === 'bar-side'
-        ? placement.lines.map((line) => {
-            const span = document.createElement('span')
-            span.className = 'panel__label-line'
-            span.textContent = line
-            span.setAttribute('aria-hidden', 'true')
-            return span
-          })
-        : [
-            (() => {
-              const span = document.createElement('span')
-              span.className = 'panel__label-text'
-              span.textContent = placement.lines[0] ?? label
-              span.setAttribute('aria-hidden', 'true')
-              return span
-            })(),
-          ]
-    labelElement.replaceChildren(dismiss, ...textNodes)
+    const chip = document.createElement('div')
+    chip.className = 'panel__label-chip'
+    chip.setAttribute('aria-hidden', 'true')
+    if (placement.layout === 'inline') {
+      chip.append(
+        labelSpan('panel__label-team', match.home),
+        labelSpan(match.score ? 'panel__label-score' : 'panel__label-vs', match.score ? scoreText : 'x'),
+        labelSpan('panel__label-team', match.away),
+      )
+    } else if (placement.mode === 'bar-side') {
+      chip.append(labelSpan('panel__label-team', match.home))
+      if (match.score) {
+        chip.append(labelSpan('panel__label-goals', String(match.score.home)), labelSpan('panel__label-goals', String(match.score.away)))
+      } else {
+        chip.append(labelSpan('panel__label-vs', 'x'))
+      }
+      chip.append(labelSpan('panel__label-team', match.away))
+    } else {
+      for (const [team, goals] of [[match.home, match.score?.home], [match.away, match.score?.away]] as const) {
+        const row = document.createElement('div')
+        row.className = 'panel__label-row'
+        row.append(labelSpan('panel__label-team', team))
+        if (goals !== undefined) row.append(labelSpan('panel__label-goals', String(goals)))
+        chip.append(row)
+      }
+    }
+    chip.append(dismiss)
+    labelElement.replaceChildren(chip)
   }
+  scheduleLabelRefresh(now)
 }
 
 function createPanel(): Panel {
@@ -236,11 +373,13 @@ function cloneSnapshot(): LayoutSnapshot {
 }
 
 function pushHistory() {
+  cancelAutoMode()
   captureDrafts()
   history = [...history.slice(-(HISTORY_LIMIT - 1)), cloneSnapshot()]
 }
 
 function restoreSnapshot(snapshot: LayoutSnapshot) {
+  cancelAutoMode()
   panels = snapshot.panels.map((panel) => ({ ...panel }))
   highlighted = new Set(snapshot.highlighted)
   layoutTree = snapshot.tree
@@ -252,6 +391,178 @@ function restoreSnapshot(snapshot: LayoutSnapshot) {
   pendingFocusPanelId = null
   render()
 }
+
+function stopAutoTimer() {
+  if (autoTimer !== null) window.clearInterval(autoTimer)
+  autoTimer = null
+}
+
+/** A manual layout change wins: forget the auto state and keep whatever is on screen as the new base. */
+function cancelAutoMode() {
+  if (autoEntries.length === 0 && !autoBaseline) return
+  autoEntries = []
+  autoBaseline = null
+  stopAutoTimer()
+  updateAutoControls()
+}
+
+function applyAutoLayout() {
+  const baseline = autoBaseline
+  if (!baseline) return
+  captureDrafts()
+  if (autoEntries.length === 0) {
+    autoBaseline = null
+    stopAutoTimer()
+    highlighted = new Set(baseline.highlighted)
+    highlightPosition = baseline.position
+    compositionVariant = baseline.variant
+    buildCurrentLayout(baseline.mode)
+  } else {
+    highlighted = new Set(composeHighlighted(autoEntries, baseline.highlighted, panels.length, panels.map((panel) => panel.id)))
+    highlightPosition = baseline.position
+    buildCurrentLayout('highlights')
+  }
+  renderGrid()
+}
+
+function updateAutoControls() {
+  const now = Date.now()
+  for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
+    const entry = autoEntries.find((item) => item.id === panelElement.dataset.panelId)
+    let controls = panelElement.querySelector<HTMLElement>(':scope > .panel__auto-controls')
+    if (!entry) {
+      controls?.remove()
+      continue
+    }
+    if (!controls) {
+      controls = document.createElement('div')
+      controls.className = 'panel__auto-controls'
+      controls.innerHTML = '<span class="panel__auto-count" data-auto-count></span><button type="button" class="btn btn--load" data-auto-pin title="Manter este jogo em destaque">📌 Fixar</button><button type="button" class="btn btn--ghost" data-auto-back title="Voltar ao layout anterior agora">↩ Voltar</button>'
+      panelElement.append(controls)
+    }
+    const count = controls.querySelector<HTMLElement>('[data-auto-count]')
+    const text = `Gol! ${secondsLeft(entry, now)} s`
+    if (count && count.textContent !== text) count.textContent = text
+  }
+}
+
+function tickAuto() {
+  const { autos, changed } = expireAutos(autoEntries, Date.now())
+  autoEntries = autos
+  if (changed) applyAutoLayout()
+  else updateAutoControls()
+}
+
+function startAutoGoal(panelId: PanelId) {
+  if (view !== 'grid' || panels.length < AUTO_MIN_PANELS || !getAlertSettings().autoHighlight) return
+  if (!autoBaseline) {
+    autoBaseline = { highlighted: [...highlighted], mode: layoutMode, position: highlightPosition, variant: compositionVariant }
+  }
+  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id))
+  autoEntries = result.autos
+  if (!result.highlighted) {
+    if (autoEntries.length === 0) autoBaseline = null
+    return
+  }
+  applyAutoLayout()
+  if (autoTimer === null) autoTimer = window.setInterval(tickAuto, 1000)
+}
+
+function pinAutoPanel(panelId: PanelId) {
+  if (!autoBaseline || !autoEntries.some((entry) => entry.id === panelId)) return
+  autoEntries = autoEntries.filter((entry) => entry.id !== panelId)
+  autoBaseline = { ...autoBaseline, highlighted: [panelId, ...autoBaseline.highlighted.filter((id) => id !== panelId)] }
+  applyAutoLayout()
+}
+
+function releaseAutoPanel(panelId: PanelId) {
+  if (!autoEntries.some((entry) => entry.id === panelId)) return
+  autoEntries = autoEntries.filter((entry) => entry.id !== panelId)
+  applyAutoLayout()
+}
+
+function liveDelayLabel(seconds: number) {
+  return seconds === 0 ? 'na hora' : `${seconds} s`
+}
+
+/** The "⏱ 30 s" button of a linked YouTube panel, kept with the panel's other top-left buttons so it never covers the player's own controls. */
+function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: LiveMatchStatus | undefined, globalSec: number | null) {
+  const controls = panelElement.querySelector<HTMLElement>(':scope > .panel__controls')
+  let button = controls?.querySelector<HTMLElement>(':scope > .panel__delay') ?? null
+  if (!controls || live?.status !== 'linked') {
+    button?.remove()
+    return
+  }
+  const own = panelDelayOverride.get(id)
+  const key = `${live.label}|${live.coverage}|${own ?? 'default'}|${globalSec}`
+  if (button?.dataset.key === key) return
+  if (!button) {
+    button = document.createElement('label')
+    button.className = 'btn btn--ghost panel__delay'
+    controls.insertBefore(button, controls.querySelector(':scope > .panel__remove'))
+  }
+  button.dataset.key = key
+  const effective = own ?? globalSec ?? 0
+  const defaultLabel = globalSec === null ? 'Padrão (placar oculto, alertas na hora)' : `Padrão (${liveDelayLabel(globalSec)})`
+  const coverage = live.coverage === 'score' ? ' · só placar' : ''
+  button.title = `Atraso do placar e dos alertas deste painel — 365Scores: ${live.label ?? ''}${coverage}`
+  button.classList.toggle('is-custom', own !== undefined)
+  button.innerHTML = `<svg class="panel__delay-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9" r="5.5" /><path d="M8 6.2V9l1.8 1.3M6.3 1.8h3.4" /></svg><span class="panel__delay-value" aria-hidden="true">${effective} s</span><select data-live-delay aria-label="Atraso do placar e dos alertas deste painel">
+      <option value="default"${own === undefined ? ' selected' : ''}>${escapeHtml(defaultLabel)}</option>
+      ${LIVE_DELAY_OPTIONS.map((value) => `<option value="${value}"${own === value ? ' selected' : ''}>${liveDelayLabel(value)}</option>`).join('')}
+    </select>`
+}
+
+/** Prompt to pick the game of an ambiguous YouTube title, and the delay button of a linked one. Idempotent, like the auto controls. */
+function updateLiveControls() {
+  const globalSec = getAlertSettings().scoreDelaySec
+  for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
+    const id = panelElement.dataset.panelId ?? ''
+    const live = panelById(id)?.url ? panelLive.get(id) : undefined
+    updateLiveDelayButton(panelElement, id, live, globalSec)
+    let prompt = panelElement.querySelector<HTMLElement>(':scope > .panel__live')
+    if (live?.status !== 'ambiguous') {
+      prompt?.remove()
+      continue
+    }
+    const key = (live.candidates ?? []).map((candidate) => candidate.id).join(',')
+    if (prompt?.dataset.key === key) continue
+    if (!prompt) {
+      prompt = document.createElement('div')
+      prompt.className = 'panel__live'
+      panelElement.append(prompt)
+    }
+    prompt.dataset.key = key
+    prompt.innerHTML = `<span class="panel__live-title">Qual jogo é este? (365Scores)</span>${(live.candidates ?? []).map((candidate) =>
+      `<button type="button" class="btn btn--load" data-live-choose="${candidate.id}" title="${escapeHtml(candidate.detail)}">${escapeHtml(candidate.label)}</button>`).join('')}<button type="button" class="btn btn--ghost" data-live-choose="none">Nenhum</button>`
+  }
+}
+
+/** Shows an alert now; a goal the VAR cancelled also undoes that panel's goal highlight. */
+function deliverMatchEvent(payload: MatchEventPayload) {
+  if (view !== 'grid') return
+  if (payload.kind === 'var' && payload.note === 'gol anulado') releaseAutoPanel(payload.panelId)
+  handleMatchEvent(payload, app, (panelId) => Boolean(panelById(panelId)))
+}
+
+app.addEventListener('click', (event) => {
+  const target = event.target as HTMLElement
+  const panelId = target.closest<HTMLElement>('.panel')?.dataset.panelId
+  if (!panelId) return
+  if (target.closest('[data-auto-pin]')) pinAutoPanel(panelId)
+  else if (target.closest('[data-auto-back]')) releaseAutoPanel(panelId)
+  const choice = target.closest<HTMLElement>('[data-live-choose]')?.dataset.liveChoose
+  if (choice) window.quadra?.chooseLiveMatch(panelId, choice === 'none' ? null : Number(choice))
+})
+app.addEventListener('change', (event) => {
+  const select = (event.target as HTMLElement).closest<HTMLSelectElement>('[data-live-delay]')
+  const panelId = select?.closest<HTMLElement>('.panel')?.dataset.panelId
+  if (!select || !panelId) return
+  if (select.value === 'default') panelDelayOverride.delete(panelId)
+  else panelDelayOverride.set(panelId, Number(select.value))
+  updateLiveControls()
+  updatePanelLabels()
+})
 
 function undo() {
   const previous = history.at(-1)
@@ -620,6 +931,197 @@ function useBllsportPlayer(panelId: PanelId, url: string) {
   )
 }
 
+type BatchSource = 'bll' | 'youtube'
+type BatchEvent = BllEvent & { channel?: string }
+type BatchLoad = { status: 'ok'; events: BatchEvent[] } | { status: 'error'; message: string }
+
+function applyBatch(urls: string[], source: BatchSource) {
+  if (view !== 'grid') return
+  const plan = planBatchOpen(panels, urls, MAX_PANELS)
+  if (plan.fill.length === 0 && plan.extra.length === 0) return
+  pushHistory()
+  for (const { panelId, url } of plan.fill) {
+    const panel = panelById(panelId)
+    if (!panel) continue
+    clearPanelMatchState(panelId)
+    panel.url = url
+    panel.draftUrl = url
+  }
+  panels = [...panels, ...plan.extra.map((url) => ({ ...createPanel(), url, draftUrl: url }))]
+  buildCurrentLayout()
+  renderGrid()
+  syncLayout()
+  if (source !== 'bll') return
+  const next = panels.find((panel) => !panel.url)
+  bllsportTargetId = next?.id ?? null
+  if (next) window.quadra?.setBllsportTarget(next.id, panelLabel(next.id))
+  else window.quadra?.setBllsportTarget(null)
+}
+
+/** From the start screen: one panel per chosen game, replacing whatever the grid held before. */
+function startWithGames(urls: string[]) {
+  const games = [...new Set(urls)].slice(0, MAX_PANELS)
+  if (games.length === 0) return
+  for (const panel of panels) clearPanelMatchState(panel.id)
+  panels = games.map((url) => ({ ...createPanel(), url, draftUrl: url }))
+  highlighted.clear()
+  layoutMode = 'auto'
+  highlightPosition = undefined
+  compositionVariant = undefined
+  buildCurrentLayout()
+  view = 'grid'
+  editorOpen = false
+  pendingFocusPanelId = null
+  render()
+}
+
+function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean) {
+  const open = new Set(fromChooser ? [] : panels.map((panel) => panel.url).filter(Boolean))
+  return groups.map((group, groupIndex) => `<fieldset class="bll-batch__group">
+    <legend><label><input type="checkbox" data-group="${groupIndex}"> ${escapeHtml(group.competition)} <span class="bll-batch__count">(${group.events.length})</span></label></legend>
+    ${group.events.map((event) => {
+      const isOpen = open.has(event.url)
+      return `<label class="bll-batch__item${isOpen ? ' is-open' : ''}"><input type="checkbox" data-url="${escapeHtml(event.url)}" data-group-item="${groupIndex}"${isOpen ? ' checked disabled' : ''}>
+        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}<span>${escapeHtml(event.name)}</span>${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
+    }).join('')}
+  </fieldset>`).join('')
+}
+
+const YOUTUBE_ERRORS: Record<Exclude<YoutubeLivesResult['status'], 'ok'>, string> = {
+  'no-key': 'Falta a chave da YouTube Data API. Coloque QUADRA_YOUTUBE_API_KEY=... no arquivo .env e clique em Atualizar lista.',
+  'invalid-key': 'A chave da YouTube Data API foi recusada. Confira QUADRA_YOUTUBE_API_KEY no .env e as restrições da chave no Google Cloud.',
+  'api-disabled': 'A YouTube Data API v3 não está ativada no projeto do Google Cloud desta chave.',
+  quota: 'A cota diária da YouTube Data API acabou. Ela volta à meia-noite do horário do Pacífico.',
+  unavailable: 'Não foi possível buscar as lives do YouTube. Confira a internet e clique em Atualizar lista.',
+}
+
+const BATCH_SOURCES: Record<BatchSource, { title: string; loading: string; empty: string; hint: string; load: () => Promise<BatchLoad> }> = {
+  bll: {
+    title: 'Abrir jogos da BLL',
+    loading: 'Lendo os jogos da BLL…',
+    empty: 'Nenhum jogo ao vivo na BLL agora. Jogos previstos só podem ser abertos quando começarem.',
+    hint: 'Marque a competição inteira ou só os jogos que quiser.',
+    load: async () => {
+      const result = await window.quadra?.listBllsportEvents()
+      if (!result) return { status: 'error', message: 'A BLL só está disponível no app do Quadra.' }
+      if (result.status === 'unavailable') return { status: 'error', message: 'Não foi possível ler os jogos da BLL. Clique em Atualizar lista; se continuar, abra a BLL em um painel e confira o login.' }
+      return { status: 'ok', events: result.events.filter((event) => event.live) }
+    },
+  },
+  youtube: {
+    title: 'Abrir jogos ao vivo do YouTube',
+    loading: 'Buscando lives de futebol no YouTube…',
+    empty: 'Nenhuma live de jogo de futebol encontrada no YouTube agora.',
+    hint: 'Marque o grupo inteiro ou só as lives que quiser.',
+    load: async () => {
+      const result = await window.quadra?.listYoutubeLives()
+      if (!result) return { status: 'error', message: 'A busca do YouTube só está disponível no app do Quadra.' }
+      if (result.status !== 'ok') return { status: 'error', message: YOUTUBE_ERRORS[result.status] }
+      return { status: 'ok', events: result.events }
+    },
+  },
+}
+
+function openBatch(source: BatchSource) {
+  const config = BATCH_SOURCES[source]
+  const fromChooser = view === 'choose'
+  document.querySelector('.confirm')?.remove()
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm bll-batch'
+  backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="bll-batch-title">
+    <p id="bll-batch-title" class="confirm__message">${config.title}</p>
+    <p class="bll-batch__status" role="status" aria-live="polite"></p>
+    <div class="bll-batch__list"></div>
+    <div class="confirm__actions">
+      <button type="button" class="btn btn--ghost" data-refresh>Atualizar lista</button>
+      <button type="button" class="btn btn--ghost" data-cancel>Cancelar</button>
+      <button type="button" class="btn btn--load" data-ok disabled>Abrir</button>
+    </div>
+  </div>`
+  const status = backdrop.querySelector<HTMLElement>('.bll-batch__status')!
+  const list = backdrop.querySelector<HTMLElement>('.bll-batch__list')!
+  const ok = backdrop.querySelector<HTMLButtonElement>('[data-ok]')!
+  const refresh = backdrop.querySelector<HTMLButtonElement>('[data-refresh]')!
+  const selectedUrls = () => [...list.querySelectorAll<HTMLInputElement>('input[data-url]:checked:not(:disabled)')].map((input) => input.dataset.url!)
+  const updateSelection = () => {
+    for (const groupBox of list.querySelectorAll<HTMLInputElement>('input[data-group]')) {
+      const items = [...list.querySelectorAll<HTMLInputElement>(`input[data-group-item="${groupBox.dataset.group}"]:not(:disabled)`)]
+      const checked = items.filter((item) => item.checked).length
+      groupBox.disabled = items.length === 0
+      groupBox.checked = items.length > 0 && checked === items.length
+      groupBox.indeterminate = checked > 0 && checked < items.length
+    }
+    const count = selectedUrls().length
+    const capacity = fromChooser ? MAX_PANELS : batchCapacity(panels, MAX_PANELS)
+    ok.disabled = count === 0 || count > capacity
+    ok.textContent = count === 0
+      ? 'Abrir'
+      : fromChooser
+        ? `Abrir ${count} ${count === 1 ? 'jogo' : 'jogos'} em ${count} ${count === 1 ? 'tela' : 'telas'}`
+        : `Abrir ${count} ${count === 1 ? 'jogo' : 'jogos'}`
+    if (list.childElementCount > 0) {
+      status.textContent = count > capacity
+        ? fromChooser
+          ? `Escolha no máximo ${MAX_PANELS} jogos (uma tela para cada).`
+          : `Cabem só mais ${capacity} ${capacity === 1 ? 'jogo' : 'jogos'} (máximo de ${MAX_PANELS} telas).`
+        : fromChooser
+          ? `${config.hint} Cada jogo ganha uma tela.`
+          : config.hint
+    }
+  }
+  const load = async () => {
+    status.textContent = config.loading
+    list.innerHTML = ''
+    updateSelection()
+    refresh.disabled = true
+    // A dev app whose main process predates this list has no handler; say so instead of spinning forever.
+    const result: BatchLoad = await config.load().catch(() => ({ status: 'error', message: 'Não foi possível buscar a lista. Se o app foi atualizado, feche e abra o Quadra de novo.' }))
+    if (!backdrop.isConnected) return
+    refresh.disabled = false
+    if (result.status === 'error') {
+      status.textContent = result.message
+      return
+    }
+    if (result.events.length === 0) {
+      status.textContent = config.empty
+      return
+    }
+    list.innerHTML = batchListHtml(groupByCompetition(result.events), fromChooser)
+    updateSelection()
+  }
+  const finish = () => {
+    document.removeEventListener('keydown', onKey)
+    backdrop.remove()
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    finish()
+  }
+  list.addEventListener('change', (event) => {
+    const input = event.target as HTMLInputElement
+    if (input.dataset.group !== undefined) {
+      for (const item of list.querySelectorAll<HTMLInputElement>(`input[data-group-item="${input.dataset.group}"]:not(:disabled)`)) {
+        item.checked = input.checked
+      }
+    }
+    updateSelection()
+  })
+  refresh.addEventListener('click', () => void load())
+  backdrop.querySelector('[data-cancel]')!.addEventListener('click', finish)
+  ok.addEventListener('click', () => {
+    const urls = selectedUrls()
+    finish()
+    if (fromChooser && view === 'choose') startWithGames(urls)
+    else applyBatch(urls, source)
+  })
+  backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
+  document.addEventListener('keydown', onKey)
+  document.body.appendChild(backdrop)
+  backdrop.querySelector<HTMLButtonElement>('[data-cancel]')?.focus()
+  void load()
+}
+
 function openAllPanels() {
   panels = panels.map((panel) => {
     const input = app.querySelector<HTMLInputElement>(`[data-panel-id="${CSS.escape(panel.id)}"] input[name="url"]`)
@@ -883,6 +1385,40 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
   })
 }
 
+function showReleaseNotes(release: Release) {
+  document.querySelector('.confirm')?.remove()
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm release-notes'
+  backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
+    <p class="release-notes__eyebrow">Quadra atualizado</p>
+    <h2 id="release-notes-title" class="confirm__message">Novidades da versão ${escapeHtml(release.label)}</h2>
+    <ul class="release-notes__list">${release.notes.map((note) => `<li><strong>${escapeHtml(note.title)}</strong><p>${escapeHtml(note.body)}</p></li>`).join('')}</ul>
+    <div class="confirm__actions"><button type="button" class="btn btn--load" data-ok>Entendi</button></div>
+  </div>`
+  const close = () => {
+    document.removeEventListener('keydown', onKey)
+    backdrop.remove()
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') close()
+  }
+  backdrop.querySelector('[data-ok]')!.addEventListener('click', close)
+  backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close() })
+  document.addEventListener('keydown', onKey)
+  document.body.appendChild(backdrop)
+  backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
+}
+
+/** Once per installed version, after an update (or a first install). `?release-notes=off|on` overrides for smokes. */
+function showReleaseNotesIfNew() {
+  const override = new URLSearchParams(location.search).get('release-notes')
+  if (window.quadra ? override === 'off' : override !== 'on') return
+  const release = releaseToShow(version, readLastSeenVersion())
+  if (!release) return
+  markVersionSeen(version)
+  showReleaseNotes(release)
+}
+
 function setChromeInteractive(interactive: boolean) {
   if (lastChromeInteractive === interactive) return
   lastChromeInteractive = interactive
@@ -1045,7 +1581,7 @@ function updateChromeHitTarget(x: number, y: number) {
     return
   }
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar, .panel__controls, .panel__overlay, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm')))
+  setChromeInteractive(Boolean(target?.closest('.toolbar, .back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm')))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -1083,6 +1619,43 @@ function scheduleToolbarHide() {
   }, TOOLBAR_IDLE_MS)
 }
 
+let backHideTimer: number | null = null
+
+function clearBackHideTimer() {
+  if (backHideTimer !== null) window.clearTimeout(backHideTimer)
+  backHideTimer = null
+}
+
+function setBackVisible(visible: boolean) {
+  const shell = app.querySelector<HTMLElement>('.grid-shell')
+  if (!shell) return
+  shell.classList.toggle('is-back-visible', visible)
+  // The top-left panel's own controls sit in the same corner: step aside while the button shows.
+  const corner = visible ? document.elementsFromPoint(4, 4).find((el) => el.classList.contains('panel')) : null
+  shell.querySelectorAll('.panel.has-back-button').forEach((el) => { if (el !== corner) el.classList.remove('has-back-button') })
+  corner?.classList.add('has-back-button')
+}
+
+function scheduleBackHide() {
+  clearBackHideTimer()
+  backHideTimer = window.setTimeout(() => {
+    backHideTimer = null
+    if (document.querySelector('.back-corner:hover, .back-corner:focus-visible, .confirm')) {
+      scheduleBackHide()
+      return
+    }
+    setBackVisible(false)
+  }, BACK_IDLE_MS)
+}
+
+/** Shown only while the mouse moves inside the top-left corner; hides 2 s after the last movement there. */
+function revealBack(event: MouseEvent) {
+  if (view !== 'grid') return
+  if (event.clientX > BACK_ZONE.width || event.clientY > BACK_ZONE.height) return
+  setBackVisible(true)
+  scheduleBackHide()
+}
+
 function revealToolbar() {
   if (view !== 'grid') return
   setToolbarVisible(true)
@@ -1108,6 +1681,7 @@ function bindToolbar() {
   // clicks through to a video. Re-enable input as soon as it reaches a control.
   document.addEventListener('mousemove', (event) => {
     revealToolbar()
+    revealBack(event)
     updateChromeHitTarget(event.clientX, event.clientY)
   }, { signal, passive: true })
   document.addEventListener('pointerdown', (event) => {
@@ -1134,6 +1708,8 @@ function bindMoreMenu() {
     panel.hidden = !open
   }
   trigger.addEventListener('click', (event) => { event.stopPropagation(); setOpen(panel.hasAttribute('hidden')) }, { signal })
+  app.querySelector('#btn-bll-batch')?.addEventListener('click', () => { setOpen(false); openBatch('bll') }, { signal })
+  app.querySelector('#btn-youtube-batch')?.addEventListener('click', () => { setOpen(false); openBatch('youtube') }, { signal })
   app.querySelector('#btn-equal')?.addEventListener('click', () => { makeEqual(); setOpen(false) }, { signal })
   app.querySelector('#btn-auto')?.addEventListener('click', () => { organizeAutomatically(); setOpen(false) }, { signal })
   app.querySelector('#btn-undo')?.addEventListener('click', () => { undo(); setOpen(false) }, { signal })
@@ -1142,6 +1718,7 @@ function bindMoreMenu() {
     setShowMatchLabels(!showMatchLabels)
     setOpen(false)
   }, { signal })
+  bindAlertControls(menu, signal)
   document.addEventListener('click', (event) => { if (!menu.contains(event.target as Node)) setOpen(false) }, { signal })
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false) }, { signal })
 }
@@ -1193,6 +1770,7 @@ function bindUpdateCheck(): void {
 }
 
 function renderChoose() {
+  cancelAutoMode()
   clearToolbarHideTimer()
   organizerDraft = null
   organizerChoices = []
@@ -1210,13 +1788,18 @@ function renderChoose() {
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><span>Adicione outras telas quando quiser.</span><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    ${alertControlsHtml('chooser')}
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
     </div>
   </div></main>`
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
+  app.querySelector<HTMLButtonElement>('#btn-start-bll-batch')?.addEventListener('click', () => openBatch('bll'))
+  app.querySelector<HTMLButtonElement>('#btn-start-youtube-batch')?.addEventListener('click', () => openBatch('youtube'))
+  app.querySelector<HTMLButtonElement>('#btn-release-notes')?.addEventListener('click', () => showReleaseNotes(RELEASES.find((release) => release.version === version) ?? RELEASES[0]))
   bindUpdateCheck()
+  bindAlertControls(app)
   app.querySelectorAll<HTMLButtonElement>('.chooser__card').forEach((button) => button.addEventListener('click', () => selectCount(Number(button.dataset.count))))
   scheduleSyncLayout()
 }
@@ -1348,6 +1931,7 @@ function updateOrganizerPanel(focusSelector?: string): void {
 function renderGrid() {
   cancelPanelDrag()
   clearToolbarHideTimer()
+  clearBackHideTimer()
   moreMenuAbort?.abort()
   moreMenuAbort = null
   toolbarAbort?.abort()
@@ -1356,22 +1940,25 @@ function renderGrid() {
   document.body.classList.add('is-grid')
   const canUndo = history.length > 0
   app.innerHTML = `<div class="grid-shell is-toolbar-visible${editorOpen ? ' is-editor-open' : ''}">
+    <button type="button" class="btn btn--ghost back-corner" id="btn-layout" aria-label="Voltar à escolha de telas">← Voltar</button>
     <div class="toolbar" role="toolbar" aria-label="Controles">
       <button type="button" class="btn btn--load" id="btn-open-all">Abrir todos</button>
       <button type="button" class="btn btn--ghost" id="btn-mute-all" aria-pressed="${allPanelsMuted()}">${allPanelsMuted() ? 'Ativar som de todos' : 'Mutar todos'}</button>
       <button type="button" class="btn btn--load" id="btn-add-panel"${panels.length >= MAX_PANELS ? ' disabled' : ''} aria-label="${panels.length >= MAX_PANELS ? `Limite de ${MAX_PANELS} telas atingido` : 'Adicionar uma tela'}" title="${panels.length >= MAX_PANELS ? `Limite de ${MAX_PANELS} telas atingido` : 'Adicionar uma tela'}">+ Adicionar tela</button>
       <button type="button" class="btn btn--danger" id="btn-remove-panel"${panels.length <= MIN_PANELS ? ' disabled' : ''} aria-label="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}" title="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}">- Remover tela</button>
       <button type="button" class="btn btn--ghost" id="btn-organize">${editorOpen ? 'Cancelar organização' : 'Organizar'}</button>
-      <button type="button" class="btn btn--ghost" id="btn-layout">Voltar</button>
       <label class="toolbar__count"><span>Telas <output id="panel-count-status" aria-live="polite">${panels.length}/${MAX_PANELS}</output></span><select id="panel-count" aria-label="Quantidade de telas">${Array.from({ length: MAX_PANELS }, (_, index) => `<option value="${index + 1}"${index + 1 === panels.length ? ' selected' : ''}>${index + 1}</option>`).join('')}</select></label>
       <button type="button" class="btn btn--ghost" id="btn-fullscreen">${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}</button>
-      <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon" id="btn-more" aria-label="Mais opções" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu">⋯</button>
+      <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon" id="btn-more" aria-label="Mais opções" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu"><svg viewBox="0 0 24 24" width="1.25rem" height="1.25rem" fill="currentColor" aria-hidden="true" focusable="false" style="display:block"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
+          <button type="button" class="btn btn--ghost" id="btn-bll-batch" role="menuitem">Abrir vários jogos da BLL…</button>
+          <button type="button" class="btn btn--ghost" id="btn-youtube-batch" role="menuitem">Abrir jogos ao vivo do YouTube…</button>
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
           <button type="button" class="btn btn--ghost" id="btn-equal" role="menuitem">Sem destaques</button>
           <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>
           <button type="button" class="btn btn--ghost" id="btn-undo" role="menuitem"${canUndo ? '' : ' disabled'}>Desfazer</button>
           <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">Limpar todos</button>
+          ${alertControlsHtml('menu')}
         </div>
       </div>
     </div>
@@ -1407,11 +1994,14 @@ function renderGrid() {
   bindToolbar()
   renderPanelElements()
   updatePanelLabels()
+  applyAlertStates(app)
+  updateAutoControls()
+  updateLiveControls()
   focusPendingPanel()
 }
 
 function render() {
-  if (view === 'choose') clearToolbarHideTimer()
+  if (view === 'choose') { clearToolbarHideTimer(); clearBackHideTimer() }
   moreMenuAbort?.abort()
   moreMenuAbort = null
   toolbarAbort?.abort()
@@ -1439,6 +2029,55 @@ window.quadra?.onPanelTitle(({ panelId, title }) => {
   } else {
     panelTitles.set(panelId, title)
   }
+  updatePanelLabels()
+})
+window.quadra?.onMatchScore(({ panelId, home, away, score }) => {
+  if (!panelById(panelId)) return
+  const parsed = parseScore(score)
+  if (!parsed) {
+    panelFeeds.delete(panelId)
+  } else {
+    const feed = panelFeeds.get(panelId) ?? { home: '', away: '', timeline: createScoreTimeline() }
+    feed.home = home
+    feed.away = away
+    pushScore(feed.timeline, Date.now(), parsed)
+    panelFeeds.set(panelId, feed)
+  }
+  updatePanelLabels()
+})
+onAlertSettingsChange(() => {
+  updateLiveControls()
+  updatePanelLabels()
+})
+onAlertShown((panelId, payload) => {
+  if (payload.kind === 'goal') startAutoGoal(panelId)
+})
+window.quadra?.onMatchEvent((payload) => {
+  if (view !== 'grid') return
+  // YouTube lives trail the data: hold the alert as long as the panel's score is held.
+  const delay = panelAlertDelayMs(payload.panelId)
+  if (delay <= 0) {
+    deliverMatchEvent(payload)
+    return
+  }
+  const timers = pendingAlerts.get(payload.panelId) ?? new Set<number>()
+  const timer = window.setTimeout(() => {
+    timers.delete(timer)
+    deliverMatchEvent(payload)
+  }, delay)
+  timers.add(timer)
+  pendingAlerts.set(payload.panelId, timers)
+})
+window.quadra?.onLiveMatch((status) => {
+  if (!panelById(status.panelId)) return
+  if (status.status === 'off') {
+    panelLive.delete(status.panelId)
+    panelDelayOverride.delete(status.panelId)
+    clearPendingAlerts(status.panelId)
+  } else {
+    panelLive.set(status.panelId, status)
+  }
+  updateLiveControls()
   updatePanelLabels()
 })
 window.quadra?.onPanelVideoRect(({ panelId, rect }) => {
@@ -1480,3 +2119,4 @@ document.addEventListener('scroll', scheduleSyncLayout, { capture: true, passive
 
 render()
 window.quadra?.ready()
+showReleaseNotesIfNew()

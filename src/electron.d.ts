@@ -1,4 +1,11 @@
+import type { BllEventsResult } from './bll-batch'
+import type { YoutubeLivesResult } from './youtube-lives'
 import type { LayoutPayload } from './layout'
+import type { AlertKind } from './match-events'
+import type { LiveMatchStatus } from './livescore-365'
+
+type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
 
 type QuadraBridge = {
   checkForUpdate: () => Promise<UpdateCheckResult>
@@ -11,6 +18,8 @@ type QuadraBridge = {
   setWeddbetsTarget: (panelId: string | null, label?: string) => void
   openBllsport: (panelId: string, label: string) => void
   setBllsportTarget: (panelId: string | null, label?: string) => void
+  listBllsportEvents: () => Promise<BllEventsResult>
+  listYoutubeLives: () => Promise<YoutubeLivesResult>
   onRequestLayout: (callback: () => void) => () => void
   onFullscreenChange: (callback: (on: boolean) => void) => () => void
   onWeddbetsPlayerOpened: (callback: (payload: { panelId: string; url: string }) => void) => () => void
@@ -19,6 +28,11 @@ type QuadraBridge = {
   onBllsportPlayerOpened: (callback: (payload: { panelId: string; url: string }) => void) => () => void
   onBllsportTargetRequired: (callback: () => void) => () => void
   onBllsportError: (callback: (payload: { message: string; panelId?: string; url?: string }) => void) => () => void
+  openMonitor: () => void
+  onMatchEvent: (callback: (payload: MatchEventPayload) => void) => () => void
+  onMatchScore: (callback: (payload: MatchScorePayload) => void) => () => void
+  onLiveMatch: (callback: (payload: LiveMatchStatus) => void) => () => void
+  chooseLiveMatch: (panelId: string, gameId: number | null) => void
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => () => void
   onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => () => void
 }

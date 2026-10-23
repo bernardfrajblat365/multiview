@@ -85,13 +85,48 @@ async function run() {
   assert.ok(fs.existsSync(mainPath), 'Bundle main não encontrado; execute npm run build.')
 
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-app-integration-'))
+  const youtubeTestKey = `AIza${'T'.repeat(35)}`
+  const youtubeQueries = []
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
     if (request.url?.startsWith('/bll/')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(`<!doctype html><title>BLL Test Catalog</title>
         <button id="game-a" onclick="window.open('/view/game-a?canal=2&title=' + encodeURIComponent('Time A x Time B'), 'game-a')">Jogo A</button>
-        <button id="game-b" onclick="window.open('/view/game-b?title=' + encodeURIComponent('Time C x Time D'), 'game-b')">Jogo B</button>`)
+        <button id="game-b" onclick="window.open('/view/game-b?title=' + encodeURIComponent('Time C x Time D'), 'game-b')">Jogo B</button>
+        <div id="app"></div>
+        <script>
+          // Mirrors the BLL home: a Vue 2 tree whose ListEventosHome2 holds the listed games.
+          const list = {
+            $options: { name: 'ListEventosHome2' }, $children: [],
+            itens: [
+              { _id: 'game-c', nome: 'Time E x Time F 🔊', competicao: 'Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
+              { _id: 'game-d', nome: 'Time G x Time H', competicao: 'Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
+              { _id: 'game-e', nome: 'Time I x Time J', competicao: 'Outra Liga', situacao: 3, dataHora: 18, dataMinuto: 30 },
+              { _id: 'game-f', nome: 'Time K x Time L', competicao: 'Liga Teste, Grupo A', situacao: 1, dataHora: 21, dataMinuto: 0 },
+            ],
+            formatarHora: (item) => String(item.dataHora).padStart(2, '0') + ':' + String(item.dataMinuto).padStart(2, '0'),
+          }
+          document.querySelector('#app').__vue__ = { $options: { name: 'App' }, $children: [list] }
+        </script>`)
+      return
+    }
+    if (request.url?.startsWith('/youtube/search')) {
+      youtubeQueries.push(Object.fromEntries(new URL(request.url, 'http://fixture').searchParams))
+      const video = (videoId, title, channelTitle, liveBroadcastContent = 'live') => ({ id: { videoId }, snippet: { title, channelTitle, liveBroadcastContent } })
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ items: [
+        video('ytLiveAAAA1', 'AO VIVO: Time M x Time N | Copa do Brasil', 'Canal Teste'),
+        video('ytLiveAAAA2', 'Time O x Time P &#39;ao vivo&#39;', 'Canal Dois'),
+        video('ytLiveAAAA3', 'REACT Time Q x Time R', 'Canal Teste'),
+        video('ytLiveAAAA4', 'Time S x Time T', 'Canal Teste', 'upcoming'),
+        video('ytLiveAAAA5', 'Resenha de segunda ao vivo', 'Canal Teste'),
+      ] }))
+      return
+    }
+    if (request.url?.startsWith('/watch')) {
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end(fs.readFileSync(path.join(__dirname, 'fixtures', 'youtube-watch.html')))
       return
     }
     if (request.url?.startsWith('/view/')) {
@@ -113,7 +148,10 @@ async function run() {
   delete childEnv.ELECTRON_RUN_AS_NODE
   const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
-    env: { ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` },
+    env: {
+      ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`,
+      QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube/search`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
+    },
   })
   try {
     const target = await waitForRendererTarget(port)
@@ -231,6 +269,90 @@ async function run() {
       document.querySelector('#btn-match-labels').click()
     })()`)
     await waitForExpression(target, `document.querySelectorAll('.panel__label').length >= 1`)
+
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('#btn-more').click()
+      document.querySelector('#btn-bll-batch').click()
+    })()`)
+    await waitForExpression(target, `document.querySelectorAll('.bll-batch__group').length === 2`, 20000)
+    const batchList = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const groups = [...document.querySelectorAll('.bll-batch__group')].map((group) => ({
+        title: group.querySelector('legend').textContent.replace(/\\s+/g, ' ').trim(),
+        items: [...group.querySelectorAll('.bll-batch__item')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim()),
+      }))
+      document.querySelector('.bll-batch input[data-group="0"]').click()
+      return { groups, ok: document.querySelector('.bll-batch [data-ok]').textContent }
+    })()`)
+    assert.deepEqual(batchList.groups, [
+      { title: 'Liga Teste, Grupo A (2)', items: ['17:00 Time E x Time F', '17:00 Time G x Time H'] },
+      { title: 'Outra Liga (1)', items: ['18:30 Time I x Time J'] },
+    ], 'O lote deve listar só jogos ao vivo, agrupados por competição e sem marcadores de som.')
+    assert.equal(batchList.ok, 'Abrir 2 jogos')
+    const playerIdsBeforeBatch = (await fetchJson(`http://127.0.0.1:${port}/json`))
+      .filter((candidate) => candidate.url.includes('/view/game-b')).map((candidate) => candidate.id).sort()
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-ok]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 4 && !document.querySelector('.bll-batch')`)
+    const batchPanels = await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => new URL(input.value).pathname)`)
+    assert.deepEqual(batchPanels.slice(2), ['/view/game-c', '/view/game-d'], 'O lote deve criar uma tela para cada jogo marcado.')
+    assert.ok(await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-c?view=clean')), 'O jogo C do lote não abriu.')
+    assert.ok(await waitForPageTarget(port, (candidate) => candidate.url.includes('/view/game-d?view=clean')), 'O jogo D do lote não abriu.')
+    assert.deepEqual((await fetchJson(`http://127.0.0.1:${port}/json`))
+      .filter((candidate) => candidate.url.includes('/view/game-b')).map((candidate) => candidate.id).sort(),
+    playerIdsBeforeBatch, 'Abrir em lote não pode recarregar os jogos que já estavam abertos.')
+
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('#btn-more').click()
+      document.querySelector('#btn-youtube-batch').click()
+    })()`)
+    await waitForExpression(target, `document.querySelectorAll('.bll-batch__group').length === 2`, 20000)
+    const youtubeList = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const groups = [...document.querySelectorAll('.bll-batch__group')].map((group) => ({
+        title: group.querySelector('legend').textContent.replace(/\\s+/g, ' ').trim(),
+        items: [...group.querySelectorAll('.bll-batch__item')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim()),
+        urls: [...group.querySelectorAll('input[data-url]')].map((input) => input.dataset.url),
+      }))
+      return { title: document.querySelector('#bll-batch-title').textContent, groups }
+    })()`)
+    assert.deepEqual(youtubeList, {
+      title: 'Abrir jogos ao vivo do YouTube',
+      groups: [
+        { title: 'Copa do Brasil (1)', items: ['AO VIVO: Time M x Time N | Copa do Brasil Canal Teste'], urls: ['https://www.youtube.com/watch?v=ytLiveAAAA1'] },
+        { title: 'Canal Dois (1)', items: ["Time O x Time P 'ao vivo'"], urls: ['https://www.youtube.com/watch?v=ytLiveAAAA2'] },
+      ],
+    }, 'O lote do YouTube deve listar só lives de jogos ao vivo, agrupadas por competição ou canal.')
+    assert.equal(youtubeQueries.length, 1)
+    assert.equal(youtubeQueries[0].key, youtubeTestKey, 'A chave deve vir do ambiente/.env, só no main.')
+    assert.equal(youtubeQueries[0].eventType, 'live')
+    assert.equal(youtubeQueries[0].videoCategoryId, '17')
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.documentElement.outerHTML.includes(${JSON.stringify(youtubeTestKey)})`), false,
+      'A chave do YouTube não pode chegar ao renderer.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-cancel]').click()`)
+    await waitForExpression(target, `!document.querySelector('.bll-batch')`)
+
+    // YouTube watch page: only the player, filling the panel, chat hidden, ad skipped.
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const panel = document.querySelector('.panel[data-slot="3"]')
+      panel.querySelector('[data-edit]').click()
+      panel.querySelector('.panel__overlay input[name="url"]').value = ${JSON.stringify(baseUrl + '/watch?v=fixture1')}
+      panel.querySelector('.panel__overlay .panel__bar').dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })()`)
+    const youtubePage = await waitForPageTarget(port, (candidate) => candidate.url.includes('/watch?v=fixture1'))
+    assert.ok(youtubePage, 'A página watch do YouTube não abriu.')
+    await wait(1500)
+    const youtubeState = await evaluate(youtubePage.webSocketDebuggerUrl, `(() => {
+      const rect = document.querySelector('#movie_player').getBoundingClientRect()
+      return {
+        skipClicks: window.__skipClicks,
+        adShowing: document.querySelector('#movie_player').classList.contains('ad-showing'),
+        chatDisplay: getComputedStyle(document.querySelector('#chat')).display,
+        mastheadDisplay: getComputedStyle(document.querySelector('#masthead-container')).display,
+        fills: Math.abs(rect.width - window.innerWidth) < 2 && Math.abs(rect.height - window.innerHeight) < 2,
+        videoVisible: document.querySelector('#movie_player video').getBoundingClientRect().height > 0,
+      }
+    })()`)
+    assert.deepEqual(youtubeState, { skipClicks: 1, adShowing: false, chatDisplay: 'none', mastheadDisplay: 'none', fills: true, videoVisible: true },
+      'O painel do YouTube deve mostrar só o player em tela cheia, sem chat, com o anúncio pulado.')
 
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('#btn-more').click()
@@ -383,7 +505,30 @@ async function run() {
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser'))`), true)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `getComputedStyle(document.documentElement).backgroundColor`), 'rgb(7, 26, 20)')
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `getComputedStyle(document.documentElement).colorScheme`), 'dark')
-    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+
+    await fetch(`http://127.0.0.1:${port}/json/close/${bllCatalog.id}`)
+    const catalogClosedDeadline = Date.now() + 10000
+    while (Date.now() < catalogClosedDeadline &&
+      (await fetchJson(`http://127.0.0.1:${port}/json`)).some((candidate) => candidate.id === bllCatalog.id)) await wait(100)
+    // With the visible catalog closed, the list still loads on its own (hidden BLL page) as soon as the dialog opens.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-bll-batch').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.bll-batch__group').length === 2`, 20000)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-refresh]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.bll-batch__group').length === 2 && !document.querySelector('.bll-batch [data-refresh]').disabled`, 20000)
+    const chooserBatch = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.bll-batch input[data-group="0"]').click()
+      return {
+        alreadyOpen: document.querySelectorAll('.bll-batch__item.is-open').length,
+        ok: document.querySelector('.bll-batch [data-ok]').textContent,
+      }
+    })()`)
+    assert.deepEqual(chooserBatch, { alreadyOpen: 0, ok: 'Abrir 2 jogos em 2 telas' })
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-ok]').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.grid--2')) && !document.querySelector('.bll-batch')`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => new URL(input.value).pathname)`),
+    ['/view/game-c', '/view/game-d'], 'Na tela inicial, o lote deve abrir uma tela por jogo escolhido.')
+    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

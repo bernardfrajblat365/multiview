@@ -503,6 +503,34 @@ async function run() {
     assert.equal(result.interactions.thirteenHasHeroQuadrant, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.removeChoosesOptimalPreviousCount, true, JSON.stringify(result.interactions))
     console.log(JSON.stringify(result))
+
+    const notesFile = path.join(projectRoot, 'out', 'renderer', 'index.html')
+    const readNotes = () => window.webContents.executeJavaScript(`(() => {
+      const dialog = document.querySelector('.release-notes')
+      return {
+        open: Boolean(dialog),
+        title: dialog?.querySelector('#release-notes-title')?.textContent ?? '',
+        items: dialog ? dialog.querySelectorAll('.release-notes__list li').length : 0,
+        focused: document.activeElement?.matches('.release-notes [data-ok]') ?? false,
+        listScrolls: dialog ? getComputedStyle(dialog.querySelector('.release-notes__list')).overflowY === 'auto' : false,
+        fitsViewport: dialog ? dialog.querySelector('.release-notes__dialog').getBoundingClientRect().bottom <= innerHeight : false,
+      }
+    })()`)
+    await window.loadFile(notesFile, { query: { 'release-notes': 'on' } })
+    const firstLaunch = await readNotes()
+    assert.equal(firstLaunch.open, true, JSON.stringify(firstLaunch))
+    assert.match(firstLaunch.title, /^Novidades da versão /)
+    assert.ok(firstLaunch.items > 0, JSON.stringify(firstLaunch))
+    assert.equal(firstLaunch.focused, true, JSON.stringify(firstLaunch))
+    assert.equal(firstLaunch.listScrolls && firstLaunch.fitsViewport, true, JSON.stringify(firstLaunch))
+    await window.webContents.executeJavaScript(`document.querySelector('.release-notes [data-ok]').click()`)
+    assert.equal((await readNotes()).open, false, 'Entendi fecha as novidades')
+    await window.loadFile(notesFile, { query: { 'release-notes': 'on' } })
+    assert.equal((await readNotes()).open, false, 'novidades aparecem só uma vez por versão')
+    await window.webContents.executeJavaScript(`document.querySelector('#btn-release-notes').click()`)
+    const reopened = await readNotes()
+    assert.equal(reopened.open && reopened.items === firstLaunch.items, true, 'botão Novidades reabre a lista')
+    console.log(JSON.stringify({ releaseNotes: firstLaunch }))
   } catch (error) {
     failed = true
     console.error(error)

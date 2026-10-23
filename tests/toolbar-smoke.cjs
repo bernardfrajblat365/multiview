@@ -380,18 +380,26 @@ async function worker() {
       '4x3': 'bar-side',
       '16x4': 'bar-bottom',
     }
+    // The expected modes need 16:9 panels with room for a 48 px side bar at 4:3, so the
+    // window gets a fixed 16:9 size instead of being maximized: CI screens are 1024x768.
+    const labelPanels = 4
     for (const [ratio, expectedMode] of Object.entries(expectedModes)) {
-      if (!main.isMaximized()) main.maximize()
-      await until(() => main.isMaximized(), `maximize before labels ${ratio}`)
-      await ui(`document.querySelector('[data-count="16"]').click()`)
+      if (main.isMaximized()) main.unmaximize()
+      // Windows may round the content size by a few pixels.
+      main.setContentSize(1024, 576)
+      await until(() => ui('Math.abs(innerWidth - 1024) <= 8 && Math.abs(innerHeight - 576) <= 8'), `16:9 window before labels ${ratio}`)
+      await ui(`document.querySelector('[data-count="${labelPanels}"]').click()`)
       await click('#btn-organize')
       await click('[data-composition="0"]')
       await click('[data-organize-apply]')
-      await openSportsFixtures(16, ratio, 'openvidu', { withTitles: true })
-      await until(async () => ui(`(() => {
-        const labels = [...document.querySelectorAll('.panel__label')]
-        return labels.length === 16 && labels.every((label) => label.dataset.mode === ${JSON.stringify(expectedMode)})
-      })()`), `16 labels mode ${expectedMode} for ${ratio}`, 12000)
+      await openSportsFixtures(labelPanels, ratio, 'openvidu', { withTitles: true })
+      const labelModes = () => ui(`[...document.querySelectorAll('.panel__label')].map((label) => label.dataset.mode)`)
+      await until(async () => {
+        const modes = await labelModes()
+        return modes.length === labelPanels && modes.every((mode) => mode === expectedMode)
+      }, `${labelPanels} labels mode ${expectedMode} for ${ratio}`, 12000).catch(async (error) => {
+        throw new Error(`${error.message}; modes ${JSON.stringify(await labelModes())}`)
+      })
 
       const report = await ui(`(() => {
         const panels = [...document.querySelectorAll('.panel.panel--loaded')]
@@ -413,7 +421,7 @@ async function worker() {
           }
         })
       })()`)
-      assert.equal(report.length, 16, `labels ${ratio}: expected 16 panels`)
+      assert.equal(report.length, labelPanels, `labels ${ratio}: expected ${labelPanels} panels`)
       for (const item of report) {
         assert.equal(item.mode, expectedMode, `labels ${ratio}: ${JSON.stringify(item)}`)
         assert.match(item.text, /Time \d+A x Time \d+B/)
@@ -474,15 +482,18 @@ async function worker() {
       await until(() => ui('document.querySelectorAll(".panel__label").length === 0'), `labels ${ratio}: toggle off`)
       await click('#btn-more')
       await click('#btn-match-labels')
-      await until(() => ui('document.querySelectorAll(".panel__label").length === 16'), `labels ${ratio}: toggle on`)
-      await capture(`labels-16-${ratio}`)
+      await until(() => ui(`document.querySelectorAll(".panel__label").length === ${labelPanels}`), `labels ${ratio}: toggle on`)
+      await capture(`labels-${labelPanels}-${ratio}`)
       await closeSportsFixtures(`labels ${ratio}`)
-      console.log(`PASS match labels 16 panels ${ratio} -> ${expectedMode}`)
+      console.log(`PASS match labels ${labelPanels} panels ${ratio} -> ${expectedMode}`)
     }
   }
   await runSportsGeometryScenarios()
   await runMatchLabelScenarios()
   async function click(selector) {
+    // The toolbar slides back in for 0.2 s after being hidden; clicking mid-slide hits nothing.
+    await ui("document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))")
+    await until(() => ui("!document.querySelector('.toolbar')?.getAnimations().length"), `${selector}: toolbar settled`, 2000)
     const result = await ui(`(() => {
       try {
         document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))

@@ -14,7 +14,7 @@ out
 artifacts/toolbar-checks
 artifacts/layout-study
 release
-release-*
+/release-*/
 *.local
 
 # Editor directories and files
@@ -27,3 +27,6 @@ release-*
 *.njsproj
 *.sln
 *.sw?
+.env
+.env.*
+!.env.example

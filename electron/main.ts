@@ -2,8 +2,24 @@ import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, session, W
 import electronUpdater from 'electron-updater'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
+import { parseBllEvents, type BllEventsResult } from '../src/bll-batch'
 import type { Bounds, LayoutPayload, PanelPayload } from '../src/layout'
+import { alertLabel, extractWilliamHillId } from '../src/match-events'
+import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
+import { createLiveScoreLinker } from './livescore-365'
+import { createScoreboardScanners } from './scoreboard-scanner'
+import {
+  createLoadPacer,
+  PLAYBACK_CHECK_INTERVAL_MS,
+  PLAYBACK_MAX_RETRIES,
+  PLAYBACK_TIMEOUT_MS,
+  PLAYER_LOAD_SPACING_MS,
+  playbackProbeScript,
+} from './player-start'
+import { getScannerLogBacklog, logScanner, onScannerLog } from './scanner-log'
+import { listYoutubeLives } from './youtube-search'
+import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSkipScript, youtubePlayerCss } from './youtube-player'
 import { createAutoUpdateController } from './update'
 
 const { autoUpdater } = electronUpdater
@@ -16,6 +32,9 @@ type SlotViewState = {
   cursorRevision: number
   videoRect?: NormVideoRect | null
   videoPollTimer?: ReturnType<typeof setInterval>
+  loadTimer?: ReturnType<typeof setTimeout>
+  playbackTimer?: ReturnType<typeof setInterval>
+  playbackRetries: number
 }
 
 const VIDEO_RECT_POLL_MS = 1500
@@ -212,6 +231,88 @@ const sportsCatalogs: Record<SportsCatalogId, SportsCatalog> = {
 }
 
 const slotViews = new Map<string, SlotViewState>()
+let monitorWindow: BrowserWindow | null = null
+const MATCH_DETECT_INTERVAL_MS = 2000
+const MATCH_DETECT_ATTEMPTS = 30
+/** Read-only: pulls the William Hill event id and match name out of the BLL player's Vue state. */
+const detectMatchScript = `(() => {
+  const root = document.querySelector('#app')
+  const find = (vm) => {
+    if (!vm) return null
+    if (vm.$options && vm.$options.name === 'ViewEvento') return vm
+    for (const child of vm.$children || []) { const hit = find(child); if (hit) return hit }
+    return null
+  }
+  const vm = find(root && root.__vue__)
+  const evento = vm && vm.item && vm.item.evento
+  if (!evento) return null
+  return { id: evento.williamHillId == null ? null : String(evento.williamHillId), nome: String(evento.nome || '') }
+})()`
+/** Read-only: copies id, name, competition, time and status of each listed game from the BLL home list. */
+const listEventsScript = `(() => {
+  const root = document.querySelector('#app')
+  const find = (vm) => {
+    if (!vm) return null
+    if (vm.$options && vm.$options.name === 'ListEventosHome2') return vm
+    for (const child of vm.$children || []) { const hit = find(child); if (hit) return hit }
+    return null
+  }
+  const vm = find(root && root.__vue__)
+  if (!vm || !Array.isArray(vm.itens)) return null
+  const time = (item) => {
+    try { return typeof vm.formatarHora === 'function' ? String(vm.formatarHora(item)) : '' } catch { return '' }
+  }
+  return vm.itens.map((item) => ({
+    id: String(item._id || ''),
+    name: String(item.nome || ''),
+    competition: String(item.competicao || ''),
+    time: time(item),
+    situation: Number(item.situacao),
+  }))
+})()`
+const scanners = createScoreboardScanners({
+  onEvent: ({ panelIds, incident, teamName, score }) => {
+    const label = alertLabel(incident.kind, teamName, incident.minute)
+    for (const panelId of panelIds) {
+      overlayWindow?.webContents.send('quadra:match-event', {
+        panelId,
+        kind: incident.kind,
+        teamName,
+        minute: incident.minute,
+        score,
+        ownGoal: incident.ownGoal,
+        note: incident.note,
+        label,
+      })
+    }
+  },
+  onScore: sendMatchScore,
+})
+/** YouTube panels: links the live to a 365Scores game by the teams in its title, then polls that game. */
+const liveScores = createLiveScoreLinker({
+  onEvent: ({ panelIds, incident, teamName, score, label }) => {
+    for (const panelId of panelIds) {
+      overlayWindow?.webContents.send('quadra:match-event', {
+        panelId,
+        kind: incident.kind,
+        teamName,
+        minute: incident.minute,
+        score,
+        ownGoal: incident.ownGoal,
+        note: incident.note,
+        label,
+      })
+    }
+  },
+  onScore: sendMatchScore,
+  onStatus: (status) => overlayWindow?.webContents.send('quadra:live-match', status),
+})
+
+function sendMatchScore({ panelIds, home, away, score }: { panelIds: string[]; home: string; away: string; score: string }) {
+  for (const panelId of panelIds) {
+    overlayWindow?.webContents.send('quadra:match-score', { panelId, home, away, score })
+  }
+}
 const testUserDataPath = process.env.QUADRA_TEST_USER_DATA
 if (testUserDataPath) app.setPath('userData', testUserDataPath)
 
@@ -267,7 +368,28 @@ function setNativeFullscreen(on: boolean) {
   mainWindow.setFullScreen(on)
 }
 
-function handleBeforeInput(event: Electron.Event, input: Electron.Input) {
+const ZOOM_STEP = 0.5
+const ZOOM_LIMIT = 3
+
+// Ctrl + / Ctrl - / Ctrl 0 on the overlay UI. Chromium only zooms out natively here
+// because the app has no menu with the zoom-in accelerator.
+function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
+  if (!overlayWindow || overlayWindow.isDestroyed() || contents !== overlayWindow.webContents) return false
+  if (!input.control || input.alt || input.type !== 'keyDown') return false
+  const key = input.key
+  let level: number
+  if (key === '+' || key === '=' || input.code === 'NumpadAdd') level = contents.getZoomLevel() + ZOOM_STEP
+  else if (key === '-' || key === '_' || input.code === 'NumpadSubtract') level = contents.getZoomLevel() - ZOOM_STEP
+  else if (key === '0' || input.code === 'Numpad0') level = 0
+  else return false
+  event.preventDefault()
+  contents.setZoomLevel(Math.max(-ZOOM_LIMIT, Math.min(ZOOM_LIMIT, level)))
+  contents.send('quadra:request-layout')
+  return true
+}
+
+function handleBeforeInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
+  if (handleZoomInput(event, input, contents)) return
   if (input.type !== 'keyDown' || (input.key !== 'Escape' && input.code !== 'Escape')) return
   if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFullScreen()) return
   event.preventDefault()
@@ -276,7 +398,7 @@ function handleBeforeInput(event: Electron.Event, input: Electron.Input) {
 
 function installNativeFullscreenHandlers() {
   app.on('web-contents-created', (_event, contents) => {
-    contents.on('before-input-event', handleBeforeInput)
+    contents.on('before-input-event', (event, input) => handleBeforeInput(event, input, contents))
   })
   app.on('browser-window-focus', scheduleFullscreenPrioritySync)
   app.on('browser-window-blur', scheduleFullscreenPrioritySync)
@@ -402,6 +524,75 @@ function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string
   void catalog.window.loadURL(catalog.homeUrl).catch(() => {})
 }
 
+const BLL_LIST_TIMEOUT_MS = 15000
+const BLL_LIST_POLL_MS = 400
+const BLL_LIST_IDLE_MS = 90000
+let bllListWindow: BrowserWindow | null = null
+let bllListIdleTimer: NodeJS.Timeout | null = null
+let bllListPending: Promise<BllEventsResult> | null = null
+
+function closeBllListWindow() {
+  if (bllListIdleTimer) clearTimeout(bllListIdleTimer)
+  bllListIdleTimer = null
+  if (bllListWindow && !bllListWindow.isDestroyed()) bllListWindow.destroy()
+  bllListWindow = null
+}
+
+/** Hidden BLL home on the shared `persist:quadra` session: the batch list is read here without showing the site. */
+function getBllListWindow() {
+  if (bllListWindow && !bllListWindow.isDestroyed()) return bllListWindow
+  bllListWindow = new BrowserWindow({
+    show: false,
+    width: 1180,
+    height: 820,
+    webPreferences: {
+      session: quadraSession!,
+      contextIsolation: true,
+      nodeIntegration: false,
+      sandbox: true,
+      backgroundThrottling: false,
+    },
+  })
+  const contents = bllListWindow.webContents
+  contents.setUserAgent(electronUserAgent)
+  contents.setAudioMuted(true)
+  contents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  contents.on('will-navigate', (event, url) => {
+    if (!isAllowedRemoteUrl(url)) event.preventDefault()
+  })
+  bllListWindow.on('closed', () => { bllListWindow = null })
+  return bllListWindow
+}
+
+async function readBllListRows(contents: Electron.WebContents) {
+  const deadline = Date.now() + BLL_LIST_TIMEOUT_MS
+  let rows: unknown = null
+  // The list component mounts before its games arrive, so wait for rows (an empty list stays empty until the deadline).
+  while (Date.now() < deadline) {
+    if (contents.isDestroyed()) return null
+    rows = await contents.executeJavaScript(listEventsScript).catch(() => null)
+    if (Array.isArray(rows) && rows.length > 0) return rows
+    await new Promise((resolve) => setTimeout(resolve, BLL_LIST_POLL_MS))
+  }
+  return Array.isArray(rows) ? rows : null
+}
+
+async function loadBllsportEvents(): Promise<BllEventsResult> {
+  const catalog = getSportsCatalog('bllsport')
+  const listWindow = getBllListWindow()
+  if (bllListIdleTimer) clearTimeout(bllListIdleTimer)
+  await listWindow.loadURL(catalog.homeUrl).catch(() => {})
+  const raw = await readBllListRows(listWindow.webContents)
+  bllListIdleTimer = setTimeout(closeBllListWindow, BLL_LIST_IDLE_MS)
+  if (!Array.isArray(raw)) return { status: 'unavailable' }
+  return { status: 'ok', events: parseBllEvents(raw, (id) => normalizeSportsPlayerUrl(catalog, `/view/${encodeURIComponent(id)}`)) }
+}
+
+function listBllsportEvents() {
+  bllListPending ??= loadBllsportEvents().finally(() => { bllListPending = null })
+  return bllListPending
+}
+
 function sanitizePanelTitle(title: string) {
   return title.replace(/[\u0000-\u001f\u007f]/g, '').trim().slice(0, MAX_PANEL_TITLE_LENGTH)
 }
@@ -457,9 +648,122 @@ function stopVideoRectPolling(state: SlotViewState) {
   state.videoPollTimer = undefined
 }
 
+const playerLoadPacer = createLoadPacer(PLAYER_LOAD_SPACING_MS)
+
+/** Loads a panel URL; sports players are spaced out so a batch does not start them all at once. */
+function loadSlotUrl(state: SlotViewState, url: string) {
+  if (state.loadTimer) clearTimeout(state.loadTimer)
+  state.loadTimer = undefined
+  const delay = matchSportsPlayerUrl(url) ? playerLoadPacer.reserve() : 0
+  const load = () => {
+    state.loadTimer = undefined
+    if (state.view.webContents.isDestroyed() || state.url !== url) return
+    void state.view.webContents.loadURL(url).catch(() => {})
+  }
+  if (delay > 0) state.loadTimer = setTimeout(load, delay)
+  else load()
+}
+
+function stopPlaybackWatch(state: SlotViewState) {
+  if (state.playbackTimer) clearInterval(state.playbackTimer)
+  state.playbackTimer = undefined
+}
+
+/** Reloads a sports player that loaded but never got its video running (black panel). */
+function startPlaybackWatch(state: SlotViewState, panelId: string) {
+  stopPlaybackWatch(state)
+  const startedAt = Date.now()
+  const timer = setInterval(() => {
+    const contents = state.view.webContents
+    if (contents.isDestroyed() || state.playbackTimer !== timer) return stopPlaybackWatch(state)
+    void contents.executeJavaScriptInIsolatedWorld(VIDEO_RECT_WORLD, [{ code: playbackProbeScript }])
+      .catch(() => false)
+      .then((playing) => {
+        if (state.playbackTimer !== timer || contents.isDestroyed()) return
+        if (playing === true) return stopPlaybackWatch(state)
+        if (Date.now() - startedAt < PLAYBACK_TIMEOUT_MS) return
+        stopPlaybackWatch(state)
+        const title = sanitizePanelTitle(contents.getTitle()) || state.url
+        if (state.playbackRetries >= PLAYBACK_MAX_RETRIES) {
+          logScanner(`[${panelId}] vídeo não iniciou após ${PLAYBACK_MAX_RETRIES} recargas: ${title}`)
+          return
+        }
+        state.playbackRetries += 1
+        logScanner(`[${panelId}] vídeo não iniciou; recarregando (${state.playbackRetries}/${PLAYBACK_MAX_RETRIES}): ${title}`)
+        loadSlotUrl(state, state.url)
+      })
+  }, PLAYBACK_CHECK_INTERVAL_MS)
+  state.playbackTimer = timer
+}
+
+const matchDetections = new Map<string, ReturnType<typeof setInterval>>()
+
+function stopMatchDetection(panelId: string) {
+  const timer = matchDetections.get(panelId)
+  if (timer) clearInterval(timer)
+  matchDetections.delete(panelId)
+  scanners.detach(panelId)
+  liveScores.detach(panelId)
+  overlayWindow?.webContents.send('quadra:match-score', { panelId, home: '', away: '', score: '' })
+}
+
+/** Finds which match a BLL panel is playing and hands its feed id to the scanner. */
+function startMatchDetection(contents: Electron.WebContents, panelId: string) {
+  stopMatchDetection(panelId)
+  let attempts = 0
+  const timer = setInterval(() => {
+    attempts += 1
+    if (contents.isDestroyed() || attempts > MATCH_DETECT_ATTEMPTS) {
+      clearInterval(timer)
+      matchDetections.delete(panelId)
+      if (!contents.isDestroyed()) {
+        const title = sanitizePanelTitle(contents.getTitle()) || contents.getURL()
+        logScanner(`[${panelId}] jogo sem feed de lances (williamHillId ausente): ${title}`)
+      }
+      return
+    }
+    void contents.executeJavaScript(detectMatchScript).then((found: { id?: string | null; nome?: string } | null) => {
+      if (!found || !matchDetections.has(panelId)) return
+      const eventId = extractWilliamHillId(found.id)
+      if (!eventId) return
+      clearInterval(timer)
+      matchDetections.delete(panelId)
+      scanners.attach(panelId, eventId, sanitizePanelTitle(found.nome ?? '') || `jogo ${eventId}`)
+    }).catch(() => {})
+  }, MATCH_DETECT_INTERVAL_MS)
+  matchDetections.set(panelId, timer)
+}
+
 function configureRemoteContents(contents: Electron.WebContents, slotId?: string) {
   contents.setUserAgent(electronUserAgent)
+  let youtubeCssKey: string | undefined
+  // YouTube is a SPA: re-evaluate on in-page navigation, and drop the CSS when leaving /watch.
+  const syncYoutubePlayer = async () => {
+    if (contents.isDestroyed()) return
+    if (isYoutubeWatchUrl(contents.getURL())) {
+      if (!youtubeCssKey) {
+        youtubeCssKey = await contents.insertCSS(youtubePlayerCss, { cssOrigin: 'user' }).catch(() => undefined)
+      }
+      await contents.executeJavaScriptInIsolatedWorld(YOUTUBE_WORLD, [{ code: youtubeAdSkipScript }]).catch(() => {})
+    } else if (youtubeCssKey) {
+      const key = youtubeCssKey
+      youtubeCssKey = undefined
+      await contents.removeInsertedCSS(key).catch(() => {})
+    }
+    if (slotId) {
+      const state = slotViews.get(slotId)
+      if (state) void measureSlotVideoRect(state, slotId)
+    }
+  }
+  contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
+    if (!isMainFrame) return
+    void syncYoutubePlayer()
+    // Leaving /watch inside YouTube's SPA: the live is gone, so is its 365Scores link.
+    if (slotId && !isYoutubeWatchUrl(url)) liveScores.detach(slotId)
+  })
   contents.on('did-finish-load', () => {
+    youtubeCssKey = undefined // full load clears inserted CSS
+    void syncYoutubePlayer()
     void contents.insertCSS(videoContainCss, { cssOrigin: 'user' }).catch(() => {})
     if (slotId) {
       const state = slotViews.get(slotId)
@@ -472,16 +776,24 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
     }
     if (!matchSportsPlayerUrl(contents.getURL())) return
     void contents.insertCSS(sportsPlayerCss, { cssOrigin: 'user' }).catch(() => {})
+    if (!slotId) return
+    startMatchDetection(contents, slotId)
+    const state = slotViews.get(slotId)
+    if (state) startPlaybackWatch(state, slotId)
   })
   if (slotId) {
     contents.on('page-title-updated', (_event, title) => {
       sendPanelTitle(slotId, title)
+      const url = contents.getURL()
+      if (isYoutubeWatchUrl(url)) liveScores.consider(slotId, url, sanitizePanelTitle(title))
     })
     contents.on('did-start-navigation', (details) => {
       if (!details.isMainFrame || details.isSameDocument) return
+      stopMatchDetection(slotId)
       sendPanelTitle(slotId, '')
       const state = slotViews.get(slotId)
       if (!state) return
+      stopPlaybackWatch(state)
       state.videoRect = undefined
       overlayWindow?.webContents.send('quadra:panel-video-rect', { panelId: slotId, rect: null })
     })
@@ -521,7 +833,10 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
 function destroySlotView(id: string) {
   const state = slotViews.get(id)
   if (!state) return
+  stopMatchDetection(id)
   stopVideoRectPolling(state)
+  stopPlaybackWatch(state)
+  if (state.loadTimer) clearTimeout(state.loadTimer)
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
   if (!state.view.webContents.isDestroyed()) state.view.webContents.close()
   slotViews.delete(id)
@@ -559,8 +874,50 @@ function destroyAllSlotViews() {
   for (const index of [...slotViews.keys()]) destroySlotView(index)
 }
 
+function openMonitorWindow() {
+  if (monitorWindow && !monitorWindow.isDestroyed()) {
+    if (monitorWindow.isMinimized()) monitorWindow.restore()
+    monitorWindow.show()
+    monitorWindow.focus()
+    return
+  }
+  monitorWindow = new BrowserWindow({
+    title: 'Quadra — Monitor de lances',
+    icon: appIconPath,
+    width: 760,
+    height: 480,
+    minWidth: 480,
+    minHeight: 280,
+    autoHideMenuBar: true,
+    backgroundColor: '#0b0f14',
+    webPreferences: {
+      contextIsolation: true,
+      nodeIntegration: false,
+      // The ESM preload cannot load in a sandboxed renderer; the page is local HTML with no remote content.
+      sandbox: false,
+      preload: join(__dirname, '../preload/monitor-preload.mjs'),
+    },
+  })
+  const window = monitorWindow
+  const stopListening = onScannerLog((line) => {
+    if (!window.isDestroyed()) window.webContents.send('quadra-monitor:line', line)
+  })
+  window.webContents.on('will-navigate', (event) => event.preventDefault())
+  window.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
+  window.on('closed', () => {
+    stopListening()
+    if (monitorWindow === window) monitorWindow = null
+  })
+  void window.loadURL(`data:text/html;charset=utf-8,${encodeURIComponent(monitorHtml)}`).catch(() => {})
+}
+
 function closeOwnedWindows() {
+  scanners.destroyAll()
+  liveScores.destroyAll()
+  for (const id of [...matchDetections.keys()]) stopMatchDetection(id)
+  if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
   destroyAllSlotViews()
+  closeBllListWindow()
   for (const catalog of Object.values(sportsCatalogs)) {
     if (catalog.window && !catalog.window.isDestroyed()) catalog.window.close()
   }
@@ -592,11 +949,11 @@ function createSlotView(id: string, url: string, muted: boolean) {
   configureRemoteContents(view.webContents, id)
   view.webContents.setAudioMuted(muted)
   mainWindow?.contentView.addChildView(view)
-  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined }
+  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0 }
   slotViews.set(id, state)
   startVideoRectPolling(state, id)
   void syncSlotCursor(state)
-  void view.webContents.loadURL(url).catch(() => {})
+  loadSlotUrl(state, url)
   return state
 }
 
@@ -667,14 +1024,16 @@ function applyLayout(payload: LayoutPayload) {
     } else if (state.url !== panel.url || panel.forceReload) {
       state.url = panel.url
       state.cursorCssKey = undefined
-      void state.view.webContents.loadURL(panel.url).catch(() => {})
+      state.playbackRetries = 0
+      loadSlotUrl(state, panel.url)
     }
     state.view.webContents.setAudioMuted(panel.muted)
+    const zoom = overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow.webContents.getZoomFactor() : 1
     state.view.setBounds({
-      x: Math.round(panel.bounds.x),
-      y: Math.round(panel.bounds.y),
-      width: Math.max(1, Math.round(panel.bounds.width)),
-      height: Math.max(1, Math.round(panel.bounds.height)),
+      x: Math.round(panel.bounds.x * zoom),
+      y: Math.round(panel.bounds.y * zoom),
+      width: Math.max(1, Math.round(panel.bounds.width * zoom)),
+      height: Math.max(1, Math.round(panel.bounds.height * zoom)),
     })
     state.view.setVisible(true)
     void measureSlotVideoRect(state, panel.id)
@@ -721,9 +1080,13 @@ function createOverlay() {
     scheduleFullscreenPrioritySync()
     overlayWindow?.webContents.send('quadra:request-layout')
   })
+  // Smokes run on a fresh profile; the "what's new" popup would cover the screens they click.
+  const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off' } : {}
+  const devUrl = new URL(process.env.ELECTRON_RENDERER_URL ?? 'http://localhost')
+  for (const [key, value] of Object.entries(query)) devUrl.searchParams.set(key, value)
   const load = isDev
-    ? overlayWindow.webContents.loadURL(process.env.ELECTRON_RENDERER_URL!)
-    : overlayWindow.webContents.loadFile(join(__dirname, '../renderer/index.html'))
+    ? overlayWindow.webContents.loadURL(devUrl.toString())
+    : overlayWindow.webContents.loadFile(join(__dirname, '../renderer/index.html'), { query })
   void load.catch(() => {})
 }
 
@@ -731,6 +1094,17 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:check-for-update', (event) => {
     if (!isUiSender(event)) throw new Error('Invalid update request sender')
     return autoUpdateController?.check() ?? 'disabled'
+  })
+  ipcMain.on('quadra:choose-live-match', (event, panelId: unknown, gameId: unknown) => {
+    if (!isUiSender(event) || typeof panelId !== 'string') return
+    if (gameId === null || (typeof gameId === 'number' && Number.isSafeInteger(gameId) && gameId > 0)) liveScores.choose(panelId, gameId)
+  })
+  ipcMain.on('quadra:open-monitor', (event) => {
+    if (isUiSender(event)) openMonitorWindow()
+  })
+  ipcMain.handle('quadra-monitor:backlog', (event) => {
+    if (!monitorWindow || monitorWindow.isDestroyed() || event.sender !== monitorWindow.webContents) return []
+    return getScannerLogBacklog()
   })
   ipcMain.on('quadra:ready', (event) => {
     if (isUiSender(event) && overlayReady) raiseOverlay()
@@ -778,6 +1152,14 @@ function installIpcHandlers() {
     }
     if (typeof id === 'string' && typeof label === 'string') setSportsCatalogTarget(catalog, id, label)
   })
+  ipcMain.handle('quadra:list-bllsport-events', (event) => {
+    if (!isUiSender(event)) return { status: 'unavailable' }
+    return listBllsportEvents()
+  })
+  ipcMain.handle('quadra:list-youtube-lives', (event) => {
+    if (!isUiSender(event)) return { status: 'unavailable' }
+    return listYoutubeLives()
+  })
 }
 
 function createWindow() {
@@ -818,9 +1200,13 @@ function createWindow() {
   })
   mainWindow.on('closed', () => {
     mainWindow = null
+    closeBllListWindow()
     for (const catalog of Object.values(sportsCatalogs)) {
       if (catalog.window && !catalog.window.isDestroyed()) catalog.window.close()
     }
+    scanners.destroyAll()
+    liveScores.destroyAll()
+    if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
     destroyAllSlotViews()
     scheduleFullscreenPrioritySync()
   })
@@ -843,6 +1229,7 @@ app.whenReady().then(async () => {
   )
   quadraSession = session.fromPartition('persist:quadra')
   quadraSession.setUserAgent(electronUserAgent)
+  quadraSession.webRequest.onBeforeRequest({ urls: YOUTUBE_AD_URL_PATTERNS }, (_details, callback) => callback({ cancel: true }))
   if (process.platform === 'win32') app.setAppUserModelId('com.quadra.multiview')
   installNativeFullscreenHandlers()
   installIpcHandlers()

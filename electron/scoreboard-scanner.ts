@@ -150,7 +150,7 @@ export function createScoreboardScanners(options: {
     if (scanner.destroyed || scanner.retryTimer) return
     const delay = Math.min(MAX_BACKOFF_MS, 5000 * 2 ** Math.min(scanner.retries, 4))
     scanner.retries += 1
-    logScanner(`[${scanner.label}] ${reason}; reconectando em ${Math.round(delay / 1000)} s`)
+    logScanner(`[${scanner.label}] ${reason}; reconectando em ${Math.round(delay / 1000)} s`, 'wh')
     scanner.retryTimer = setTimeout(() => {
       scanner.retryTimer = undefined
       if (!scanner.destroyed && !scanner.window.isDestroyed()) load(scanner)
@@ -173,7 +173,7 @@ export function createScoreboardScanners(options: {
       if (ok === true) {
         scanner.hooked = true
         scanner.retries = 0
-        logScanner(`[${scanner.label}] scanner conectado (feed WH ${scanner.eventId})`)
+        logScanner(`[${scanner.label}] scanner conectado (feed WH ${scanner.eventId})`, 'wh')
       }
     }
     const result = await contents.executeJavaScript(drainScript).catch(() => null) as {
@@ -199,12 +199,12 @@ export function createScoreboardScanners(options: {
     const queue = Array.isArray(result.queue) ? result.queue : []
     if (queue.length === 0) return
     const { fresh, ignored } = filterNew(scanner.state, queue)
-    if (ignored > 0) logScanner(`[${scanner.label}] ${ignored} lance(s) do histórico ignorado(s)`)
+    if (ignored > 0) logScanner(`[${scanner.label}] ${ignored} lance(s) do histórico ignorado(s)`, 'wh')
     for (const incident of fresh) {
       const teamName = incident.team === 'home' ? scanner.home : incident.team === 'away' ? scanner.away : ''
       // Feed timestamp vs. now: includes the feed's own delay and any clock skew, so treat it as approximate.
       const lag = incident.timestamp > 0 ? ` (feed→app ~${Math.max(0, (Date.now() - incident.timestamp) / 1000).toFixed(1)} s)` : ''
-      logScanner(`[${scanner.label}] ${incident.kind.toUpperCase()} ${incident.team} ${incident.minute}' ${teamName}${lag}`.trim())
+      logScanner(`[${scanner.label}] ${incident.kind.toUpperCase()} ${incident.team} ${incident.minute}' ${teamName}${lag}`.trim(), 'wh')
       options.onEvent({
         eventId: scanner.eventId,
         panelIds: [...scanner.panelIds],
@@ -289,7 +289,7 @@ export function createScoreboardScanners(options: {
     if (scanner.retryTimer) clearTimeout(scanner.retryTimer)
     if (!scanner.window.isDestroyed()) scanner.window.destroy()
     scanners.delete(scanner.eventId)
-    logScanner(`[${scanner.label}] scanner encerrado (nenhum painel usa este jogo)`)
+    logScanner(`[${scanner.label}] scanner encerrado (nenhum painel usa este jogo)`, 'wh')
   }
 
   function detach(panelId: string) {
@@ -314,7 +314,7 @@ export function createScoreboardScanners(options: {
     panelToEvent.set(panelId, eventId)
     // A panel joining a running scanner gets the current score right away.
     publishScore(scanner, [panelId], true)
-    logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (WH ${eventId})`)
+    logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (WH ${eventId})`, 'wh')
   }
 
   function destroyAll() {

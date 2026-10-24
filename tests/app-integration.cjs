@@ -87,6 +87,7 @@ async function run() {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-app-integration-'))
   const youtubeTestKey = `AIza${'T'.repeat(35)}`
   const youtubeQueries = []
+  let detailRequests = 0
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
     if (request.url?.startsWith('/bll/')) {
@@ -111,18 +112,36 @@ async function run() {
         </script>`)
       return
     }
-    if (request.url?.startsWith('/youtube/search')) {
-      youtubeQueries.push(Object.fromEntries(new URL(request.url, 'http://fixture').searchParams))
-      const video = (videoId, title, channelTitle, liveBroadcastContent = 'live') => ({ id: { videoId }, snippet: { title, channelTitle, liveBroadcastContent } })
-      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ items: [
-        video('ytLiveAAAA1', 'AO VIVO: Time M x Time N | Copa do Brasil', 'Canal Teste'),
-        video('ytLiveAAAA2', 'Time O x Time P &#39;ao vivo&#39;', 'Canal Dois'),
-        video('ytLiveAAAA3', 'REACT Time Q x Time R', 'Canal Teste'),
-        video('ytLiveAAAA4', 'Time S x Time T', 'Canal Teste', 'upcoming'),
-        video('ytLiveAAAA5', 'Resenha de segunda ao vivo', 'Canal Teste'),
-      ] }))
-      return
+    if (request.url?.startsWith('/youtube/')) {
+      const requestUrl = new URL(request.url, 'http://fixture')
+      const params = Object.fromEntries(requestUrl.searchParams)
+      youtubeQueries.push({ path: requestUrl.pathname, ...params })
+      const json = (body, status = 200) => {
+        response.writeHead(status, { 'content-type': 'application/json; charset=utf-8' })
+        response.end(JSON.stringify(body))
+      }
+      const live = { actualStartTime: '2026-10-24T18:00:00Z', concurrentViewers: '100' }
+      const videos = {
+        ytLiveAAAA1: { snippet: { title: 'AO VIVO: Time M x Time N | Copa do Brasil', channelTitle: 'CazéTV', liveBroadcastContent: 'live' }, liveStreamingDetails: { ...live, concurrentViewers: '900' } },
+        ytLiveAAAA2: { snippet: { title: 'Time O x Time P &#39;ao vivo&#39;', channelTitle: 'CazéTV', liveBroadcastContent: 'live' }, liveStreamingDetails: live },
+        ytLiveAAAA3: { snippet: { title: 'REACT Time Q x Time R', channelTitle: 'CazéTV', liveBroadcastContent: 'live' }, liveStreamingDetails: live },
+        ytLiveAAAA4: { snippet: { title: 'Time S x Time T', channelTitle: 'CazéTV', liveBroadcastContent: 'upcoming' }, liveStreamingDetails: {} },
+        ytLiveAAAA5: { snippet: { title: 'Time U x Time V', channelTitle: 'CazéTV', liveBroadcastContent: 'none' }, liveStreamingDetails: { ...live, actualEndTime: '2026-10-24T20:00:00Z' } },
+        ytLiveAAAA6: { snippet: { title: 'AO VIVO: Time W x Time Z', channelTitle: 'Canal Teste', liveBroadcastContent: 'live' }, liveStreamingDetails: live },
+      }
+      if (requestUrl.pathname === '/youtube/playlistItems') {
+        // CazéTV (default list) and the channel added in the test have uploads; other default channels answer 404.
+        const uploads = { UUZiYbVptd3PVPf4f6eR6UaQ: ['ytLiveAAAA1', 'ytLiveAAAA2', 'ytLiveAAAA3', 'ytLiveAAAA4', 'ytLiveAAAA5'], UUtestChannelAAAAAAAAAAA: ['ytLiveAAAA6'] }[params.playlistId]
+        if (!uploads) return json({ error: { code: 404, errors: [{ reason: 'playlistNotFound' }] } }, 404)
+        return json({ items: uploads.map((videoId) => ({ contentDetails: { videoId } })) })
+      }
+      if (requestUrl.pathname === '/youtube/videos') {
+        return json({ items: params.id.split(',').filter((id) => videos[id]).map((id) => ({ id, ...videos[id] })) })
+      }
+      if (requestUrl.pathname === '/youtube/channels') {
+        return json({ items: params.forHandle === 'canalteste' ? [{ id: 'UCtestChannelAAAAAAAAAAA', snippet: { title: 'Canal Teste' } }] : [] })
+      }
+      return json({}, 404)
     }
     if (request.url?.startsWith('/web/games/')) {
       // game-b has no William Hill feed: its BLL panel falls back to this 365Scores game.
@@ -134,6 +153,9 @@ async function run() {
       return
     }
     if (request.url?.startsWith('/web/game/')) {
+      // The first detail request hangs, like the API's occasional stall: the app must give up and retry at once.
+      detailRequests += 1
+      if (detailRequests === 1) return
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ game: {
         id: 9001, statusGroup: 3, gameTime: 30, events: [],
@@ -167,7 +189,7 @@ async function run() {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
     env: {
       ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl,
-      QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube/search`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
+      QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
     },
   })
   try {
@@ -235,6 +257,13 @@ async function run() {
     // No William Hill feed in game-b: the panel links to the 365Scores game named by the player instead.
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__delay')?.title.includes('365Scores: Coritiba x Avaí') === true`)
+    // The score arrives although the first detail request hung (old timing: 8 s timeout + 6 s backoff).
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.score === '1 – 0'`, 9000).catch(async (error) => {
+      const label = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ ...document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset })`)
+      throw new Error(`${error.message}; rótulo: ${label}; consultas ao detalhe: ${detailRequests}`)
+    })
+    assert.ok(detailRequests >= 2, 'O detalhe travado precisa ser consultado de novo.')
 
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       const source = document.querySelector('.panel[data-slot="0"]')
@@ -290,6 +319,36 @@ async function run() {
     })()`)
     await waitForExpression(target, `document.querySelectorAll('.panel__label').length >= 1`)
 
+    const reloadOrder = await evaluate(target.webSocketDebuggerUrl, `[...document.querySelectorAll('.panel[data-slot="0"] .panel__controls > button')]
+      .map((button) => button.dataset.edit !== undefined ? 'edit' : button.dataset.reload !== undefined ? 'reload' : button.dataset.alerts !== undefined ? 'alerts' : button.dataset.remove !== undefined ? 'remove' : null)
+      .filter(Boolean)`)
+    assert.deepEqual(reloadOrder, ['edit', 'reload', 'alerts', 'remove'], 'Recarregar fica entre editar URL e alertas; alertas logo antes de remover tela.')
+    const alertsToggle = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const button = () => document.querySelector('.panel[data-slot="0"] [data-alerts]')
+      button().click()
+      const off = button().getAttribute('aria-pressed')
+      button().click()
+      return { off, on: button().getAttribute('aria-pressed') }
+    })()`)
+    assert.deepEqual(alertsToggle, { off: 'true', on: 'false' }, 'O botão de alertas deve desligar e religar os alertas do painel.')
+    const players = (await fetchJson(`http://127.0.0.1:${port}/json`)).filter((candidate) => candidate.url.includes('/view/game-'))
+    assert.ok(players.length >= 2, 'O teste de recarregar precisa de pelo menos dois players abertos.')
+    for (const player of players) await evaluate(player.webSocketDebuggerUrl, `window.__quadraReloadMark = true`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-reload]').click()`)
+    const reloadDeadline = Date.now() + 10000
+    let reloaded = []
+    while (Date.now() < reloadDeadline) {
+      reloaded = []
+      for (const player of players) {
+        if (await evaluate(player.webSocketDebuggerUrl, `window.__quadraReloadMark === true`).catch(() => true) === false) reloaded.push(player.url)
+      }
+      if (reloaded.length > 0) break
+      await wait(100)
+    }
+    await wait(300)
+    assert.equal(reloaded.length, 1, 'Recarregar deve recarregar só a página do próprio painel, sem recriar a view.')
+    assert.ok(reloaded[0].includes('/view/game-b'), 'Recarregar atingiu o player errado.')
+
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('#btn-more').click()
       document.querySelector('#btn-bll-batch').click()
@@ -337,17 +396,44 @@ async function run() {
     assert.deepEqual(youtubeList, {
       title: 'Abrir jogos ao vivo do YouTube',
       groups: [
-        { title: 'Copa do Brasil (1)', items: ['AO VIVO: Time M x Time N | Copa do Brasil Canal Teste'], urls: ['https://www.youtube.com/watch?v=ytLiveAAAA1'] },
-        { title: 'Canal Dois (1)', items: ["Time O x Time P 'ao vivo'"], urls: ['https://www.youtube.com/watch?v=ytLiveAAAA2'] },
+        { title: 'Copa do Brasil (1)', items: ['AO VIVO: Time M x Time N | Copa do Brasil CazéTV'], urls: ['https://www.youtube.com/watch?v=ytLiveAAAA1'] },
+        { title: 'CazéTV (1)', items: ["Time O x Time P 'ao vivo'"], urls: ['https://www.youtube.com/watch?v=ytLiveAAAA2'] },
       ],
-    }, 'O lote do YouTube deve listar só lives de jogos ao vivo, agrupadas por competição ou canal.')
-    assert.equal(youtubeQueries.length, 1)
-    assert.equal(youtubeQueries[0].key, youtubeTestKey, 'A chave deve vir do ambiente/.env, só no main.')
-    assert.equal(youtubeQueries[0].eventType, 'live')
-    assert.equal(youtubeQueries[0].videoCategoryId, '17')
+    }, 'O lote do YouTube deve listar só jogos ao vivo dos canais da lista, agrupados por competição ou canal.')
+    const playlistQueries = youtubeQueries.filter((query) => query.path === '/youtube/playlistItems')
+    assert.equal(playlistQueries.length, 10, 'A lista padrão tem 10 canais, um playlistItems por canal.')
+    assert.ok(playlistQueries.some((query) => query.playlistId === 'UUZiYbVptd3PVPf4f6eR6UaQ'), 'A playlist de uploads é o id do canal com UU no lugar de UC.')
+    assert.ok(youtubeQueries.every((query) => query.key === youtubeTestKey), 'A chave deve vir do ambiente/.env, só no main.')
+    assert.equal(youtubeQueries.some((query) => query.path === '/youtube/search'), false, 'Sem busca aberta (100 unidades).')
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.documentElement.outerHTML.includes(${JSON.stringify(youtubeTestKey)})`), false,
       'A chave do YouTube não pode chegar ao renderer.')
-    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-cancel]').click()`)
+
+    // Channel editor: add by @handle, remove, and the list is searched again on the way back.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-channels]').click()`)
+    await waitForExpression(target, `!document.querySelector('.yt-channels').hidden && document.querySelector('.bll-batch__list').hidden`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelectorAll('.yt-channels__list li').length`), 10)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.yt-channels__add input').value = 'https://www.youtube.com/@canalteste/streams'
+      document.querySelector('.yt-channels__add button').click()
+    })()`)
+    await waitForExpression(target, `document.querySelectorAll('.yt-channels__list li').length === 11`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.yt-channels__add input').value = '@naoexiste'
+      document.querySelector('.yt-channels__add button').click()
+    })()`)
+    await waitForExpression(target, `document.querySelector('.yt-channels__message').textContent.startsWith('Canal não encontrado')`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.yt-channels [data-remove="UCZiYbVptd3PVPf4f6eR6UaQ"]').click()`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `JSON.parse(localStorage.getItem('quadra:youtube-channels')).map((channel) => channel.title).slice(-2)`),
+      ['N Sports', 'Canal Teste'], 'A lista de canais fica salva no app.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-channels]').click()`)
+    await waitForExpression(target, `document.querySelector('.bll-batch__item')?.textContent.includes('Time W x Time Z')`, 20000)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch__list').textContent.includes('Time M x Time N')`), false,
+      'O canal removido não é mais lido.')
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.bll-batch [data-channels]').click()
+      document.querySelector('.yt-channels [data-restore]').click()
+      document.querySelector('.bll-batch [data-cancel]').click()
+    })()`)
     await waitForExpression(target, `!document.querySelector('.bll-batch')`)
 
     // YouTube watch page: only the player, filling the panel, chat hidden, ad skipped.

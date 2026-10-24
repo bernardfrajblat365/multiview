@@ -1,6 +1,6 @@
 export type NormRect = { x: number; y: number; width: number; height: number }
 
-export type MatchLabelMode = 'bar-bottom' | 'bar-top' | 'bar-side' | 'overlay-bottom'
+export type MatchLabelMode = 'bar-bottom' | 'bar-top' | 'overlay-bottom'
 
 /** `inline`: "Home 2 – 1 Away" on one line. `stacked`: one row per team, scoreboard style. */
 export type MatchLabelLayout = 'inline' | 'stacked'
@@ -25,10 +25,10 @@ const MIN_FONT_PX = 11
 const MAX_FONT_PX = 22
 /** Text may shrink below the panel font to fit a thin black bar, but not past this. */
 const MIN_FIT_FONT_PX = 10
-const MAX_OVERLAY_FONT_PX = 26
+/** The caption grows with the panel, so a highlighted game reads from across the room. */
+const MAX_OVERLAY_FONT_PX = 36
 /** Height above the text line(s) reserved for the caption's gradient fade, in em. */
 const OVERLAY_FADE_EM = 1.1
-const MIN_SIDE_BAR_PX = 48
 const REFERENCE_ASPECT = 16 / 9
 /** Conservative average advance of a bold sans glyph, in em. Over-estimating only drops a tier. */
 const CHAR_EM = 0.6
@@ -165,10 +165,6 @@ function stackedWidthEm(home: string, away: string, hasScore: boolean) {
   return CHAR_EM * Math.max(home.length, away.length) + (hasScore ? 1.8 : 0) + CHROME_EM
 }
 
-function longestWord(value: string) {
-  return value.split(/\s+/).reduce((max, word) => Math.max(max, word.length), 0)
-}
-
 type Fit = { layout: MatchLabelLayout; fontPx: number }
 
 /** Largest font (≤ preferred) that fits the full names in a horizontal box: one line first, then two rows. */
@@ -180,26 +176,16 @@ function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, h
   return null
 }
 
-/** Side bar: names wrap word by word in a narrow column, score in between. */
-function fitSide(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean): number | null {
-  const byWord = widthPx / (CHAR_EM * Math.max(longestWord(home), longestWord(away), hasScore ? 3 : 1) + 0.6)
-  for (let fontPx = Math.min(preferredPx, byWord); fontPx >= MIN_FIT_FONT_PX; fontPx -= 0.5) {
-    const innerEm = Math.max(1, widthPx / fontPx - 0.6)
-    const lines = (name: string) => Math.max(1, Math.ceil((CHAR_EM * name.length) / innerEm))
-    const totalLines = lines(home) + lines(away) + (hasScore ? 2 : 1) + 1
-    if (totalLines * LINE_EM * fontPx <= heightPx * 0.92) return fontPx
-  }
-  return null
-}
-
 function roundFont(value: number) {
   return Math.round(value * 10) / 10
 }
 
 /**
  * Picks where the match name (and score) goes, always with the full team names:
- * the bottom or top black bar, then a side bar, then a caption with a dark
- * gradient across the bottom of the video. Thin bars shrink the text or split it in two rows before giving up.
+ * the bottom or top black bar, otherwise a caption with a dark gradient across the
+ * bottom of the video (also when the video only has side bars: a column of names
+ * beside a large highlighted video read poorly). Thin bars shrink the text or split
+ * it in two rows before giving up.
  */
 export function placeMatchLabel(options: {
   panelWidth: number
@@ -216,12 +202,9 @@ export function placeMatchLabel(options: {
   const preferredPx = clamp(panelHeight * 0.05, MIN_FONT_PX, MAX_FONT_PX)
   const videoRect = options.videoRect ?? containRect(panelWidth, panelHeight, REFERENCE_ASPECT)
   const videoBottom = videoRect.y + videoRect.height
-  const videoRight = videoRect.x + videoRect.width
   const barWidthPx = videoRect.width * panelWidth
   const topBarPx = videoRect.y * panelHeight
   const bottomBarPx = (1 - videoBottom) * panelHeight
-  const leftBarPx = videoRect.x * panelWidth
-  const rightBarPx = (1 - videoRight) * panelWidth
 
   const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore) : null
   const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore) : null
@@ -244,21 +227,7 @@ export function placeMatchLabel(options: {
     }
   }
 
-  const useLeft = leftBarPx >= rightBarPx
-  const sideBarPx = useLeft ? leftBarPx : rightBarPx
-  const sideFont = sideBarPx >= MIN_SIDE_BAR_PX ? fitSide(sideBarPx, panelHeight, preferredPx, home, away, hasScore) : null
-  if (sideFont !== null) {
-    return {
-      mode: 'bar-side',
-      layout: 'stacked',
-      box: useLeft
-        ? { x: 0, y: 0, width: videoRect.x, height: 1 }
-        : { x: videoRight, y: 0, width: 1 - videoRight, height: 1 },
-      fontPx: roundFont(sideFont),
-    }
-  }
-
-  // No usable black bar: a caption across the bottom of the video, over a dark gradient,
+  // No usable top/bottom bar: a caption across the bottom of the video, over a dark gradient,
   // so it stays legible and can use a larger font than a corner chip.
   const maxWidthPx = Math.max(1, videoRect.width * panelWidth)
   const overlayPreferred = clamp(panelHeight * 0.06, MIN_FIT_FONT_PX, MAX_OVERLAY_FONT_PX)

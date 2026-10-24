@@ -18,7 +18,7 @@ import {
   playbackProbeScript,
 } from './player-start'
 import { getScannerLogBacklog, logScanner, onScannerLog } from './scanner-log'
-import { listYoutubeLives } from './youtube-search'
+import { listYoutubeLives, resolveYoutubeChannel } from './youtube-search'
 import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSkipScript, youtubePlayerCss } from './youtube-player'
 import { createAutoUpdateController } from './update'
 
@@ -719,7 +719,7 @@ function startMatchDetection(contents: Electron.WebContents, panelId: string) {
   const startFallback = (name: string) => {
     if (fallback || contents.isDestroyed()) return
     fallback = true
-    logScanner(`[${panelId}] jogo sem feed de lances (williamHillId ausente); buscando no 365Scores: ${name || contents.getURL()}`)
+    logScanner(`[${panelId}] jogo sem feed de lances (williamHillId ausente); buscando no 365Scores: ${name || contents.getURL()}`, '365')
     liveScores.consider(panelId, contents.getURL(), name)
   }
   const timer = setInterval(() => {
@@ -743,7 +743,7 @@ function startMatchDetection(contents: Electron.WebContents, panelId: string) {
       matchDetections.delete(panelId)
       if (fallback) {
         liveScores.detach(panelId)
-        logScanner(`[${panelId}] feed William Hill apareceu; 365Scores deixado de lado`)
+        logScanner(`[${panelId}] feed William Hill apareceu; 365Scores deixado de lado`, 'wh')
       }
       scanners.attach(panelId, eventId, name || `jogo ${eventId}`)
     }).catch(() => {})
@@ -1173,9 +1173,13 @@ function installIpcHandlers() {
     if (!isUiSender(event)) return { status: 'unavailable' }
     return listBllsportEvents()
   })
-  ipcMain.handle('quadra:list-youtube-lives', (event) => {
+  ipcMain.handle('quadra:list-youtube-lives', (event, channels: unknown) => {
     if (!isUiSender(event)) return { status: 'unavailable' }
-    return listYoutubeLives()
+    return listYoutubeLives(channels)
+  })
+  ipcMain.handle('quadra:resolve-youtube-channel', (event, input: unknown) => {
+    if (!isUiSender(event)) return { status: 'unavailable' }
+    return resolveYoutubeChannel(input)
   })
 }
 

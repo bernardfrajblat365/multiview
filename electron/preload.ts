@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 import type { BllEventsResult } from '../src/bll-batch'
-import type { YoutubeLivesResult } from '../src/youtube-lives'
+import type { YoutubeChannelResult, YoutubeLivesResult } from '../src/youtube-lives'
 import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
 import type { LiveMatchStatus } from '../src/livescore-365'
@@ -20,7 +20,8 @@ const quadra = {
   openBllsport: (panelId: string, label: string) => ipcRenderer.send('quadra:open-bllsport', panelId, label),
   setBllsportTarget: (panelId: string | null, label = '') => ipcRenderer.send('quadra:set-bllsport-target', panelId, label),
   listBllsportEvents: (): Promise<BllEventsResult> => ipcRenderer.invoke('quadra:list-bllsport-events'),
-  listYoutubeLives: (): Promise<YoutubeLivesResult> => ipcRenderer.invoke('quadra:list-youtube-lives'),
+  listYoutubeLives: (channelIds: string[]): Promise<YoutubeLivesResult> => ipcRenderer.invoke('quadra:list-youtube-lives', channelIds),
+  resolveYoutubeChannel: (input: string): Promise<YoutubeChannelResult> => ipcRenderer.invoke('quadra:resolve-youtube-channel', input),
   onRequestLayout: (callback: () => void) => {
     const listener = () => callback()
     ipcRenderer.on('quadra:request-layout', listener)

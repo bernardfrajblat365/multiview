@@ -60,6 +60,11 @@ export type LiveState = {
   away: number
   homeRed: number
   awayRed: number
+  /** Goals and red cards already alerted per side, from events or from the score, so one source never repeats the other. */
+  alertedGoals: { home: number; away: number }
+  alertedReds: { home: number; away: number }
+  /** When the score first ran ahead of the alerted goals: the goal event gets a few seconds to arrive with its details. */
+  scoreAheadSince: { home: number; away: number }
   pbpSeeded: boolean
   pbpSeen: Set<number>
   /** VAR alerts already sent, so the same review reported by both feeds alerts once. */
@@ -67,8 +72,11 @@ export type LiveState = {
 }
 
 const MAX_NAME = 80
-const MAX_GAMES = 400
+/** A busy day's schedule passes 800 games; cutting it lost games further down the list. */
+const MAX_GAMES = 4000
 const MAX_EVENTS = 300
+/** Leagues with events sometimes list a goal late or never (score 1-2, events 1-1): the score alerts it after this. */
+export const GOAL_EVENT_GRACE_MS = 9000
 /** Both teams must score at least this to link without asking. */
 const LINK_SCORE = 0.85
 /** …and the runner-up must trail by this much. */
@@ -100,6 +108,8 @@ const GENERIC_WORDS = new Set(['atletico', 'real', 'inter', 'internacional', 'sp
 /** State and city suffixes written either way ("Atlético-MG" / "Atlético Mineiro"). */
 const TOKEN_ALIASES: Record<string, string> = {
   mg: 'mineiro', pr: 'paranaense', go: 'goianiense', sp: 'paulista', rj: 'carioca', athletico: 'atletico', utd: 'united', man: 'manchester',
+  // City names written in Portuguese or English in titles, local in 365Scores ("Slavia Praga" / "Slavia Praha").
+  praga: 'praha', prague: 'praha', moscou: 'moscow', moskva: 'moscow', bucareste: 'bucuresti', bucharest: 'bucuresti',
 }
 /** Nicknames used in Brazilian titles. Keys and values are normalized names. */
 const NICKNAMES: Record<string, string> = {
@@ -286,6 +296,33 @@ export function matchGame(title: string, games: readonly Game365[], now: number)
   return { status: 'ambiguous', candidates: ranked.slice(0, MAX_CANDIDATES).map((entry) => entry.game) }
 }
 
+/** A detail answers in ~0.1 s: wait 4 s at first, then longer in case the API is slow rather than stuck. */
+export const DETAIL_TIMEOUT_MS = 4000
+export const SLOW_DETAIL_TIMEOUT_MS = 10_000
+/** A stuck or dropped request is retried at once this many times before waiting between tries. */
+export const QUICK_RETRIES = 3
+const POLL_RETRY_MS = 3000
+const MAX_STALL_DELAY_MS = 15_000
+const MAX_HTTP_DELAY_MS = 60_000
+
+/** Time limit for the next detail request, after `failures` failed ones in a row. */
+export function detailTimeoutMs(failures: number) {
+  return failures >= 2 ? SLOW_DETAIL_TIMEOUT_MS : DETAIL_TIMEOUT_MS
+}
+
+/**
+ * Wait before the next try after `failures` failures in a row. A request that hung or
+ * dropped (`stall`) is usually a one-off on the API's side: retry at once, then back off
+ * gently. An HTTP error means the API answered no (rate limit, outage): back off more.
+ */
+export function retryDelayMs(failures: number, kind: 'stall' | 'http') {
+  if (kind === 'stall') {
+    if (failures <= QUICK_RETRIES) return 0
+    return Math.min(MAX_STALL_DELAY_MS, POLL_RETRY_MS * 2 ** (failures - QUICK_RETRIES - 1))
+  }
+  return Math.min(MAX_HTTP_DELAY_MS, POLL_RETRY_MS * 2 ** Math.min(failures, 5))
+}
+
 /** Same key, same link: a YouTube video id, or the path of any other page (a BLL `/view/<id>` player). */
 export function sourceKeyOf(url: string) {
   try {
@@ -339,6 +376,8 @@ export function parseGameDetail(raw: unknown): Detail365 | null {
       })
     }
   }
+  // Counting goals per side follows the list order, so keep it chronological whatever the API sends.
+  events?.sort((a, b) => a.order - b.order)
   const pbp = row.playByPlay && typeof row.playByPlay === 'object' ? (row.playByPlay as Record<string, unknown>).feedURL : null
   return { id, statusGroup: finiteNumber(row.statusGroup), gameTime: Math.max(0, Math.floor(finiteNumber(row.gameTime))), home, away, events, pbpUrl: pbpFeedUrl(pbp) }
 }
@@ -470,47 +509,92 @@ export function classifyEvent365(event: Event365, detail: Detail365): MatchIncid
 }
 
 export function createLiveState(): LiveState {
-  return { seeded: false, seen: new Set(), home: 0, away: 0, homeRed: 0, awayRed: 0, pbpSeeded: false, pbpSeen: new Set(), recentVar: [] }
+  return {
+    seeded: false, seen: new Set(), home: 0, away: 0, homeRed: 0, awayRed: 0,
+    alertedGoals: { home: 0, away: 0 }, alertedReds: { home: 0, away: 0 }, scoreAheadSince: { home: 0, away: 0 },
+    pbpSeeded: false, pbpSeen: new Set(), recentVar: [],
+  }
 }
 
-function scoreIncidents(detail: Detail365, state: LiveState): MatchIncident[] {
-  const incidents: MatchIncident[] = []
-  const push = (kind: MatchIncident['kind'], team: 'home' | 'away', key: string, note = '') => {
-    incidents.push({ id: `365:${detail.id}:${key}`, kind, team, minute: detail.gameTime, ownGoal: false, timestamp: 0, note })
+/** Goals and red cards per side in the events list, the way the score counts them (own goals go to the side credited). */
+function eventCounts(detail: Detail365) {
+  const counts = { goal: { home: 0, away: 0 }, red: { home: 0, away: 0 } }
+  for (const event of detail.events ?? []) {
+    const incident = classifyEvent365(event, detail)
+    if (incident && (incident.kind === 'goal' || incident.kind === 'red') && incident.team !== 'match') counts[incident.kind][incident.team] += 1
   }
-  for (const team of ['home', 'away'] as const) {
-    const now = detail[team].score
-    const before = team === 'home' ? state.home : state.away
-    for (let goal = before + 1; goal <= Math.min(now, before + 3); goal += 1) push('goal', team, `score:${team}:${goal}`)
-    // A goal taken back off the board is the VAR (or a data fix): say so instead of staying silent.
-    if (now < before) push('var', team, `score:${team}:${before}-${now}`, 'gol anulado')
-    const reds = detail[team].redCards
-    const redsBefore = team === 'home' ? state.homeRed : state.awayRed
-    for (let red = redsBefore + 1; red <= Math.min(reds, redsBefore + 2); red += 1) push('red', team, `red:${team}:${red}`)
-  }
-  return incidents
+  return counts
 }
 
 /**
  * Alerts for what changed since the previous poll. The first poll only records the
- * match state (the panel opened mid-game), so history never alerts. Games with
- * incident coverage alert from their events; the rest from score and red-card counts.
+ * match state (the panel opened mid-game), so history never alerts.
+ *
+ * Events give the details (penalty, own goal, cards) but can lag or miss a goal, and a
+ * game with nothing yet has no events list at all (a 0-0 in a covered league looks like
+ * a score-only one). So the score is the truth for goals: one the events have not shown
+ * within `GOAL_EVENT_GRACE_MS` (at once without events) alerts from the score, and an
+ * event for a goal or red card already alerted that way stays quiet.
  */
-export function diffDetail(state: LiveState, detail: Detail365): MatchIncident[] {
+export function diffDetail(state: LiveState, detail: Detail365, now = Date.now()): MatchIncident[] {
   const fresh: MatchIncident[] = []
-  if (state.seeded) {
-    if (detail.events) {
-      for (const event of detail.events) {
-        const incident = classifyEvent365(event, detail)
-        if (incident && !state.seen.has(incident.id)) fresh.push(incident)
-      }
-    } else {
-      fresh.push(...scoreIncidents(detail, state))
+  const sides = ['home', 'away'] as const
+  if (!state.seeded) {
+    const counts = eventCounts(detail)
+    for (const event of detail.events ?? []) {
+      const incident = classifyEvent365(event, detail)
+      if (incident) state.seen.add(incident.id)
     }
-  }
-  for (const event of detail.events ?? []) {
-    const incident = classifyEvent365(event, detail)
-    if (incident) state.seen.add(incident.id)
+    for (const team of sides) {
+      state.alertedGoals[team] = Math.max(detail[team].score, counts.goal[team])
+      state.alertedReds[team] = Math.max(detail[team].redCards, counts.red[team])
+    }
+  } else {
+    const ordinal = { goal: { home: 0, away: 0 }, red: { home: 0, away: 0 } }
+    for (const event of detail.events ?? []) {
+      const incident = classifyEvent365(event, detail)
+      if (!incident) continue
+      const counted = (incident.kind === 'goal' || incident.kind === 'red') && incident.team !== 'match' ? incident.kind : null
+      if (counted && incident.team !== 'match') ordinal[counted][incident.team] += 1
+      if (state.seen.has(incident.id)) continue
+      state.seen.add(incident.id)
+      if (counted && incident.team !== 'match') {
+        const alerted = counted === 'goal' ? state.alertedGoals : state.alertedReds
+        const n = ordinal[counted][incident.team]
+        if (n <= alerted[incident.team]) continue
+        alerted[incident.team] = n
+      }
+      fresh.push(incident)
+    }
+    const push = (kind: MatchIncident['kind'], team: 'home' | 'away', key: string, note = '') => {
+      fresh.push({ id: `365:${detail.id}:${key}`, kind, team, minute: detail.gameTime, ownGoal: false, timestamp: 0, note })
+    }
+    for (const team of sides) {
+      const score = detail[team].score
+      const before = team === 'home' ? state.home : state.away
+      if (score < before) {
+        state.alertedGoals[team] = Math.min(state.alertedGoals[team], score)
+        // A goal taken back off the board is the VAR (or a data fix); with events, their "goal disallowed" says it.
+        if (!detail.events) push('var', team, `score:${team}:${before}-${score}`, 'gol anulado')
+      }
+      const alerted = state.alertedGoals[team]
+      if (score > alerted) {
+        if (!state.scoreAheadSince[team]) state.scoreAheadSince[team] = now
+        if (!detail.events || now - state.scoreAheadSince[team] >= GOAL_EVENT_GRACE_MS) {
+          for (let goal = alerted + 1; goal <= Math.min(score, alerted + 3); goal += 1) push('goal', team, `score:${team}:${goal}`)
+          state.alertedGoals[team] = score
+          state.scoreAheadSince[team] = 0
+        }
+      } else {
+        state.scoreAheadSince[team] = 0
+      }
+      // Red-card counts only come with games without events (the poller reads them from the games list).
+      const reds = detail[team].redCards
+      if (!detail.events && reds > state.alertedReds[team]) {
+        for (let red = state.alertedReds[team] + 1; red <= Math.min(reds, state.alertedReds[team] + 2); red += 1) push('red', team, `red:${team}:${red}`)
+        state.alertedReds[team] = reds
+      }
+    }
   }
   state.seeded = true
   state.home = detail.home.score
@@ -518,4 +602,14 @@ export function diffDetail(state: LiveState, detail: Detail365): MatchIncident[]
   state.homeRed = detail.home.redCards
   state.awayRed = detail.away.redCards
   return fresh
+}
+
+/** Red cards of one game from the games list (`/web/games/?games=<id>`); the game detail does not carry them. */
+export function parseRedCards(raw: unknown, gameId: number): { home: number; away: number } | null {
+  const games = raw && typeof raw === 'object' ? (raw as { games?: unknown }).games : null
+  if (!Array.isArray(games)) return null
+  const row = games.find((game) => game && typeof game === 'object' && Number((game as { id?: unknown }).id) === gameId) as Record<string, unknown> | undefined
+  if (!row) return null
+  const reds = (side: unknown) => side && typeof side === 'object' ? Math.max(0, finiteNumber((side as { redCards?: unknown }).redCards)) : 0
+  return { home: reds(row.homeCompetitor), away: reds(row.awayCompetitor) }
 }

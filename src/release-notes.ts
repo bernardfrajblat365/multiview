@@ -10,8 +10,28 @@ export const RELEASES: readonly Release[] = [
     label: '1.1.1',
     notes: [
       {
+        title: 'Jogos do YouTube pelos canais oficiais',
+        body: 'A lista de jogos ao vivo do YouTube agora procura só nos canais que transmitem os jogos com imagens (CazéTV, ge tv, ESPN Brasil, Canal GOAT e outros), então param de aparecer canais não oficiais e entram as lives grandes que antes ficavam de fora. No botão Canais… você adiciona um canal pelo @ ou pelo link, ou remove os que não quer.',
+      },
+      {
+        title: 'Recarregar um painel',
+        body: 'O botão de recarregar (seta verde), entre o lápis de editar o link e a lixeira, recarrega só a página daquele painel, sem mexer nos outros.',
+      },
+      {
+        title: 'Desligar os alertas de um painel',
+        body: 'O botão do sino, logo à esquerda da lixeira, desliga todos os alertas daquele painel (som, aviso na tela e destaque do gol) sem mexer nos outros. Clique de novo para religar.',
+      },
+      {
+        title: 'Nome do jogo na base do vídeo',
+        body: 'Quando o vídeo tem faixas pretas só dos lados (por exemplo, um jogo em destaque), o nome dos times aparece numa legenda na parte de baixo do vídeo, e não mais empilhado numa das faixas. A legenda cresce junto com o painel, então o jogo em destaque fica com o nome maior e dá para ler de longe.',
+      },
+      {
         title: 'Alertas também nos jogos da BLL sem lances',
         body: 'Quando um jogo da BLL não tem o placar ao vivo da William Hill, o Quadra procura o mesmo jogo no 365Scores, como já faz nas lives do YouTube. Os alertas de gol, pênalti, cartão e VAR voltam a funcionar nesses jogos, e o botão ⏱ do painel ajusta o atraso. Se o Quadra não tiver certeza do jogo, o painel pergunta qual é.',
+      },
+      {
+        title: 'Jogos encontrados no 365Scores com mais precisão',
+        body: 'Em dias cheios o Quadra deixava de encontrar parte dos jogos no 365Scores, inclusive do Brasileirão. Agora ele procura em todos os jogos do dia. Gols que o 365Scores mostra no placar antes de registrar o lance também alertam, e um mesmo gol ou cartão vermelho não alerta duas vezes.',
       },
     ],
   },

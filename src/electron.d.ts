@@ -1,5 +1,5 @@
 import type { BllEventsResult } from './bll-batch'
-import type { YoutubeLivesResult } from './youtube-lives'
+import type { YoutubeChannelResult, YoutubeLivesResult } from './youtube-lives'
 import type { LayoutPayload } from './layout'
 import type { AlertKind } from './match-events'
 import type { LiveMatchStatus } from './livescore-365'
@@ -19,7 +19,8 @@ type QuadraBridge = {
   openBllsport: (panelId: string, label: string) => void
   setBllsportTarget: (panelId: string | null, label?: string) => void
   listBllsportEvents: () => Promise<BllEventsResult>
-  listYoutubeLives: () => Promise<YoutubeLivesResult>
+  listYoutubeLives: (channelIds: string[]) => Promise<YoutubeLivesResult>
+  resolveYoutubeChannel: (input: string) => Promise<YoutubeChannelResult>
   onRequestLayout: (callback: () => void) => () => void
   onFullscreenChange: (callback: (on: boolean) => void) => () => void
   onWeddbetsPlayerOpened: (callback: (payload: { panelId: string; url: string }) => void) => () => void

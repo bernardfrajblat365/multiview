@@ -2,8 +2,16 @@ import './style.css'
 import { version } from '../package.json'
 import { normalizeUrl } from './routing'
 import { batchCapacity, groupByCompetition, planBatchOpen, type BllEvent, type BllEventGroup } from './bll-batch'
-import type { YoutubeLivesResult } from './youtube-lives'
-import { alertControlsHtml, applyAlertStates, bindAlertControls, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
+import {
+  DEFAULT_YOUTUBE_CHANNELS,
+  loadYoutubeChannels,
+  MAX_YOUTUBE_CHANNELS,
+  saveYoutubeChannels,
+  type YoutubeChannel,
+  type YoutubeChannelResult,
+  type YoutubeLivesResult,
+} from './youtube-lives'
+import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseToShow, type Release } from './release-notes'
 import type { LiveMatchStatus } from './livescore-365'
@@ -41,7 +49,7 @@ import {
 } from './organizer'
 
 type View = 'choose' | 'grid'
-type Panel = { id: PanelId; url: string; draftUrl: string; muted: boolean }
+type Panel = { id: PanelId; url: string; draftUrl: string; muted: boolean; alertsOff: boolean }
 type LayoutSnapshot = {
   panels: Panel[]
   highlighted: PanelId[]
@@ -294,14 +302,6 @@ function updatePanelLabels() {
         labelSpan(match.score ? 'panel__label-score' : 'panel__label-vs', match.score ? scoreText : 'x'),
         labelSpan('panel__label-team', match.away),
       )
-    } else if (placement.mode === 'bar-side') {
-      chip.append(labelSpan('panel__label-team', match.home))
-      if (match.score) {
-        chip.append(labelSpan('panel__label-goals', String(match.score.home)), labelSpan('panel__label-goals', String(match.score.away)))
-      } else {
-        chip.append(labelSpan('panel__label-vs', 'x'))
-      }
-      chip.append(labelSpan('panel__label-team', match.away))
     } else {
       for (const [team, goals] of [[match.home, match.score?.home], [match.away, match.score?.away]] as const) {
         const row = document.createElement('div')
@@ -318,7 +318,7 @@ function updatePanelLabels() {
 }
 
 function createPanel(): Panel {
-  return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted() }
+  return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted(), alertsOff: false }
 }
 
 function initializePanels(count: number) {
@@ -499,7 +499,7 @@ function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: Liv
   if (!button) {
     button = document.createElement('label')
     button.className = 'btn btn--ghost panel__delay'
-    controls.insertBefore(button, controls.querySelector(':scope > .panel__remove'))
+    controls.insertBefore(button, controls.querySelector(':scope > .panel__alerts') ?? controls.querySelector(':scope > .panel__remove'))
   }
   button.dataset.key = key
   const effective = own ?? globalSec ?? 0
@@ -540,7 +540,7 @@ function updateLiveControls() {
 
 /** Shows an alert now; a goal the VAR cancelled also undoes that panel's goal highlight. */
 function deliverMatchEvent(payload: MatchEventPayload) {
-  if (view !== 'grid') return
+  if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
   if (payload.kind === 'var' && payload.note === 'gol anulado') releaseAutoPanel(payload.panelId)
   handleMatchEvent(payload, app, (panelId) => Boolean(panelById(panelId)))
 }
@@ -995,6 +995,11 @@ const YOUTUBE_ERRORS: Record<Exclude<YoutubeLivesResult['status'], 'ok'>, string
   unavailable: 'Não foi possível buscar as lives do YouTube. Confira a internet e clique em Atualizar lista.',
 }
 
+const YOUTUBE_CHANNEL_ERRORS: Record<Exclude<YoutubeChannelResult['status'], 'ok'>, string> = {
+  ...YOUTUBE_ERRORS,
+  'not-found': 'Canal não encontrado. Use o @ do canal (ex.: @CazeTV) ou um link youtube.com/@… ou youtube.com/channel/….',
+}
+
 const BATCH_SOURCES: Record<BatchSource, { title: string; loading: string; empty: string; hint: string; load: () => Promise<BatchLoad> }> = {
   bll: {
     title: 'Abrir jogos da BLL',
@@ -1010,11 +1015,13 @@ const BATCH_SOURCES: Record<BatchSource, { title: string; loading: string; empty
   },
   youtube: {
     title: 'Abrir jogos ao vivo do YouTube',
-    loading: 'Buscando lives de futebol no YouTube…',
-    empty: 'Nenhuma live de jogo de futebol encontrada no YouTube agora.',
+    loading: 'Procurando lives nos canais da lista…',
+    empty: 'Nenhum jogo ao vivo nos canais da lista agora. Clique em Canais… para adicionar outros canais.',
     hint: 'Marque o grupo inteiro ou só as lives que quiser.',
     load: async () => {
-      const result = await window.quadra?.listYoutubeLives()
+      const channels = loadYoutubeChannels()
+      if (channels.length === 0) return { status: 'error', message: 'A lista de canais está vazia. Clique em Canais… para adicionar.' }
+      const result = await window.quadra?.listYoutubeLives(channels.map((channel) => channel.id))
       if (!result) return { status: 'error', message: 'A busca do YouTube só está disponível no app do Quadra.' }
       if (result.status !== 'ok') return { status: 'error', message: YOUTUBE_ERRORS[result.status] }
       return { status: 'ok', events: result.events }
@@ -1032,7 +1039,18 @@ function openBatch(source: BatchSource) {
     <p id="bll-batch-title" class="confirm__message">${config.title}</p>
     <p class="bll-batch__status" role="status" aria-live="polite"></p>
     <div class="bll-batch__list"></div>
+    ${source === 'youtube' ? `<div class="yt-channels" hidden>
+      <p class="bll-batch__status yt-channels__hint"></p>
+      <ul class="yt-channels__list"></ul>
+      <form class="yt-channels__add">
+        <input type="text" name="channel" placeholder="@canal ou link do canal" aria-label="Canal do YouTube" autocomplete="off" spellcheck="false">
+        <button type="submit" class="btn btn--load">Adicionar</button>
+      </form>
+      <p class="yt-channels__message" role="status" aria-live="polite"></p>
+      <button type="button" class="btn btn--ghost yt-channels__restore" data-restore>Restaurar lista padrão</button>
+    </div>` : ''}
     <div class="confirm__actions">
+      ${source === 'youtube' ? '<button type="button" class="btn btn--ghost" data-channels>Canais…</button>' : ''}
       <button type="button" class="btn btn--ghost" data-refresh>Atualizar lista</button>
       <button type="button" class="btn btn--ghost" data-cancel>Cancelar</button>
       <button type="button" class="btn btn--load" data-ok disabled>Abrir</button>
@@ -1109,6 +1127,8 @@ function openBatch(source: BatchSource) {
   })
   refresh.addEventListener('click', () => void load())
   backdrop.querySelector('[data-cancel]')!.addEventListener('click', finish)
+  const channelsButton = backdrop.querySelector<HTMLButtonElement>('[data-channels]')
+  if (channelsButton) setupYoutubeChannelEditor(backdrop, channelsButton, () => void load())
   ok.addEventListener('click', () => {
     const urls = selectedUrls()
     finish()
@@ -1120,6 +1140,79 @@ function openBatch(source: BatchSource) {
   document.body.appendChild(backdrop)
   backdrop.querySelector<HTMLButtonElement>('[data-cancel]')?.focus()
   void load()
+}
+
+/** The "Canais…" view of the YouTube batch dialog: the list of channels read for lives, saved in this browser profile. */
+function setupYoutubeChannelEditor(backdrop: HTMLElement, toggle: HTMLButtonElement, reload: () => void) {
+  const editor = backdrop.querySelector<HTMLElement>('.yt-channels')!
+  const hint = editor.querySelector<HTMLElement>('.yt-channels__hint')!
+  const listEl = editor.querySelector<HTMLUListElement>('.yt-channels__list')!
+  const form = editor.querySelector<HTMLFormElement>('.yt-channels__add')!
+  const input = form.querySelector<HTMLInputElement>('input')!
+  const addButton = form.querySelector<HTMLButtonElement>('button')!
+  const message = editor.querySelector<HTMLElement>('.yt-channels__message')!
+  const batchParts = [...backdrop.querySelectorAll<HTMLElement>('.bll-batch__dialog > .bll-batch__status, .bll-batch__list, [data-refresh], [data-ok]')]
+  let channels = loadYoutubeChannels()
+  let changed = false
+  const render = () => {
+    hint.textContent = `As lives são procuradas nestes ${channels.length} canais (máximo ${MAX_YOUTUBE_CHANNELS}). Cada canal gasta cerca de 2 unidades da cota diária por busca.`
+    listEl.innerHTML = channels.map((channel) => `<li><span>${escapeHtml(channel.title)}</span><button type="button" class="yt-channels__remove" data-remove="${escapeHtml(channel.id)}" aria-label="Remover ${escapeHtml(channel.title)}" title="Remover">×</button></li>`).join('')
+    addButton.disabled = channels.length >= MAX_YOUTUBE_CHANNELS
+  }
+  const update = (next: YoutubeChannel[]) => {
+    channels = next
+    changed = true
+    saveYoutubeChannels(channels)
+    render()
+  }
+  const setOpen = (open: boolean) => {
+    editor.hidden = !open
+    for (const part of batchParts) part.hidden = open
+    toggle.textContent = open ? 'Voltar à lista' : 'Canais…'
+    if (open) {
+      channels = loadYoutubeChannels()
+      message.textContent = ''
+      render()
+      input.focus()
+    } else if (changed) {
+      changed = false
+      reload()
+    }
+  }
+  toggle.addEventListener('click', () => setOpen(editor.hidden !== false))
+  listEl.addEventListener('click', (event) => {
+    const id = (event.target as HTMLElement).closest<HTMLElement>('[data-remove]')?.dataset.remove
+    if (!id) return
+    const removed = channels.find((channel) => channel.id === id)
+    update(channels.filter((channel) => channel.id !== id))
+    message.textContent = removed ? `${removed.title} removido.` : ''
+  })
+  editor.querySelector('[data-restore]')!.addEventListener('click', () => {
+    update(DEFAULT_YOUTUBE_CHANNELS.map((channel) => ({ ...channel })))
+    message.textContent = 'Lista padrão restaurada.'
+  })
+  form.addEventListener('submit', async (event) => {
+    event.preventDefault()
+    const text = input.value.trim()
+    if (!text) return
+    addButton.disabled = true
+    message.textContent = 'Procurando o canal…'
+    const result: YoutubeChannelResult = await window.quadra?.resolveYoutubeChannel(text)
+      .catch((): YoutubeChannelResult => ({ status: 'unavailable' })) ?? { status: 'unavailable' }
+    if (!backdrop.isConnected) return
+    addButton.disabled = channels.length >= MAX_YOUTUBE_CHANNELS
+    if (result.status !== 'ok') {
+      message.textContent = YOUTUBE_CHANNEL_ERRORS[result.status]
+      return
+    }
+    input.value = ''
+    if (channels.some((channel) => channel.id === result.channel.id)) {
+      message.textContent = `${result.channel.title} já está na lista.`
+      return
+    }
+    update([...channels, result.channel].slice(0, MAX_YOUTUBE_CHANNELS))
+    message.textContent = `${result.channel.title} adicionado.`
+  })
 }
 
 function openAllPanels() {
@@ -1167,6 +1260,33 @@ function togglePanelMute(id: PanelId) {
   if (!panel) return
   panel.muted = !panel.muted
   updateAudioControls()
+}
+
+function panelAlertsLabel(panel: Panel) {
+  return `${panel.alertsOff ? 'Ativar' : 'Desativar'} alertas do jogo ${panelIndex(panel.id) + 1}`
+}
+
+function panelAlertsIconHtml(off: boolean) {
+  return `<svg class="panel__alerts-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11.5V7.2a4 4 0 0 1 8 0v4.3l1.2 1.2H2.8zM6.6 14.2a1.5 1.5 0 0 0 2.8 0" />${off ? '<path d="M2.2 2.2l11.6 11.6" />' : ''}</svg>`
+}
+
+/** Turns every alert of one panel off or on (ring, sound, goal highlight); memory only, like mute. */
+function togglePanelAlerts(id: PanelId) {
+  const panel = panelById(id)
+  if (!panel) return
+  panel.alertsOff = !panel.alertsOff
+  if (panel.alertsOff) {
+    clearPendingAlerts(id)
+    clearAlert(id, app)
+    releaseAutoPanel(id)
+  }
+  const button = app.querySelector<HTMLButtonElement>(`[data-panel-id="${CSS.escape(id)}"] [data-alerts]`)
+  if (!button) return
+  const label = panelAlertsLabel(panel)
+  button.innerHTML = panelAlertsIconHtml(panel.alertsOff)
+  button.setAttribute('aria-pressed', String(panel.alertsOff))
+  button.setAttribute('aria-label', label)
+  button.title = label
 }
 
 function toggleAllMuted() {
@@ -1224,6 +1344,8 @@ function panelActionsHtml(panel: Panel): string {
       <button type="button" class="btn btn--ghost panel__mute" data-mute aria-pressed="${panel.muted}" aria-label="${panel.muted ? 'Ativar som do' : 'Mutar'} jogo ${panelIndex(panel.id) + 1}" title="${panel.muted ? 'Ativar som do' : 'Mutar'} jogo ${panelIndex(panel.id) + 1}">${panel.muted ? 'Ativar som' : 'Mutar'}</button>
       <button type="button" class="btn btn--ghost btn--icon" data-highlight aria-pressed="${isHighlighted}" aria-label="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}" title="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}">${isHighlighted ? '★' : '☆'}</button>
       ${panel.url ? '<button type="button" class="btn btn--ghost btn--icon" data-edit aria-label="Editar URL" title="Editar URL">✎</button>' : ''}
+      ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__reload" data-reload aria-label="Recarregar jogo ${panelIndex(panel.id) + 1}" title="Recarregar página"><img src="./reload-icon.png" alt="" aria-hidden="true" /></button>` : ''}
+      ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__alerts" data-alerts aria-pressed="${panel.alertsOff}" aria-label="${panelAlertsLabel(panel)}" title="${panelAlertsLabel(panel)}">${panelAlertsIconHtml(panel.alertsOff)}</button>` : ''}
       <button type="button" class="btn btn--ghost btn--icon panel__remove" data-remove aria-label="${removeLabel}" title="${removeLabel}"${canRemove ? '' : ' disabled'}><img src="./trash-icon.png" alt="" aria-hidden="true" /></button>
     </div>
   `
@@ -1308,6 +1430,15 @@ function bindPanelForm(panelElement: HTMLElement) {
     togglePanelMute(id)
   })
   panelElement.querySelector('[data-edit]')?.addEventListener('click', () => setPanelEditing(panelElement, true))
+  panelElement.querySelector('[data-reload]')?.addEventListener('click', (event) => {
+    event.stopPropagation()
+    const panel = panelById(id)
+    if (panel?.url) applyPanelUrl(id, panel.url)
+  })
+  panelElement.querySelector('[data-alerts]')?.addEventListener('click', (event) => {
+    event.stopPropagation()
+    togglePanelAlerts(id)
+  })
   panelElement.querySelector('[data-remove]')?.addEventListener('click', (event) => {
     event.stopPropagation()
     removePanel(id)
@@ -2053,7 +2184,7 @@ onAlertShown((panelId, payload) => {
   if (payload.kind === 'goal') startAutoGoal(panelId)
 })
 window.quadra?.onMatchEvent((payload) => {
-  if (view !== 'grid') return
+  if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
   // 365Scores-linked panels trail the data: hold the alert as long as the panel's score is held.
   const delay = panelAlertDelayMs(payload.panelId)
   if (delay <= 0) {

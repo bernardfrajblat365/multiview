@@ -18,6 +18,9 @@ export const monitorHtml = `<!doctype html>
   .red { color: #ff6b6b; }
   .yellow { color: #ffd84d; }
   .warn { color: #ff9d6b; }
+  .source { display: inline-block; min-width: 9.5em; margin-right: 8px; padding: 0 6px; border-radius: 4px; font-size: 11px; font-weight: 600; text-align: center; font-family: 'Segoe UI', sans-serif; }
+  .source--wh { background: #12324a; color: #7cc4ff; }
+  .source--365 { background: #3a2a10; color: #ffc46b; }
 </style></head>
 <body>
 <header><strong>Monitor de lances</strong><span id="status">aguardando…</span><button id="clear" type="button">Limpar tela</button></header>
@@ -41,14 +44,21 @@ export const monitorHtml = `<!doctype html>
     const time = document.createElement('span')
     time.className = 'time'
     time.textContent = line.time
-    row.append(time, document.createTextNode(line.text))
+    row.append(time)
+    if (line.source === 'wh' || line.source === '365') {
+      const source = document.createElement('span')
+      source.className = 'source source--' + line.source
+      source.textContent = line.source === 'wh' ? 'William Hill' : '365Scores API'
+      row.append(source)
+    }
+    row.append(document.createTextNode(line.text))
     log.append(row)
     while (log.childElementCount > 1000) log.firstElementChild.remove()
     count += 1
     status.textContent = 'engine ativa · última linha às ' + line.time
     if (stick) log.scrollTop = log.scrollHeight
   }
-  window.quadraMonitor.getBacklog().then((lines) => { lines.forEach(add); if (!lines.length) status.textContent = 'engine ativa · nenhum painel BLL vinculado ainda' })
+  window.quadraMonitor.getBacklog().then((lines) => { lines.forEach(add); if (!lines.length) status.textContent = 'engine ativa · nenhum painel vinculado ainda' })
   window.quadraMonitor.onLine(add)
   document.getElementById('clear').addEventListener('click', () => { log.textContent = '' })
 </script></body></html>`

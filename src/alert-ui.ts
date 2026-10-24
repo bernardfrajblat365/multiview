@@ -127,7 +127,7 @@ export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
   }
 }
 
-function clearAlert(panelId: string, root: ParentNode) {
+export function clearAlert(panelId: string, root: ParentNode) {
   const alert = active.get(panelId)
   if (alert) clearTimeout(alert.timer)
   active.delete(panelId)

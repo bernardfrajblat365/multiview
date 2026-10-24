@@ -2,7 +2,11 @@ import { app } from 'electron'
 import { appendFile, mkdir, readdir, unlink } from 'node:fs/promises'
 import { join } from 'node:path'
 
-export type ScannerLogLine = { time: string; text: string }
+/** Who the line is about: the William Hill scoreboard feed or the 365Scores web API. */
+export type ScannerSource = 'wh' | '365'
+export type ScannerLogLine = { time: string; text: string; source?: ScannerSource }
+
+const SOURCE_NAMES: Record<ScannerSource, string> = { wh: 'William Hill', '365': '365Scores API' }
 
 const MAX_LINES = 500
 const RETAIN_DAYS = 7
@@ -34,13 +38,14 @@ async function prune(dir: string) {
 }
 
 /** Never pass cookies, tokens or session ids here: only high-level engine events. */
-export function logScanner(text: string) {
+export function logScanner(text: string, source?: ScannerSource) {
   const now = new Date()
-  const line = { time: stamp(now), text }
+  const line: ScannerLogLine = source ? { time: stamp(now), text, source } : { time: stamp(now), text }
+  const tag = source ? `[${SOURCE_NAMES[source]}] ` : ''
   lines.push(line)
   if (lines.length > MAX_LINES) lines.splice(0, lines.length - MAX_LINES)
   for (const listener of listeners) listener(line)
-  if (!app.isPackaged) console.warn(`[scanner] ${line.time} ${text}`)
+  if (!app.isPackaged) console.warn(`[scanner] ${line.time} ${tag}${text}`)
   void (async () => {
     logDir ??= join(app.getPath('userData'), 'logs')
     await mkdir(logDir, { recursive: true }).catch(() => {})
@@ -48,7 +53,7 @@ export function logScanner(text: string) {
       pruned = true
       void prune(logDir)
     }
-    await appendFile(join(logDir, `scanner-${dayName(now)}.log`), `${line.time} ${text}\n`).catch(() => {})
+    await appendFile(join(logDir, `scanner-${dayName(now)}.log`), `${line.time} ${tag}${text}\n`).catch(() => {})
   })()
 }
 

@@ -16,6 +16,8 @@ function createSportsPlayerFixture(requestUrl) {
   const empty = url.searchParams.get('fixture') === 'empty'
   const titleParam = url.searchParams.get('title')
   const canal = url.searchParams.get('canal')
+  // `evento`: the player's Vue state names this match and has no William Hill feed id.
+  const evento = url.searchParams.get('evento')
   const pageTitle = titleParam
     ? (canal ? `(${canal}) ${titleParam}` : titleParam)
     : 'Sports player video fixture'
@@ -70,6 +72,11 @@ function createSportsPlayerFixture(requestUrl) {
           document.querySelector(holders[player]).append(video);
         }
         video.srcObject=canvas.captureStream(10); video.play();
+      }
+      const evento = ${JSON.stringify(evento)};
+      if (evento) {
+        const view = { $options: { name: 'ViewEvento' }, $children: [], item: { evento: { williamHillId: null, nome: evento } } };
+        document.querySelector('#app').__vue__ = { $options: { name: 'App' }, $children: [view] };
       }
       draw(); setInterval(draw,100);
       if (empty) document.querySelectorAll('video').forEach((video) => video.remove());

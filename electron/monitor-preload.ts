@@ -1,6 +1,6 @@
 import { contextBridge, ipcRenderer } from 'electron'
 
-type LogLine = { time: string; text: string }
+type LogLine = { time: string; text: string; source?: 'wh' | '365' }
 
 contextBridge.exposeInMainWorld('quadraMonitor', {
   getBacklog: (): Promise<LogLine[]> => ipcRenderer.invoke('quadra-monitor:backlog'),

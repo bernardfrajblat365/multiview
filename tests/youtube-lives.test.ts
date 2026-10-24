@@ -1,90 +1,268 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  DEFAULT_YOUTUBE_CHANNELS,
+  MAX_YOUTUBE_CHANNELS,
   detectCompetition,
   isLiveGameTitle,
   isValidYoutubeApiKey,
-  parseYoutubeSearch,
+  isYoutubeChannelId,
+  parseChannelInput,
+  parseChannelList,
+  parseLiveVideos,
+  parsePlaylistVideoIds,
+  parseStoredChannels,
   readEnvValue,
+  uploadsPlaylistId,
   youtubeErrorStatus,
 } from '../src/youtube-lives.ts'
 
-/** Monta um item de `search.list` com ao vivo válido por padrão. */
-function item(videoId: string, title: string, extra: { channelTitle?: string; liveBroadcastContent?: string } = {}) {
+const CHANNEL = 'UCZiYbVptd3PVPf4f6eR6UaQ'
+
+/** Monta um item de `videos.list` (snippet + liveStreamingDetails) com ao vivo válido por padrão. */
+function video(
+  id: string,
+  title: string,
+  extra: { channel?: string; viewers?: unknown; content?: string; started?: boolean; ended?: boolean } = {},
+) {
+  const details: Record<string, unknown> = {}
+  if (extra.started !== false) details.actualStartTime = '2026-10-24T18:00:00Z'
+  if (extra.ended) details.actualEndTime = '2026-10-24T20:00:00Z'
+  if (extra.viewers !== undefined) details.concurrentViewers = extra.viewers
   return {
-    id: { videoId },
-    snippet: {
-      title,
-      channelTitle: extra.channelTitle,
-      liveBroadcastContent: extra.liveBroadcastContent ?? 'live',
-    },
+    id,
+    snippet: { title, channelTitle: extra.channel, liveBroadcastContent: extra.content ?? 'live' },
+    liveStreamingDetails: details,
   }
 }
 
-test('parseYoutubeSearch retorna lista vazia para entrada que não é objeto', () => {
-  assert.deepEqual(parseYoutubeSearch(null), [])
-  assert.deepEqual(parseYoutubeSearch(undefined), [])
-  assert.deepEqual(parseYoutubeSearch('texto'), [])
-  assert.deepEqual(parseYoutubeSearch(42), [])
-  assert.deepEqual(parseYoutubeSearch([item('abcdefghijk', 'A x B')]), [])
+/** Id de vídeo válido (11 caracteres) a partir de um número. */
+function vid(index: number) {
+  return `vid${String(index).padStart(8, '0')}`
+}
+
+/** Id de canal válido (UC + 22 caracteres) a partir de um número. */
+function channelIdOf(index: number) {
+  return `UC${String(index).padStart(22, '0')}`
+}
+
+test('isYoutubeChannelId aceita UC seguido de 22 caracteres válidos', () => {
+  assert.equal(isYoutubeChannelId(CHANNEL), true)
+  assert.equal(isYoutubeChannelId(`UC${'a'.repeat(22)}`), true)
+  assert.equal(isYoutubeChannelId(`UC${'_-0'.repeat(8).slice(0, 22)}`), true)
 })
 
-test('parseYoutubeSearch retorna lista vazia quando items falta ou não é array', () => {
-  assert.deepEqual(parseYoutubeSearch({}), [])
-  assert.deepEqual(parseYoutubeSearch({ items: 'x' }), [])
-  assert.deepEqual(parseYoutubeSearch({ items: { 0: item('abcdefghijk', 'A x B') } }), [])
+test('isYoutubeChannelId rejeita tamanho errado, prefixo errado e caracteres inválidos', () => {
+  assert.equal(isYoutubeChannelId(`UC${'a'.repeat(21)}`), false)
+  assert.equal(isYoutubeChannelId(`UC${'a'.repeat(23)}`), false)
+  assert.equal(isYoutubeChannelId(`uc${'a'.repeat(22)}`), false)
+  assert.equal(isYoutubeChannelId(`UD${'a'.repeat(22)}`), false)
+  assert.equal(isYoutubeChannelId(`UC${'a'.repeat(21)}.`), false)
+  assert.equal(isYoutubeChannelId(`UC${'a'.repeat(21)} `), false)
+  assert.equal(isYoutubeChannelId(''), false)
 })
 
-test('parseYoutubeSearch ignora linhas que não são objeto', () => {
-  const raw = { items: [null, 'texto', 7, item('abcdefghijk', 'Flamengo x Vasco')] }
-  const lives = parseYoutubeSearch(raw)
-  assert.deepEqual(lives.map((live) => live.id), ['abcdefghijk'])
+test('isYoutubeChannelId rejeita valores que não são string', () => {
+  assert.equal(isYoutubeChannelId(null), false)
+  assert.equal(isYoutubeChannelId(undefined), false)
+  assert.equal(isYoutubeChannelId(42), false)
+  assert.equal(isYoutubeChannelId([CHANNEL]), false)
 })
 
-test('parseYoutubeSearch mantém só transmissões com liveBroadcastContent "live"', () => {
+test('parseChannelInput aceita id de canal puro', () => {
+  assert.deepEqual(parseChannelInput(CHANNEL), { id: CHANNEL })
+  assert.deepEqual(parseChannelInput(`  ${CHANNEL}  `), { id: CHANNEL })
+})
+
+test('parseChannelInput aceita @handle, handle puro e com espaços em volta', () => {
+  assert.deepEqual(parseChannelInput('@canaltest'), { handle: 'canaltest' })
+  assert.deepEqual(parseChannelInput('canaltest'), { handle: 'canaltest' })
+  assert.deepEqual(parseChannelInput('  @canal.test-1_x  '), { handle: 'canal.test-1_x' })
+  assert.deepEqual(parseChannelInput(`@${'a'.repeat(30)}`), { handle: 'a'.repeat(30) })
+})
+
+test('parseChannelInput aceita links de @handle, inclusive m. e subcaminhos', () => {
+  assert.deepEqual(parseChannelInput('https://www.youtube.com/@canaltest'), { handle: 'canaltest' })
+  assert.deepEqual(parseChannelInput('youtube.com/@canaltest/streams'), { handle: 'canaltest' })
+  assert.deepEqual(parseChannelInput('https://m.youtube.com/@canaltest/videos'), { handle: 'canaltest' })
+  assert.deepEqual(parseChannelInput('https://youtube.com/@canaltest/'), { handle: 'canaltest' })
+})
+
+test('parseChannelInput aceita links /channel/ com id de canal', () => {
+  assert.deepEqual(parseChannelInput(`https://www.youtube.com/channel/${CHANNEL}`), { id: CHANNEL })
+  assert.deepEqual(parseChannelInput(`https://www.youtube.com/channel/${CHANNEL}/videos`), { id: CHANNEL })
+})
+
+test('parseChannelInput aceita links /user/ antigos', () => {
+  assert.deepEqual(parseChannelInput('https://www.youtube.com/user/CazeTV'), { username: 'CazeTV' })
+  assert.deepEqual(parseChannelInput('youtube.com/user/CazeTV/videos'), { username: 'CazeTV' })
+})
+
+test('parseChannelInput rejeita entrada vazia ou longa demais', () => {
+  assert.equal(parseChannelInput(''), null)
+  assert.equal(parseChannelInput('   '), null)
+  assert.equal(parseChannelInput(`@${'a'.repeat(300)}`), null)
+  assert.equal(parseChannelInput('a'.repeat(301)), null)
+})
+
+test('parseChannelInput rejeita links /c/ personalizados', () => {
+  assert.equal(parseChannelInput('https://www.youtube.com/c/canaltest'), null)
+  assert.equal(parseChannelInput('youtube.com/c/CazéTV'), null)
+})
+
+test('parseChannelInput rejeita outros hosts e domínios que só contêm youtube.com', () => {
+  assert.equal(parseChannelInput('https://example.com/@canaltest'), null)
+  assert.equal(parseChannelInput('https://youtube.com.evil.com/@canaltest'), null)
+  assert.equal(parseChannelInput('https://notyoutube.com/@canaltest'), null)
+})
+
+test('parseChannelInput rejeita handles curtos ou com caracteres inválidos', () => {
+  assert.equal(parseChannelInput('ab'), null)
+  assert.equal(parseChannelInput('@ab'), null)
+  assert.equal(parseChannelInput('https://www.youtube.com/@ab'), null)
+  assert.equal(parseChannelInput(`@${'a'.repeat(31)}`), null)
+  assert.equal(parseChannelInput('@canal test'), null)
+})
+
+test('parseChannelInput rejeita páginas do YouTube que não são canal', () => {
+  assert.equal(parseChannelInput('https://www.youtube.com/watch?v=abcdefghijk'), null)
+  assert.equal(parseChannelInput('https://www.youtube.com/'), null)
+})
+
+test('uploadsPlaylistId troca UC por UU mantendo o resto do id', () => {
+  assert.equal(uploadsPlaylistId('UCxxxx'), 'UUxxxx')
+  assert.equal(uploadsPlaylistId(CHANNEL), `UU${CHANNEL.slice(2)}`)
+})
+
+test('parsePlaylistVideoIds retorna lista vazia para entrada inválida', () => {
+  assert.deepEqual(parsePlaylistVideoIds(null), [])
+  assert.deepEqual(parsePlaylistVideoIds('texto'), [])
+  assert.deepEqual(parsePlaylistVideoIds({}), [])
+  assert.deepEqual(parsePlaylistVideoIds({ items: 'x' }), [])
+})
+
+test('parsePlaylistVideoIds lê contentDetails.videoId e ignora lixo', () => {
   const raw = {
     items: [
-      item('aaaaaaaaaaa', 'Flamengo x Vasco', { liveBroadcastContent: 'live' }),
-      item('bbbbbbbbbbb', 'Flamengo x Vasco', { liveBroadcastContent: 'upcoming' }),
-      item('ccccccccccc', 'Flamengo x Vasco', { liveBroadcastContent: 'none' }),
-      { id: { videoId: 'ddddddddddd' }, snippet: { title: 'Flamengo x Vasco' } },
+      { contentDetails: { videoId: 'aaaaaaaaaaa' } },
+      null,
+      'texto',
+      { snippet: { title: 'sem contentDetails' } },
+      { contentDetails: { videoId: 'short' } },
+      { contentDetails: { videoId: 42 } },
+      { contentDetails: { videoId: 'abc/defghij' } },
+      { contentDetails: { videoId: 'bbbbbbbbbbb' } },
     ],
   }
-  assert.deepEqual(parseYoutubeSearch(raw).map((live) => live.id), ['aaaaaaaaaaa'])
+  assert.deepEqual(parsePlaylistVideoIds(raw), ['aaaaaaaaaaa', 'bbbbbbbbbbb'])
 })
 
-test('parseYoutubeSearch descarta videoId inválido', () => {
+test('parsePlaylistVideoIds remove ids repetidos mantendo a ordem', () => {
   const raw = {
     items: [
-      item('short', 'Flamengo x Vasco'),
-      item('toolongvideoid1', 'Flamengo x Vasco'),
-      item('abc/defghij', 'Flamengo x Vasco'),
-      item('abc defghi', 'Flamengo x Vasco'),
-      item('abcdefghij.', 'Flamengo x Vasco'),
-      item('abcdefghi-k', 'Flamengo x Vasco'),
-      { id: { videoId: 42 }, snippet: { title: 'Flamengo x Vasco', liveBroadcastContent: 'live' } },
-      { snippet: { title: 'Flamengo x Vasco', liveBroadcastContent: 'live' } },
+      { contentDetails: { videoId: 'bbbbbbbbbbb' } },
+      { contentDetails: { videoId: 'aaaaaaaaaaa' } },
+      { contentDetails: { videoId: 'bbbbbbbbbbb' } },
     ],
   }
-  assert.deepEqual(parseYoutubeSearch(raw).map((live) => live.id), ['abcdefghi-k'])
+  assert.deepEqual(parsePlaylistVideoIds(raw), ['bbbbbbbbbbb', 'aaaaaaaaaaa'])
 })
 
-test('parseYoutubeSearch descarta ids duplicados e mantém a primeira ocorrência', () => {
+test('parsePlaylistVideoIds lê no máximo 50 linhas', () => {
+  const items = Array.from({ length: 60 }, (_, index) => ({ contentDetails: { videoId: vid(index) } }))
+  const ids = parsePlaylistVideoIds({ items })
+  assert.equal(ids.length, 50)
+  assert.equal(ids[0], vid(0))
+  assert.equal(ids[49], vid(49))
+})
+
+test('parseLiveVideos retorna lista vazia para entrada inválida', () => {
+  assert.deepEqual(parseLiveVideos(null, 2026), [])
+  assert.deepEqual(parseLiveVideos('texto', 2026), [])
+  assert.deepEqual(parseLiveVideos({}, 2026), [])
+  assert.deepEqual(parseLiveVideos({ items: { 0: video('aaaaaaaaaaa', 'A x B') } }, 2026), [])
+})
+
+test('parseLiveVideos mantém só transmissões com liveBroadcastContent "live"', () => {
   const raw = {
     items: [
-      item('abcdefghijk', 'Flamengo x Vasco', { channelTitle: 'Canal 1' }),
-      item('abcdefghijk', 'Outro x Jogo', { channelTitle: 'Canal 2' }),
+      video('aaaaaaaaaaa', 'Flamengo x Vasco', { content: 'live' }),
+      video('bbbbbbbbbbb', 'Flamengo x Vasco', { content: 'upcoming' }),
+      video('ccccccccccc', 'Flamengo x Vasco', { content: 'none' }),
+      { id: 'ddddddddddd', snippet: { title: 'Flamengo x Vasco' }, liveStreamingDetails: { actualStartTime: 'x' } },
     ],
   }
-  const lives = parseYoutubeSearch(raw)
+  assert.deepEqual(parseLiveVideos(raw, 2026).map((live) => live.id), ['aaaaaaaaaaa'])
+})
+
+test('parseLiveVideos exige início real e descarta transmissões que já terminaram', () => {
+  const raw = {
+    items: [
+      video('aaaaaaaaaaa', 'Flamengo x Vasco'),
+      video('bbbbbbbbbbb', 'Flamengo x Vasco', { started: false }),
+      video('ccccccccccc', 'Flamengo x Vasco', { ended: true }),
+      { id: 'ddddddddddd', snippet: { title: 'Flamengo x Vasco', liveBroadcastContent: 'live' } },
+    ],
+  }
+  assert.deepEqual(parseLiveVideos(raw, 2026).map((live) => live.id), ['aaaaaaaaaaa'])
+})
+
+test('parseLiveVideos descarta títulos que não são jogo', () => {
+  const raw = {
+    items: [
+      video('aaaaaaaaaaa', 'Transmissão ao vivo'),
+      video('bbbbbbbbbbb', 'Flamengo x Vasco - REACT'),
+      video('ccccccccccc', 'Flamengo x Vasco - Melhores momentos'),
+      video('ddddddddddd', 'Vôlei: Brasil x Itália'),
+      video('eeeeeeeeeee', 'Flamengo x Vasco'),
+    ],
+  }
+  assert.deepEqual(parseLiveVideos(raw, 2026).map((live) => live.id), ['eeeeeeeeeee'])
+})
+
+test('parseLiveVideos descarta reprise de temporada antiga com year informado', () => {
+  const raw = {
+    items: [
+      video('aaaaaaaaaaa', 'Barcelona 3 x 3 Real Madrid 2006/07'),
+      video('bbbbbbbbbbb', 'Arsenal x Chelsea | Premier League 2025/26'),
+    ],
+  }
+  const lives = parseLiveVideos(raw, 2026)
+  assert.deepEqual(lives.map((live) => live.id), ['bbbbbbbbbbb'])
+  assert.equal(lives[0].competition, 'Premier League')
+})
+
+test('parseLiveVideos descarta ids inválidos e linhas que não são objeto', () => {
+  const raw = {
+    items: [
+      null,
+      'texto',
+      7,
+      video('short', 'Flamengo x Vasco'),
+      video('abc/defghij', 'Flamengo x Vasco'),
+      { ...video('aaaaaaaaaaa', 'Flamengo x Vasco'), id: 42 },
+      video('abcdefghi-k', 'Flamengo x Vasco'),
+    ],
+  }
+  assert.deepEqual(parseLiveVideos(raw, 2026).map((live) => live.id), ['abcdefghi-k'])
+})
+
+test('parseLiveVideos remove ids repetidos e mantém a primeira ocorrência válida', () => {
+  const raw = {
+    items: [
+      video('aaaaaaaaaaa', 'Flamengo x Vasco', { channel: 'Canal 1' }),
+      video('aaaaaaaaaaa', 'Outro x Jogo', { channel: 'Canal 2' }),
+    ],
+  }
+  const lives = parseLiveVideos(raw, 2026)
   assert.equal(lives.length, 1)
   assert.equal(lives[0].name, 'Flamengo x Vasco')
   assert.equal(lives[0].channel, 'Canal 1')
 })
 
-test('parseYoutubeSearch monta o objeto completo de uma transmissão válida', () => {
-  const raw = { items: [item('dQw4w9WgXcQ', 'Copa do Brasil: Flamengo x Vasco', { channelTitle: 'Canal Esportes' })] }
-  assert.deepEqual(parseYoutubeSearch(raw), [
+test('parseLiveVideos monta o objeto completo sem campo viewers', () => {
+  const raw = { items: [video('dQw4w9WgXcQ', 'Copa do Brasil: Flamengo x Vasco', { channel: 'Canal Esportes', viewers: '1500' })] }
+  assert.deepEqual(parseLiveVideos(raw, 2026), [
     {
       id: 'dQw4w9WgXcQ',
       name: 'Copa do Brasil: Flamengo x Vasco',
@@ -97,40 +275,40 @@ test('parseYoutubeSearch monta o objeto completo de uma transmissão válida', (
   ])
 })
 
-test('parseYoutubeSearch usa o nome do canal como competição quando não identifica uma', () => {
-  const raw = { items: [item('abcdefghijk', 'Flamengo x Vasco', { channelTitle: 'Canal Esportes' })] }
-  const [live] = parseYoutubeSearch(raw)
+test('parseLiveVideos usa o nome do canal como competição quando não identifica uma', () => {
+  const raw = { items: [video('abcdefghijk', 'Flamengo x Vasco', { channel: 'Canal Esportes' })] }
+  const [live] = parseLiveVideos(raw, 2026)
   assert.equal(live.competition, 'Canal Esportes')
   assert.equal(live.channel, 'Canal Esportes')
 })
 
-test('parseYoutubeSearch usa "YouTube" quando o canal falta ou está vazio', () => {
+test('parseLiveVideos usa "YouTube" quando o canal falta ou está vazio', () => {
   const raw = {
     items: [
-      item('abcdefghijk', 'Flamengo x Vasco'),
-      item('bcdefghijkl', 'Flamengo x Vasco', { channelTitle: '   ' }),
+      video('abcdefghijk', 'Flamengo x Vasco'),
+      video('bcdefghijkl', 'Flamengo x Vasco', { channel: '   ' }),
     ],
   }
-  const lives = parseYoutubeSearch(raw)
+  const lives = parseLiveVideos(raw, 2026)
   assert.deepEqual(lives.map((live) => live.channel), ['YouTube', 'YouTube'])
   assert.deepEqual(lives.map((live) => live.competition), ['YouTube', 'YouTube'])
 })
 
-test('parseYoutubeSearch remove a marca de som do título', () => {
-  const raw = { items: [item('abcdefghijk', '🔊 Flamengo x Vasco 🔇')] }
-  assert.equal(parseYoutubeSearch(raw)[0].name, 'Flamengo x Vasco')
+test('parseLiveVideos remove a marca de som do título', () => {
+  const raw = { items: [video('abcdefghijk', '🔊 Flamengo x Vasco 🔇')] }
+  assert.equal(parseLiveVideos(raw, 2026)[0].name, 'Flamengo x Vasco')
 })
 
-test('parseYoutubeSearch decodifica entidades HTML do título', () => {
+test('parseLiveVideos decodifica entidades HTML do título', () => {
   const raw = {
     items: [
-      item('aaaaaaaaaaa', 'Jogo &quot;Final&quot; Flamengo x Vasco'),
-      item('bbbbbbbbbbb', 'Time d&#39;Ávila x Vasco'),
-      item('ccccccccccc', 'Flamengo &amp; Amigos x Vasco'),
-      item('ddddddddddd', 'Flamengo x Vasco &amp;quot;'),
+      video('aaaaaaaaaaa', 'Jogo &quot;Final&quot; Flamengo x Vasco'),
+      video('bbbbbbbbbbb', 'Time d&#39;Ávila x Vasco'),
+      video('ccccccccccc', 'Flamengo &amp; Amigos x Vasco'),
+      video('ddddddddddd', 'Flamengo x Vasco &amp;quot;'),
     ],
   }
-  const names = parseYoutubeSearch(raw).map((live) => live.name)
+  const names = parseLiveVideos(raw, 2026).map((live) => live.name)
   assert.deepEqual(names, [
     'Jogo "Final" Flamengo x Vasco',
     "Time d'Ávila x Vasco",
@@ -140,49 +318,184 @@ test('parseYoutubeSearch decodifica entidades HTML do título', () => {
   ])
 })
 
-test('parseYoutubeSearch limita o título a 200 caracteres', () => {
-  const raw = { items: [item('abcdefghijk', `Flamengo x Vasco ${'z'.repeat(300)}`)] }
-  const [live] = parseYoutubeSearch(raw)
+test('parseLiveVideos limita o título a 200 caracteres', () => {
+  const raw = { items: [video('abcdefghijk', `Flamengo x Vasco ${'z'.repeat(300)}`)] }
+  const [live] = parseLiveVideos(raw, 2026)
   assert.equal(live.name.length, 200)
   assert.ok(live.name.startsWith('Flamengo x Vasco'))
 })
 
-test('parseYoutubeSearch descarta títulos sem confronto', () => {
+test('parseLiveVideos ordena por espectadores simultâneos, do maior para o menor', () => {
   const raw = {
     items: [
-      item('aaaaaaaaaaa', 'Transmissão ao vivo'),
-      item('bbbbbbbbbbb', 'x'),
-      item('ccccccccccc', 'Flamengo × '),
-      item('ddddddddddd', 'vs'),
-      item('eeeeeeeeeee', 'Flamengo x Vasco'),
+      video('aaaaaaaaaaa', 'Time A x Time B', { viewers: 10 }),
+      video('bbbbbbbbbbb', 'Time C x Time D', { viewers: 500 }),
+      video('ccccccccccc', 'Time E x Time F'),
+      video('ddddddddddd', 'Time G x Time H', { viewers: '300' }),
+      video('eeeeeeeeeee', 'Time I x Time J', { viewers: 'abc' }),
+      video('fffffffffff', 'Time K x Time L', { viewers: Infinity }),
     ],
   }
-  assert.deepEqual(parseYoutubeSearch(raw).map((live) => live.id), ['eeeeeeeeeee'])
+  // sem número válido conta como 0; empates mantêm a ordem original
+  assert.deepEqual(parseLiveVideos(raw, 2026).map((live) => live.id), [
+    'bbbbbbbbbbb',
+    'ddddddddddd',
+    'aaaaaaaaaaa',
+    'ccccccccccc',
+    'eeeeeeeeeee',
+    'fffffffffff',
+  ])
 })
 
-test('parseYoutubeSearch descarta títulos com palavras bloqueadas', () => {
-  const titles = [
-    'Flamengo x Vasco - REACT',
-    'Reação: Flamengo x Vasco',
-    'Flamengo x Vasco (Narração)',
-    'eFootball Flamengo x Vasco',
-    'FC 26 Flamengo x Vasco',
-    'Pré-jogo: Flamengo x Vasco',
-    'Flamengo x Vasco - Melhores momentos',
-    'Basquete: Flamengo x Vasco',
-    'Vôlei: Brasil x Itália',
+test('parseLiveVideos lê as transmissões além das 200 primeiras linhas', () => {
+  const filler = Array.from({ length: 300 }, (_, index) => video(vid(index), `Programa ${index}`, { content: 'none' }))
+  const raw = { items: [...filler, video('zzzzzzzzzzz', 'Flamengo x Vasco')] }
+  assert.deepEqual(parseLiveVideos(raw, 2026).map((live) => live.id), ['zzzzzzzzzzz'])
+})
+
+test('parseChannelList retorna o primeiro canal com id e título', () => {
+  const raw = {
+    items: [
+      { id: CHANNEL, snippet: { title: '  CazéTV  ' } },
+      { id: 'UCP-vp1zdHOa9k2hN_nMT9TA', snippet: { title: 'Outro' } },
+    ],
+  }
+  assert.deepEqual(parseChannelList(raw), { id: CHANNEL, title: 'CazéTV' })
+})
+
+test('parseChannelList usa o id como título quando o título falta ou está vazio', () => {
+  assert.deepEqual(parseChannelList({ items: [{ id: CHANNEL, snippet: {} }] }), { id: CHANNEL, title: CHANNEL })
+  assert.deepEqual(parseChannelList({ items: [{ id: CHANNEL, snippet: { title: '   ' } }] }), { id: CHANNEL, title: CHANNEL })
+})
+
+test('parseChannelList retorna null para resposta vazia, inválida ou com id ruim', () => {
+  assert.equal(parseChannelList(null), null)
+  assert.equal(parseChannelList('texto'), null)
+  assert.equal(parseChannelList({}), null)
+  assert.equal(parseChannelList({ items: [] }), null)
+  assert.equal(parseChannelList({ items: 'x' }), null)
+  assert.equal(parseChannelList({ items: [{ id: 'short', snippet: { title: 'X' } }] }), null)
+  assert.equal(parseChannelList({ items: [null] }), null)
+})
+
+test('parseStoredChannels devolve a lista padrão quando não há valor salvo', () => {
+  assert.deepEqual(parseStoredChannels(null), [...DEFAULT_YOUTUBE_CHANNELS])
+})
+
+test('parseStoredChannels devolve a lista padrão para JSON corrompido ou que não é array', () => {
+  assert.deepEqual(parseStoredChannels('{nao é json'), [...DEFAULT_YOUTUBE_CHANNELS])
+  assert.deepEqual(parseStoredChannels(''), [...DEFAULT_YOUTUBE_CHANNELS])
+  assert.deepEqual(parseStoredChannels('{}'), [...DEFAULT_YOUTUBE_CHANNELS])
+  assert.deepEqual(parseStoredChannels('"texto"'), [...DEFAULT_YOUTUBE_CHANNELS])
+  assert.deepEqual(parseStoredChannels('null'), [...DEFAULT_YOUTUBE_CHANNELS])
+})
+
+test('parseStoredChannels mantém uma lista salva vazia como vazia', () => {
+  assert.deepEqual(parseStoredChannels('[]'), [])
+})
+
+test('parseStoredChannels descarta ids inválidos, entradas que não são objeto e duplicados', () => {
+  const saved = [
+    { id: CHANNEL, title: 'Primeiro' },
+    { id: 'short', title: 'Curto' },
+    null,
+    'texto',
+    { id: CHANNEL, title: 'Repetido' },
+    { id: 42, title: 'Número' },
+    { title: 'Sem id' },
+    { id: 'UCP-vp1zdHOa9k2hN_nMT9TA', title: 'Segundo' },
   ]
-  const raw = { items: titles.map((title, index) => item(`vid${String(index).padStart(8, '0')}`, title)) }
-  assert.deepEqual(parseYoutubeSearch(raw), [])
+  assert.deepEqual(parseStoredChannels(JSON.stringify(saved)), [
+    { id: CHANNEL, title: 'Primeiro' },
+    { id: 'UCP-vp1zdHOa9k2hN_nMT9TA', title: 'Segundo' },
+  ])
 })
 
-test('parseYoutubeSearch processa no máximo as 200 primeiras linhas', () => {
-  const items = Array.from({ length: 201 }, (_, index) =>
-    item(`vid${String(index).padStart(8, '0')}`, `Time ${index} x Outro`),
-  )
-  const lives = parseYoutubeSearch({ items })
-  assert.equal(lives.length, 200)
-  assert.equal(lives[199].id, `vid${String(199).padStart(8, '0')}`)
+test('parseStoredChannels usa o id como título quando o título falta ou está vazio', () => {
+  const saved = [
+    { id: CHANNEL },
+    { id: channelIdOf(1), title: '   ' },
+    { id: channelIdOf(2), title: 123 },
+  ]
+  assert.deepEqual(parseStoredChannels(JSON.stringify(saved)), [
+    { id: CHANNEL, title: CHANNEL },
+    { id: channelIdOf(1), title: channelIdOf(1) },
+    { id: channelIdOf(2), title: channelIdOf(2) },
+  ])
+})
+
+test('parseStoredChannels limita a lista a MAX_YOUTUBE_CHANNELS', () => {
+  const saved = Array.from({ length: MAX_YOUTUBE_CHANNELS + 10 }, (_, index) => ({ id: channelIdOf(index), title: `Canal ${index}` }))
+  const channels = parseStoredChannels(JSON.stringify(saved))
+  assert.equal(channels.length, MAX_YOUTUBE_CHANNELS)
+  assert.equal(channels[0].id, channelIdOf(0))
+  assert.equal(channels.at(-1)?.id, channelIdOf(MAX_YOUTUBE_CHANNELS - 1))
+})
+
+test('parseStoredChannels não altera DEFAULT_YOUTUBE_CHANNELS ao mexer na lista devolvida', () => {
+  const before = DEFAULT_YOUTUBE_CHANNELS.map((channel) => ({ ...channel }))
+
+  const fromNull = parseStoredChannels(null)
+  fromNull.pop()
+  fromNull.push({ id: channelIdOf(99), title: 'Novo' })
+  assert.deepEqual(DEFAULT_YOUTUBE_CHANNELS, before)
+
+  const fromCorrupt = parseStoredChannels('{nao é json')
+  fromCorrupt.length = 0
+  assert.deepEqual(DEFAULT_YOUTUBE_CHANNELS, before)
+})
+
+test('DEFAULT_YOUTUBE_CHANNELS tem ids válidos e sem repetição', () => {
+  for (const channel of DEFAULT_YOUTUBE_CHANNELS) {
+    assert.equal(isYoutubeChannelId(channel.id), true, `id inválido: ${channel.id}`)
+    assert.ok(channel.title.length > 0)
+  }
+  const ids = DEFAULT_YOUTUBE_CHANNELS.map((channel) => channel.id)
+  assert.equal(new Set(ids).size, ids.length)
+})
+
+test('detectCompetition devolve NFL e NBA primeiro quando aparecem', () => {
+  assert.equal(detectCompetition('Chiefs vs Bills - NFL'), 'NFL')
+  assert.equal(detectCompetition('Lakers x Celtics | NBA'), 'NBA')
+  assert.equal(detectCompetition('Copa do Brasil: NFL Chiefs x Bills'), 'NFL')
+  assert.equal(detectCompetition('Copa do Brasil NBA: Lakers x Celtics'), 'NBA')
+})
+
+test('detectCompetition identifica competições conhecidas', () => {
+  assert.equal(detectCompetition('Copa do Brasil: Flamengo x Vasco'), 'Copa do Brasil')
+  assert.equal(detectCompetition('Brasileirão Série B: Sport x Ceará'), 'Brasileirão Série B')
+  assert.equal(detectCompetition('Serie B - Sport x Ceará'), 'Brasileirão Série B')
+  assert.equal(detectCompetition('Brasileirão Série A: Flamengo x Vasco'), 'Brasileirão')
+  assert.equal(detectCompetition('Premier League: Arsenal x Chelsea'), 'Premier League')
+})
+
+test('detectCompetition distingue Libertadores Feminina de Libertadores', () => {
+  assert.equal(detectCompetition('Libertadores Feminina: Corinthians x Boca'), 'Libertadores Feminina')
+  assert.equal(detectCompetition('Libertadores: Flamengo x Palmeiras'), 'Libertadores')
+})
+
+test('detectCompetition identifica Ligue 1 e Bundesliga', () => {
+  assert.equal(detectCompetition('Ligue 1: PSG x Lyon'), 'Ligue 1')
+  assert.equal(detectCompetition('Ligue1: Marseille x Nice'), 'Ligue 1')
+  assert.equal(detectCompetition('Bundesliga: Bayern x Dortmund'), 'Bundesliga')
+})
+
+test('detectCompetition retorna null quando nada combina', () => {
+  assert.equal(detectCompetition('Flamengo x Vasco'), null)
+  assert.equal(detectCompetition(''), null)
+})
+
+test('detectCompetition dá prioridade a Copa do Brasil sobre Brasileirão quando ambos aparecem', () => {
+  // a ordem da lista (COMPETITIONS) decide, não a posição do termo no título
+  assert.equal(detectCompetition('Brasileirão Série A - Copa do Brasil: Flamengo x Vasco'), 'Copa do Brasil')
+  assert.equal(detectCompetition('Copa do Brasil - Brasileirão Série A: Flamengo x Vasco'), 'Copa do Brasil')
+})
+
+test('detectCompetition não confunde nome de time com campeonato estadual', () => {
+  assert.equal(detectCompetition('Atlético Mineiro x Flamengo'), null)
+  assert.equal(detectCompetition('Grêmio x Internacional - Gauchão 2026'), 'Gauchão')
+  assert.equal(detectCompetition('Cruzeiro x América - Campeonato Mineiro'), 'Mineiro')
+  assert.equal(detectCompetition('Flamengo x Vasco | Carioca 2026'), 'Carioca')
 })
 
 test('isLiveGameTitle aceita confrontos com x, ×, vs, vs. e versus', () => {
@@ -284,63 +597,6 @@ test('isLiveGameTitle rejeita videogame com NBA/NFL no título e aceita a liga r
   assert.equal(isLiveGameTitle('Chiefs x Bills | Madden NFL 26'), false)
   assert.equal(isLiveGameTitle('Flamengo x Vasco 24hs'), false)
   assert.equal(isLiveGameTitle('Lakers x Celtics | NBA'), true)
-})
-
-test('parseYoutubeSearch descarta reprise de temporada antiga com year informado', () => {
-  const raw = {
-    items: [
-      item('aaaaaaaaaaa', 'Barcelona 3 x 3 Real Madrid 2006/07'),
-      item('bbbbbbbbbbb', 'Arsenal x Chelsea | Premier League 2025/26'),
-    ],
-  }
-  const lives = parseYoutubeSearch(raw, 2026)
-  assert.deepEqual(lives.map((live) => live.id), ['bbbbbbbbbbb'])
-  assert.equal(lives[0].competition, 'Premier League')
-})
-
-test('parseYoutubeSearch inclui NBA e NFL com competição própria', () => {
-  const raw = {
-    items: [
-      item('aaaaaaaaaaa', 'Lakers x Celtics | NBA', { channelTitle: 'Canal EUA' }),
-      item('bbbbbbbbbbb', 'Chiefs vs Bills - NFL', { channelTitle: 'Canal EUA' }),
-    ],
-  }
-  const lives = parseYoutubeSearch(raw, 2026)
-  assert.deepEqual(lives.map((live) => live.competition), ['NBA', 'NFL'])
-})
-
-test('detectCompetition devolve NFL e NBA primeiro quando aparecem', () => {
-  assert.equal(detectCompetition('Chiefs vs Bills - NFL'), 'NFL')
-  assert.equal(detectCompetition('Lakers x Celtics | NBA'), 'NBA')
-  assert.equal(detectCompetition('Copa do Brasil: NFL Chiefs x Bills'), 'NFL')
-  assert.equal(detectCompetition('Copa do Brasil NBA: Lakers x Celtics'), 'NBA')
-})
-
-test('detectCompetition identifica competições conhecidas', () => {
-  assert.equal(detectCompetition('Copa do Brasil: Flamengo x Vasco'), 'Copa do Brasil')
-  assert.equal(detectCompetition('Brasileirão Série B: Sport x Ceará'), 'Brasileirão Série B')
-  assert.equal(detectCompetition('Serie B - Sport x Ceará'), 'Brasileirão Série B')
-  assert.equal(detectCompetition('Brasileirão Série A: Flamengo x Vasco'), 'Brasileirão')
-  assert.equal(detectCompetition('Libertadores Feminina: Corinthians x Boca'), 'Libertadores')
-  assert.equal(detectCompetition('Premier League: Arsenal x Chelsea'), 'Premier League')
-})
-
-test('detectCompetition retorna null quando nada combina', () => {
-  assert.equal(detectCompetition('Flamengo x Vasco'), null)
-  assert.equal(detectCompetition(''), null)
-})
-
-test('detectCompetition dá prioridade a Copa do Brasil sobre Brasileirão quando ambos aparecem', () => {
-  // a ordem da lista (COMPETITIONS) decide, não a posição do termo no título
-  assert.equal(detectCompetition('Brasileirão Série A - Copa do Brasil: Flamengo x Vasco'), 'Copa do Brasil')
-  assert.equal(detectCompetition('Copa do Brasil - Brasileirão Série A: Flamengo x Vasco'), 'Copa do Brasil')
-})
-
-test('detectCompetition não confunde nome de time com campeonato estadual', () => {
-  assert.equal(detectCompetition('Atlético Mineiro x Flamengo'), null)
-  assert.equal(detectCompetition('Grêmio x Internacional - Gauchão 2026'), 'Gauchão')
-  assert.equal(detectCompetition('Cruzeiro x América - Campeonato Mineiro'), 'Mineiro')
-  assert.equal(detectCompetition('Flamengo x Vasco | Carioca 2026'), 'Carioca')
 })
 
 test('isValidYoutubeApiKey aceita chave no formato AIza com 39 caracteres', () => {

@@ -127,7 +127,7 @@ test('nomes longos completos vão para duas linhas quando a barra tem altura par
   assertNoOverlap(placement, videoRect)
 })
 
-test('posiciona rótulo na barra lateral quando o vídeo é 4:3 em painel 16:9', () => {
+test('vídeo 4:3 com só barras laterais recebe a legenda embaixo do vídeo', () => {
   // Painel típico de 16 telas em 1920×1080 (~480×270): barras laterais ~60px
   const panelWidth = 480
   const panelHeight = 270
@@ -147,10 +147,13 @@ test('posiciona rótulo na barra lateral quando o vídeo é 4:3 em painel 16:9',
     home: 'Flamengo',
     away: 'Palmeiras',
   })
-  assert.equal(placement.mode, 'bar-side')
-  assert.equal(placement.layout, 'stacked')
-  assert.ok(placement.fontPx >= 10)
-  assertNoOverlap(placement, videoRect)
+  const videoBottom = videoRect.y + videoRect.height
+  assert.equal(placement.mode, 'overlay-bottom')
+  assert.ok(Math.abs(placement.box.x - videoRect.x) < 1e-9, `x ${placement.box.x}`)
+  assert.ok(Math.abs(placement.box.width - videoRect.width) < 1e-9, `largura ${placement.box.width}`)
+  assert.ok(Math.abs(placement.box.y + placement.box.height - videoBottom) < 1e-9, `base ${placement.box.y + placement.box.height}`)
+  assert.ok(placement.fontPx >= 10, `fontPx ${placement.fontPx}`)
+  assert.equal(labelOverlapsVideo(placement, videoRect), true)
 })
 
 test('usa overlay-bottom quando o vídeo preenche o painel: largura toda, colado embaixo, fonte maior', () => {
@@ -216,7 +219,7 @@ test('videoRect nulo assume conteúdo 16:9 centralizado', () => {
   assert.equal(filled.mode, 'overlay-bottom')
   assert.equal(labelOverlapsVideo(filled, { x: 0, y: 0, width: 1, height: 1 }), true)
 
-  // Painel mais largo que 16:9 → barras laterais grandes
+  // Painel mais largo que 16:9 → barras laterais, mas sem barra em cima/embaixo: legenda sobre o vídeo centralizado
   const wide = placeMatchLabel({
     panelWidth: 960,
     panelHeight: 400,
@@ -224,7 +227,34 @@ test('videoRect nulo assume conteúdo 16:9 centralizado', () => {
     home: 'A',
     away: 'B',
   })
-  assert.ok(wide.mode === 'bar-side' || wide.mode === 'bar-bottom' || wide.mode === 'bar-top')
+  const expectedWidth = (16 / 9) * 400 / 960
+  const expectedX = (1 - expectedWidth) / 2
+  assert.equal(wide.mode, 'overlay-bottom')
+  assert.ok(Math.abs(wide.box.width - expectedWidth) < 1e-9, `largura ${wide.box.width}`)
+  assert.ok(Math.abs(wide.box.x - expectedX) < 1e-9, `x ${wide.box.x}`)
+  assertInsidePanel(wide.box)
+})
+
+test('legenda sobre o vídeo cresce com o painel: destaque grande > 26px e ≤ 36px, painel pequeno menor', () => {
+  const videoRect: NormRect = { x: 0, y: 0, width: 1, height: 1 }
+  const large = placeMatchLabel({
+    panelWidth: 1100,
+    panelHeight: 620,
+    videoRect,
+    home: 'Flamengo',
+    away: 'Palmeiras',
+  })
+  const small = placeMatchLabel({
+    panelWidth: 480,
+    panelHeight: 270,
+    videoRect,
+    home: 'Flamengo',
+    away: 'Palmeiras',
+  })
+  assert.equal(large.mode, 'overlay-bottom')
+  assert.equal(small.mode, 'overlay-bottom')
+  assert.ok(large.fontPx > 26 && large.fontPx <= 36, `fontPx grande ${large.fontPx}`)
+  assert.ok(small.fontPx < large.fontPx, `${small.fontPx} < ${large.fontPx}`)
 })
 
 test('painéis minúsculos com legenda sobre o vídeo mantêm fontPx no mínimo de 10px', () => {

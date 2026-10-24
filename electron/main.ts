@@ -18,7 +18,7 @@ import {
   playbackProbeScript,
 } from './player-start'
 import { getScannerLogBacklog, logScanner, onScannerLog } from './scanner-log'
-import { listYoutubeLives } from './youtube-search'
+import { listYoutubeLives, resolveYoutubeChannel } from './youtube-search'
 import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSkipScript, youtubePlayerCss } from './youtube-player'
 import { createAutoUpdateController } from './update'
 
@@ -288,7 +288,7 @@ const scanners = createScoreboardScanners({
   },
   onScore: sendMatchScore,
 })
-/** YouTube panels: links the live to a 365Scores game by the teams in its title, then polls that game. */
+/** YouTube panels and BLL players without a William Hill feed: links the panel to a 365Scores game by the teams in its title, then polls that game. */
 const liveScores = createLiveScoreLinker({
   onEvent: ({ panelIds, incident, teamName, score, label }) => {
     for (const panelId of panelIds) {
@@ -707,28 +707,45 @@ function stopMatchDetection(panelId: string) {
   overlayWindow?.webContents.send('quadra:match-score', { panelId, home: '', away: '', score: '' })
 }
 
-/** Finds which match a BLL panel is playing and hands its feed id to the scanner. */
+/**
+ * Finds which match a BLL panel is playing and hands its feed id to the scanner.
+ * A match without a William Hill feed falls back to 365Scores by its name, as YouTube lives do;
+ * detection keeps looking meanwhile, and a feed id that shows up later takes over.
+ */
 function startMatchDetection(contents: Electron.WebContents, panelId: string) {
   stopMatchDetection(panelId)
   let attempts = 0
+  let fallback = false
+  const startFallback = (name: string) => {
+    if (fallback || contents.isDestroyed()) return
+    fallback = true
+    logScanner(`[${panelId}] jogo sem feed de lances (williamHillId ausente); buscando no 365Scores: ${name || contents.getURL()}`, '365')
+    liveScores.consider(panelId, contents.getURL(), name)
+  }
   const timer = setInterval(() => {
     attempts += 1
     if (contents.isDestroyed() || attempts > MATCH_DETECT_ATTEMPTS) {
       clearInterval(timer)
       matchDetections.delete(panelId)
-      if (!contents.isDestroyed()) {
-        const title = sanitizePanelTitle(contents.getTitle()) || contents.getURL()
-        logScanner(`[${panelId}] jogo sem feed de lances (williamHillId ausente): ${title}`)
-      }
+      if (!contents.isDestroyed()) startFallback(sanitizePanelTitle(contents.getTitle()))
       return
     }
     void contents.executeJavaScript(detectMatchScript).then((found: { id?: string | null; nome?: string } | null) => {
       if (!found || !matchDetections.has(panelId)) return
+      const name = sanitizePanelTitle(found.nome ?? '')
       const eventId = extractWilliamHillId(found.id)
-      if (!eventId) return
+      if (!eventId) {
+        // The player loaded its match and it has no feed id: no point waiting a minute for one.
+        if (found.nome) startFallback(name)
+        return
+      }
       clearInterval(timer)
       matchDetections.delete(panelId)
-      scanners.attach(panelId, eventId, sanitizePanelTitle(found.nome ?? '') || `jogo ${eventId}`)
+      if (fallback) {
+        liveScores.detach(panelId)
+        logScanner(`[${panelId}] feed William Hill apareceu; 365Scores deixado de lado`, 'wh')
+      }
+      scanners.attach(panelId, eventId, name || `jogo ${eventId}`)
     }).catch(() => {})
   }, MATCH_DETECT_INTERVAL_MS)
   matchDetections.set(panelId, timer)
@@ -758,8 +775,8 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
   contents.on('did-navigate-in-page', (_event, url, isMainFrame) => {
     if (!isMainFrame) return
     void syncYoutubePlayer()
-    // Leaving /watch inside YouTube's SPA: the live is gone, so is its 365Scores link.
-    if (slotId && !isYoutubeWatchUrl(url)) liveScores.detach(slotId)
+    // Leaving /watch inside YouTube's SPA: the live is gone, so is its 365Scores link (a BLL player keeps its fallback).
+    if (slotId && !isYoutubeWatchUrl(url) && !matchSportsPlayerUrl(url)) liveScores.detach(slotId)
   })
   contents.on('did-finish-load', () => {
     youtubeCssKey = undefined // full load clears inserted CSS
@@ -1156,9 +1173,13 @@ function installIpcHandlers() {
     if (!isUiSender(event)) return { status: 'unavailable' }
     return listBllsportEvents()
   })
-  ipcMain.handle('quadra:list-youtube-lives', (event) => {
+  ipcMain.handle('quadra:list-youtube-lives', (event, channels: unknown) => {
     if (!isUiSender(event)) return { status: 'unavailable' }
-    return listYoutubeLives()
+    return listYoutubeLives(channels)
+  })
+  ipcMain.handle('quadra:resolve-youtube-channel', (event, input: unknown) => {
+    if (!isUiSender(event)) return { status: 'unavailable' }
+    return resolveYoutubeChannel(input)
   })
 }
 

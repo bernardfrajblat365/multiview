@@ -5,14 +5,22 @@ import {
   classifyEvent365,
   classifyPbp,
   createLiveState,
+  DETAIL_TIMEOUT_MS,
+  detailTimeoutMs,
   diffDetail,
   diffPbp,
   dropRepeatedVar,
+  GOAL_EVENT_GRACE_MS,
   matchGame,
   parseGameDetail,
   parseGameList,
   parsePbpFeed,
+  parseRedCards,
   pbpFeedUrl,
+  QUICK_RETRIES,
+  retryDelayMs,
+  SLOW_DETAIL_TIMEOUT_MS,
+  sourceKeyOf,
   teamQualifiers,
   teamSimilarity,
   teamsFromTitle,
@@ -252,7 +260,7 @@ test('matchGame: título com o nome completo "Real Madrid" liga ao jogo', () => 
 
 // 5. parseGameDetail -------------------------------------------------------
 
-test('parseGameDetail lê placar, cartões e eventos na ordem recebida', () => {
+test('parseGameDetail lê placar, cartões e eventos em ordem cronológica', () => {
   const parsed = parseGameDetail({
     game: {
       id: 42,
@@ -273,8 +281,8 @@ test('parseGameDetail lê placar, cartões e eventos na ordem recebida', () => {
   assert.equal(parsed.home.score, 1)
   assert.equal(parsed.away.redCards, 1)
   assert.deepEqual(parsed.events, [
-    { order: 2, typeId: 3, subTypeId: 21, competitorId: 20, gameTime: 30 },
     { order: 1, typeId: 1, subTypeId: 1, competitorId: 10, gameTime: 12 },
+    { order: 2, typeId: 3, subTypeId: 21, competitorId: 20, gameTime: 30 },
   ])
 })
 
@@ -591,4 +599,211 @@ test('fluxo completo: o mesmo VAR vindo do evento, do comentário (tipo 48) e da
   assert.equal(alerts[0].kind, 'var')
   assert.equal(alerts[0].team, 'home')
   assert.equal(alerts[0].minute, 58)
+})
+
+test('sourceKeyOf: YouTube watch uses the video id', () => {
+  assert.equal(sourceKeyOf('https://www.youtube.com/watch?v=abc123&t=10'), 'abc123')
+})
+
+test('sourceKeyOf: YouTube live path uses the video id', () => {
+  assert.equal(sourceKeyOf('https://www.youtube.com/live/xyz789?si=q'), 'xyz789')
+})
+
+test('sourceKeyOf: BLL player drops the query so the same player shares a key', () => {
+  assert.equal(sourceKeyOf('https://www.bllsport.com/view/evt42?view=clean&canal=2'), 'https://www.bllsport.com/view/evt42')
+  assert.equal(
+    sourceKeyOf('https://www.bllsport.com/view/evt42?view=clean&canal=2'),
+    sourceKeyOf('https://www.bllsport.com/view/evt42?canal=9'),
+  )
+})
+
+test('sourceKeyOf: two different BLL players get different keys', () => {
+  assert.notEqual(sourceKeyOf('https://www.bllsport.com/view/evt42'), sourceKeyOf('https://www.bllsport.com/view/evt43'))
+})
+
+test('sourceKeyOf: non-http URLs and invalid strings give an empty key', () => {
+  assert.equal(sourceKeyOf('file:///C:/x'), '')
+  assert.equal(sourceKeyOf('not a url'), '')
+})
+
+// 15. Lista grande, ligação por nome, diffDetail com e sem eventos, parseRedCards ------
+
+function homeSide(score: number, redCards = 0) {
+  return { id: 10, name: 'Santos', score, redCards }
+}
+
+function awaySide(score: number, redCards = 0) {
+  return { id: 20, name: 'Pumas', score, redCards }
+}
+
+test('parseGameList mantém mais de 400 jogos e matchGame acha um jogo no fim da lista', () => {
+  const rows = Array.from({ length: 900 }, (_, index) => row(index + 1))
+  rows[850] = row(851, {
+    homeCompetitor: { id: 9001, name: 'Krasnodar' },
+    awayCompetitor: { id: 9002, name: 'Baltika' },
+  })
+  const games = parseGameList({ games: rows })
+  assert.equal(games.length, 900)
+
+  const result = matchGame('Krasnodar x Baltika Kaliningrad 🔊', games, NOW)
+  assert.equal(result.status, 'matched')
+  assert.equal(result.status === 'matched' && result.game.id, 851)
+})
+
+test('matchGame: "SLAVIA PRAGA" no título liga ao "Slavia Praha" e não ao "Slavia Kromeriz"', () => {
+  const games = [
+    game(1, 'Slavia Praha', 'Mlada Boleslav'),
+    game(2, 'Slavia Kromeriz', 'Viktoria Zizkov'),
+  ]
+  const result = matchGame('AO VIVO: SLAVIA PRAGA X MLADÁ BOLESLAV', games, NOW)
+  assert.equal(result.status, 'matched')
+  assert.equal(result.status === 'matched' && result.game.id, 1)
+})
+
+test('diffDetail sem events: gol pelo placar sai na hora e o gol que depois chega nos eventos não repete', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: null, home: homeSide(0), away: awaySide(0) }), NOW), [])
+
+  const goal = diffDetail(state, detail({ events: null, home: homeSide(1), away: awaySide(0) }), NOW + 1000)
+  assert.equal(goal.length, 1)
+  assert.equal(goal[0].kind, 'goal')
+  assert.equal(goal[0].team, 'home')
+
+  const withEvent = diffDetail(
+    state,
+    detail({ events: [event(1, 1, 1, 10, 12)], home: homeSide(1), away: awaySide(0) }),
+    NOW + 2000,
+  )
+  assert.deepEqual(withEvent, [])
+})
+
+test('diffDetail com events: gol que só aparece no placar espera o evento e sai com o pênalti uma vez', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [], home: homeSide(0), away: awaySide(0) }), NOW), [])
+
+  // O placar já mudou, mas o evento ainda não chegou: nada sai dentro da carência.
+  assert.deepEqual(diffDetail(state, detail({ events: [], home: homeSide(1), away: awaySide(0) }), NOW + 1000), [])
+
+  const withEvent = diffDetail(
+    state,
+    detail({ events: [event(1, 1, 3, 10, 20)], home: homeSide(1), away: awaySide(0) }),
+    NOW + 4000,
+  )
+  assert.equal(withEvent.length, 1)
+  assert.equal(withEvent[0].kind, 'goal')
+  assert.equal(withEvent[0].note, 'pênalti')
+
+  assert.deepEqual(
+    diffDetail(state, detail({ events: [event(1, 1, 3, 10, 20)], home: homeSide(1), away: awaySide(0) }), NOW + 20000),
+    [],
+  )
+})
+
+test('diffDetail com events: gol só no placar sai depois de GOAL_EVENT_GRACE_MS e o evento tardio não repete', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [], home: homeSide(0), away: awaySide(0) }), NOW), [])
+
+  // Visitante marca no placar; sem evento, nada sai antes da carência.
+  assert.deepEqual(diffDetail(state, detail({ events: [], home: homeSide(0), away: awaySide(1) }), NOW + 1000), [])
+  assert.deepEqual(diffDetail(state, detail({ events: [], home: homeSide(0), away: awaySide(1) }), NOW + 5000), [])
+
+  const fromScore = diffDetail(state, detail({ events: [], home: homeSide(0), away: awaySide(1) }), NOW + 1000 + GOAL_EVENT_GRACE_MS)
+  assert.equal(fromScore.length, 1)
+  assert.equal(fromScore[0].kind, 'goal')
+  assert.equal(fromScore[0].team, 'away')
+
+  const lateEvent = diffDetail(
+    state,
+    detail({ events: [event(1, 1, 0, 20, 30)], home: homeSide(0), away: awaySide(1) }),
+    NOW + 11000,
+  )
+  assert.deepEqual(lateEvent, [])
+})
+
+test('diffDetail sem events: cartão vermelho pela contagem e depois pelo evento não repete', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: null, home: homeSide(0, 0) }), NOW), [])
+
+  const reds = diffDetail(state, detail({ events: null, home: homeSide(0, 1) }), NOW + 1000)
+  assert.equal(reds.length, 1)
+  assert.equal(reds[0].kind, 'red')
+  assert.equal(reds[0].team, 'home')
+
+  const withEvent = diffDetail(state, detail({ events: [event(1, 3, 0, 10, 40)], home: homeSide(0, 1) }), NOW + 2000)
+  assert.deepEqual(withEvent, [])
+})
+
+test('diffDetail sem events: placar que volta vira VAR e o gol de novo depois alerta', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: null, home: homeSide(1), away: awaySide(0) }), NOW), [])
+
+  const annulled = diffDetail(state, detail({ events: null, home: homeSide(0), away: awaySide(0) }), NOW + 1000)
+  assert.equal(annulled.length, 1)
+  assert.equal(annulled[0].kind, 'var')
+  assert.equal(annulled[0].note, 'gol anulado')
+  assert.equal(annulled[0].team, 'home')
+
+  const again = diffDetail(state, detail({ events: null, home: homeSide(1), away: awaySide(0) }), NOW + 2000)
+  assert.equal(again.length, 1)
+  assert.equal(again[0].kind, 'goal')
+  assert.equal(again[0].team, 'home')
+})
+
+test('parseRedCards lê os cartões do jogo pedido e devolve null para o resto', () => {
+  const raw = { games: [{ id: 5, homeCompetitor: { redCards: 1 }, awayCompetitor: {} }] }
+  assert.deepEqual(parseRedCards(raw, 5), { home: 1, away: 0 })
+  assert.equal(parseRedCards(raw, 6), null)
+  assert.equal(parseRedCards(null, 5), null)
+  assert.equal(parseRedCards({}, 5), null)
+  assert.equal(parseRedCards({ games: 'x' }, 5), null)
+})
+
+test('parseGameDetail ordena os eventos pela ordem da API (order 3,1,2 vira 1,2,3)', () => {
+  const parsed = parseGameDetail(
+    rawGame({
+      events: [
+        { order: 3, competitorId: 10, gameTime: 33, eventType: { id: 2, subTypeId: 0 } },
+        { order: 1, competitorId: 10, gameTime: 12, eventType: { id: 1, subTypeId: 0 } },
+        { order: 2, competitorId: 20, gameTime: 20, eventType: { id: 3, subTypeId: 0 } },
+      ],
+    }),
+  )
+  assert.ok(parsed)
+  assert.deepEqual(parsed.events?.map((event) => event.order), [1, 2, 3])
+})
+
+test('prazo do detalhe: 4 s nas duas primeiras tentativas, 10 s depois de falhas seguidas', () => {
+  assert.equal(DETAIL_TIMEOUT_MS, 4000)
+  assert.equal(SLOW_DETAIL_TIMEOUT_MS, 10_000)
+  assert.equal(QUICK_RETRIES, 3)
+  assert.equal(detailTimeoutMs(0), 4000)
+  assert.equal(detailTimeoutMs(1), 4000)
+  assert.equal(detailTimeoutMs(2), 10_000)
+  assert.equal(detailTimeoutMs(3), 10_000)
+  assert.equal(detailTimeoutMs(10), 10_000)
+})
+
+test('espera de retry por travamento: imediata nas 3 primeiras, depois dobra até 15 s', () => {
+  assert.equal(retryDelayMs(1, 'stall'), 0)
+  assert.equal(retryDelayMs(2, 'stall'), 0)
+  assert.equal(retryDelayMs(3, 'stall'), 0)
+  assert.equal(retryDelayMs(4, 'stall'), 3000)
+  assert.equal(retryDelayMs(5, 'stall'), 6000)
+  assert.equal(retryDelayMs(6, 'stall'), 12_000)
+  assert.equal(retryDelayMs(7, 'stall'), 15_000)
+  assert.equal(retryDelayMs(20, 'stall'), 15_000)
+})
+
+test('espera de retry por erro HTTP: dobra a partir de 6 s e para em 60 s', () => {
+  assert.equal(retryDelayMs(1, 'http'), 6000)
+  assert.equal(retryDelayMs(2, 'http'), 12_000)
+  assert.equal(retryDelayMs(3, 'http'), 24_000)
+  assert.equal(retryDelayMs(4, 'http'), 48_000)
+  assert.equal(retryDelayMs(5, 'http'), 60_000)
+  assert.equal(retryDelayMs(9, 'http'), 60_000)
+})
+
+test('um pedido travado se recupera em poucos segundos: as esperas de 1 a 4 falhas somam 3 s', () => {
+  const total = [1, 2, 3, 4].reduce((sum, failures) => sum + retryDelayMs(failures, 'stall'), 0)
+  assert.equal(total, 3000)
 })

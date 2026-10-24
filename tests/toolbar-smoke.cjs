@@ -377,11 +377,12 @@ async function worker() {
   async function runMatchLabelScenarios() {
     const expectedModes = {
       '16x9': 'overlay-bottom',
-      '4x3': 'bar-side',
+      '4x3': 'overlay-bottom',
       '16x4': 'bar-bottom',
     }
-    // The expected modes need 16:9 panels with room for a 48 px side bar at 4:3, so the
-    // window gets a fixed 16:9 size instead of being maximized: CI screens are 1024x768.
+    // The expected modes need 16:9 panels (a 4:3 video then only has side bars, which get the
+    // caption over the video), so the window gets a fixed 16:9 size instead of being
+    // maximized: CI screens are 1024x768.
     const labelPanels = 4
     for (const [ratio, expectedMode] of Object.entries(expectedModes)) {
       if (main.isMaximized()) main.unmaximize()

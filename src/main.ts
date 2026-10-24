@@ -1762,7 +1762,11 @@ function setBackVisible(visible: boolean) {
   if (!shell) return
   shell.classList.toggle('is-back-visible', visible)
   // The top-left panel's own controls sit in the same corner: step aside while the button shows.
-  const corner = visible ? document.elementsFromPoint(4, 4).find((el) => el.classList.contains('panel')) : null
+  // By geometry, not hit-testing: a playing panel has pointer-events: none and is invisible to elementsFromPoint.
+  const corner = visible ? [...shell.querySelectorAll<HTMLElement>('.panel')].find((el) => {
+    const r = el.getBoundingClientRect()
+    return r.left <= 4 && r.top <= 4 && r.right > 4 && r.bottom > 4
+  }) : null
   shell.querySelectorAll('.panel.has-back-button').forEach((el) => { if (el !== corner) el.classList.remove('has-back-button') })
   corner?.classList.add('has-back-button')
 }

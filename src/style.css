@@ -444,7 +444,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   transition: opacity 0.15s ease, visibility 0s linear 0.15s;
 }
 .grid-shell.is-back-visible .back-corner { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
-.panel.has-back-button .panel__controls { left: 6.2rem; }
+/* Below the button, not beside it: narrow corner panels have no room to the right. */
+.panel.has-back-button .panel__controls { top: 2.9rem; }
 .organize-panel {
   bottom: calc(var(--toolbar-height, 3.1rem) + 1.25rem);
   max-height: calc(100svh - var(--toolbar-height, 3.1rem) - 2rem); overflow: auto;

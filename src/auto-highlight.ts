@@ -1,5 +1,6 @@
 import { calculateLayout, getCompositions, resolveComposition, type PanelId } from './layout.ts'
 
+/** Default highlight time of a goal; the user can pick another in the alert settings. */
 export const AUTO_HIGHLIGHT_MS = 45_000
 /** Auto-highlight only makes sense once the grid has small panels to promote from. */
 export const AUTO_MIN_PANELS = 3
@@ -77,12 +78,13 @@ export function registerGoal(
   panelCount: number,
   userHighlighted: readonly PanelId[],
   panelOrder: readonly PanelId[] = [],
+  durationMs = AUTO_HIGHLIGHT_MS,
 ): GoalResult {
   const capacity = highlightCapacity(panelCount)
   if (panelCount < AUTO_MIN_PANELS || capacity === 0) return { autos: [...autos], highlighted: null }
   const isAuto = autos.some((entry) => entry.id === panelId)
   if (userHighlighted.includes(panelId) && !isAuto) return { autos: [...autos], highlighted: null }
-  const next = [...autos.filter((entry) => entry.id !== panelId), { id: panelId, expiresAt: now + AUTO_HIGHLIGHT_MS }].slice(-capacity)
+  const next = [...autos.filter((entry) => entry.id !== panelId), { id: panelId, expiresAt: now + durationMs }].slice(-capacity)
   return { autos: next, highlighted: composeHighlighted(next, userHighlighted, panelCount, panelOrder) }
 }
 

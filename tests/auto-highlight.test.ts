@@ -160,3 +160,33 @@ test('registerGoal com 12 telas destaca o gol e o primeiro outro painel, sem com
   assert.deepEqual(result.highlighted, ['p5', 'p0'])
   assert.deepEqual(result.autos, [{ id: 'p5', expiresAt: AUTO_HIGHLIGHT_MS }])
 })
+
+test('registerGoal com duração personalizada define expiresAt = agora + duração', () => {
+  const result = registerGoal([], 'p5', 1000, 9, [], panelOrderOf(9), 120_000)
+  assert.deepEqual(result.autos, [{ id: 'p5', expiresAt: 121_000 }])
+  assert.deepEqual(result.highlighted, ['p5'])
+})
+
+test('registerGoal sem duração usa AUTO_HIGHLIGHT_MS', () => {
+  const result = registerGoal([], 'p5', 1000, 9, [])
+  assert.deepEqual(result.autos, [{ id: 'p5', expiresAt: 1000 + AUTO_HIGHLIGHT_MS }])
+})
+
+test('expireAutos com duração personalizada mantém antes do prazo e remove no prazo', () => {
+  const { autos } = registerGoal([], 'p5', 0, 9, [], panelOrderOf(9), 120_000)
+  const before = expireAutos(autos, 119_999)
+  assert.equal(before.changed, false)
+  assert.deepEqual(before.autos, [{ id: 'p5', expiresAt: 120_000 }])
+
+  const atDeadline = expireAutos(autos, 120_000)
+  assert.equal(atDeadline.changed, true)
+  assert.deepEqual(atDeadline.autos, [])
+})
+
+test('gol repetido no mesmo painel com outra duração substitui o expiresAt', () => {
+  const first = registerGoal([], 'p5', 0, 9, [], panelOrderOf(9), 180_000)
+  assert.deepEqual(first.autos, [{ id: 'p5', expiresAt: 180_000 }])
+
+  const second = registerGoal(first.autos, 'p5', 30_000, 9, [], panelOrderOf(9), 15_000)
+  assert.deepEqual(second.autos, [{ id: 'p5', expiresAt: 45_000 }])
+})

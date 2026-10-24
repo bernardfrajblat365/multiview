@@ -9,7 +9,7 @@ import {
   type RawIncident,
 } from '../src/match-events.ts'
 import { ALERT_SOUNDS, ALERT_SOUND_IDS } from '../src/alert-sounds.ts'
-import { DEFAULT_ALERT_SETTINGS, parseAlertSettings } from '../src/alert-settings.ts'
+import { AUTO_HIGHLIGHT_OPTIONS, DEFAULT_ALERT_SETTINGS, parseAlertSettings } from '../src/alert-settings.ts'
 
 const NOW = Date.parse('2026-10-22T19:40:00.000Z')
 const incident = (id: string, type: string, offsetMs = 0, extra: Partial<RawIncident> = {}): RawIncident => ({
@@ -178,13 +178,42 @@ test('preferências: valores não booleanos, JSON null e chaves extras', () => {
     JSON.stringify({ soundId: 'gongo', volume: 11, kinds: { goal: false, extra: true } }),
     ALERT_SOUND_IDS,
   )
-  assert.deepEqual(extra, { soundId: 'gongo', kinds: { goal: false, penalty: true, red: true, yellow: false, var: true }, autoHighlight: true, scoreDelaySec: 0 })
+  assert.deepEqual(extra, { soundId: 'gongo', kinds: { goal: false, penalty: true, red: true, yellow: false, var: true }, autoHighlight: true, autoHighlightSec: 45, scoreDelaySec: 0 })
 })
 
 test('preferência de auto-destaque: padrão ligado e valor salvo respeitado', () => {
   assert.equal(DEFAULT_ALERT_SETTINGS.autoHighlight, true)
   assert.equal(parseAlertSettings(JSON.stringify({ autoHighlight: false }), ALERT_SOUND_IDS).autoHighlight, false)
   assert.equal(parseAlertSettings(JSON.stringify({ autoHighlight: 'não' }), ALERT_SOUND_IDS).autoHighlight, true)
+})
+
+test('duração do auto-destaque: padrão 45 s, valores salvos válidos respeitados', () => {
+  assert.equal(DEFAULT_ALERT_SETTINGS.autoHighlightSec, 45)
+  assert.equal(parseAlertSettings(null, ALERT_SOUND_IDS).autoHighlightSec, 45)
+  assert.equal(parseAlertSettings(JSON.stringify({ autoHighlightSec: 90 }), ALERT_SOUND_IDS).autoHighlightSec, 90)
+  assert.equal(parseAlertSettings(JSON.stringify({ autoHighlightSec: 180 }), ALERT_SOUND_IDS).autoHighlightSec, 180)
+  assert.equal(parseAlertSettings(JSON.stringify({ autoHighlightSec: 15 }), ALERT_SOUND_IDS).autoHighlightSec, 15)
+})
+
+test('duração do auto-destaque: valores inválidos voltam para 45 s', () => {
+  for (const invalid of [50, '60', -1, null, 0]) {
+    assert.equal(parseAlertSettings(JSON.stringify({ autoHighlightSec: invalid }), ALERT_SOUND_IDS).autoHighlightSec, 45, `valor ${String(invalid)}`)
+  }
+})
+
+test('duração do auto-destaque: toda opção de AUTO_HIGHLIGHT_OPTIONS sobrevive ao salvar e reler', () => {
+  for (const option of AUTO_HIGHLIGHT_OPTIONS) {
+    const saved = JSON.stringify({ ...DEFAULT_ALERT_SETTINGS, autoHighlightSec: option })
+    assert.equal(parseAlertSettings(saved, ALERT_SOUND_IDS).autoHighlightSec, option)
+  }
+})
+
+test('duração do auto-destaque não altera o liga/desliga autoHighlight', () => {
+  const on = parseAlertSettings(JSON.stringify({ autoHighlightSec: 120 }), ALERT_SOUND_IDS)
+  assert.equal(on.autoHighlight, true)
+  const off = parseAlertSettings(JSON.stringify({ autoHighlight: false, autoHighlightSec: 120 }), ALERT_SOUND_IDS)
+  assert.equal(off.autoHighlight, false)
+  assert.equal(off.autoHighlightSec, 120)
 })
 
 test('rótulo do alerta sem time, com time e com minuto 0', () => {

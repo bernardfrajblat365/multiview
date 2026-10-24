@@ -13,7 +13,7 @@ import {
 } from './youtube-lives'
 import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
-import { RELEASES, markVersionSeen, readLastSeenVersion, releaseToShow, type Release } from './release-notes'
+import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
 import type { LiveMatchStatus } from './livescore-365'
 import { AUTO_MIN_PANELS, composeHighlighted, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
 import {
@@ -1523,7 +1523,10 @@ function showReleaseNotes(release: Release) {
   backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
     <p class="release-notes__eyebrow">Quadra atualizado</p>
     <h2 id="release-notes-title" class="confirm__message">Novidades da versão ${escapeHtml(release.label)}</h2>
-    <ul class="release-notes__list">${release.notes.map((note) => `<li><strong>${escapeHtml(note.title)}</strong><p>${escapeHtml(note.body)}</p></li>`).join('')}</ul>
+    <div class="release-notes__scroll">${releaseHistory(release).map((entry, index) => `<section class="release-notes__version">
+      ${index > 0 ? `<h3>Versão ${escapeHtml(entry.label)}</h3>` : ''}
+      <ul class="release-notes__list">${entry.notes.map((note) => `<li><strong>${escapeHtml(note.title)}</strong><p>${escapeHtml(note.body)}</p></li>`).join('')}</ul>
+    </section>`).join('')}</div>
     <div class="confirm__actions"><button type="button" class="btn btn--load" data-ok>Entendi</button></div>
   </div>`
   const close = () => {

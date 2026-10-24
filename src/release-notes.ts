@@ -33,6 +33,10 @@ export const RELEASES: readonly Release[] = [
         title: 'Jogos encontrados no 365Scores com mais precisão',
         body: 'Em dias cheios o Quadra deixava de encontrar parte dos jogos no 365Scores, inclusive do Brasileirão. Agora ele procura em todos os jogos do dia. Gols que o 365Scores mostra no placar antes de registrar o lance também alertam, e um mesmo gol ou cartão vermelho não alerta duas vezes.',
       },
+      {
+        title: 'Histórico de novidades',
+        body: 'Esta janela agora mostra também o que mudou nas versões anteriores. Role para baixo para ver as novidades de cada versão.',
+      },
     ],
   },
   {
@@ -83,6 +87,12 @@ export const RELEASES: readonly Release[] = [
 export function releaseToShow(currentVersion: string, lastSeen: string | null, releases: readonly Release[] = RELEASES): Release | null {
   if (lastSeen === currentVersion) return null
   return releases.find((release) => release.version === currentVersion) ?? null
+}
+
+/** The given release, then every older one: the popup lists them all so earlier changes stay a scroll away. */
+export function releaseHistory(release: Release, releases: readonly Release[] = RELEASES): Release[] {
+  const index = releases.findIndex((entry) => entry.version === release.version)
+  return index < 0 ? [release] : releases.slice(index)
 }
 
 export function readLastSeenVersion(): string | null {

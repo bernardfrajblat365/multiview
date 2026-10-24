@@ -6,6 +6,16 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.1',
+    label: '1.1.1',
+    notes: [
+      {
+        title: 'Alertas também nos jogos da BLL sem lances',
+        body: 'Quando um jogo da BLL não tem o placar ao vivo da William Hill, o Quadra procura o mesmo jogo no 365Scores, como já faz nas lives do YouTube. Os alertas de gol, pênalti, cartão e VAR voltam a funcionar nesses jogos, e o botão ⏱ do painel ajusta o atraso. Se o Quadra não tiver certeza do jogo, o painel pergunta qual é.',
+      },
+    ],
+  },
+  {
     version: '1.1.0',
     label: '1.1',
     notes: [

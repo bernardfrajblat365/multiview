@@ -10,6 +10,7 @@ import {
   parseGameDetail,
   parseGameList,
   parsePbpFeed,
+  sourceKeyOf,
   type Game365,
   type LiveMatchStatus,
   type LiveState,
@@ -21,7 +22,8 @@ import type { ScannerScore } from './scoreboard-scanner'
 export type LiveEvent = { panelIds: string[]; incident: MatchIncident; teamName: string; score: string; label: string }
 
 type PanelLink = {
-  videoId: string
+  /** YouTube video id, or the player path of a BLL panel without a William Hill feed. */
+  sourceKey: string
   title: string
   gameId: number | null
   candidates: Game365[]
@@ -77,15 +79,6 @@ function brazilDate(now: Date) {
   const parts = new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: 'numeric' }).formatToParts(now)
   const part = (type: string) => parts.find((entry) => entry.type === type)?.value ?? ''
   return `${part('day')}/${part('month')}/${part('year')}`
-}
-
-function videoIdOf(url: string) {
-  try {
-    const parsed = new URL(url)
-    return parsed.searchParams.get('v') ?? /^\/live\/([^/?#]+)/.exec(parsed.pathname)?.[1] ?? ''
-  } catch {
-    return ''
-  }
 }
 
 export function createLiveScoreLinker(options: {
@@ -265,17 +258,20 @@ export function createLiveScoreLinker(options: {
     }
   }
 
-  /** Called with every title of a YouTube watch page; a new video or a title that names other teams starts over. */
+  /**
+   * Called with every title of a YouTube watch page, and with the match name of a BLL player
+   * that has no William Hill feed; a new video/player or a title that names other teams starts over.
+   */
   function consider(panelId: string, url: string, title: string) {
-    const videoId = videoIdOf(url)
+    const sourceKey = sourceKeyOf(url)
     const existing = links.get(panelId)
-    if (existing && existing.videoId === videoId && (existing.gameId !== null || existing.title === title)) return
+    if (existing && existing.sourceKey === sourceKey && (existing.gameId !== null || existing.title === title)) return
     unlink(panelId)
-    if (!videoId || !matchTitle(title)) {
+    if (!sourceKey || !matchTitle(title)) {
       sendStatus(panelId, { status: 'off' })
       return
     }
-    links.set(panelId, { videoId, title, gameId: null, candidates: [], attempts: 0, token: 0 })
+    links.set(panelId, { sourceKey, title, gameId: null, candidates: [], attempts: 0, token: 0 })
     void resolve(panelId)
   }
 

@@ -286,6 +286,18 @@ export function matchGame(title: string, games: readonly Game365[], now: number)
   return { status: 'ambiguous', candidates: ranked.slice(0, MAX_CANDIDATES).map((entry) => entry.game) }
 }
 
+/** Same key, same link: a YouTube video id, or the path of any other page (a BLL `/view/<id>` player). */
+export function sourceKeyOf(url: string) {
+  try {
+    const parsed = new URL(url)
+    const youtubeId = parsed.searchParams.get('v') ?? /^\/live\/([^/?#]+)/.exec(parsed.pathname)?.[1]
+    if (youtubeId) return youtubeId
+    return /^https?:$/.test(parsed.protocol) ? `${parsed.origin}${parsed.pathname}` : ''
+  } catch {
+    return ''
+  }
+}
+
 export function candidateOf(game: Game365): Candidate365 {
   const detail = [game.competition, game.statusText].filter(Boolean).join(' · ')
   return { id: game.id, label: `${game.home} x ${game.away}`, detail }

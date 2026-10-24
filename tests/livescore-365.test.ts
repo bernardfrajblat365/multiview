@@ -13,6 +13,7 @@ import {
   parseGameList,
   parsePbpFeed,
   pbpFeedUrl,
+  sourceKeyOf,
   teamQualifiers,
   teamSimilarity,
   teamsFromTitle,
@@ -591,4 +592,29 @@ test('fluxo completo: o mesmo VAR vindo do evento, do comentário (tipo 48) e da
   assert.equal(alerts[0].kind, 'var')
   assert.equal(alerts[0].team, 'home')
   assert.equal(alerts[0].minute, 58)
+})
+
+test('sourceKeyOf: YouTube watch uses the video id', () => {
+  assert.equal(sourceKeyOf('https://www.youtube.com/watch?v=abc123&t=10'), 'abc123')
+})
+
+test('sourceKeyOf: YouTube live path uses the video id', () => {
+  assert.equal(sourceKeyOf('https://www.youtube.com/live/xyz789?si=q'), 'xyz789')
+})
+
+test('sourceKeyOf: BLL player drops the query so the same player shares a key', () => {
+  assert.equal(sourceKeyOf('https://www.bllsport.com/view/evt42?view=clean&canal=2'), 'https://www.bllsport.com/view/evt42')
+  assert.equal(
+    sourceKeyOf('https://www.bllsport.com/view/evt42?view=clean&canal=2'),
+    sourceKeyOf('https://www.bllsport.com/view/evt42?canal=9'),
+  )
+})
+
+test('sourceKeyOf: two different BLL players get different keys', () => {
+  assert.notEqual(sourceKeyOf('https://www.bllsport.com/view/evt42'), sourceKeyOf('https://www.bllsport.com/view/evt43'))
+})
+
+test('sourceKeyOf: non-http URLs and invalid strings give an empty key', () => {
+  assert.equal(sourceKeyOf('file:///C:/x'), '')
+  assert.equal(sourceKeyOf('not a url'), '')
 })

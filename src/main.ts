@@ -105,11 +105,11 @@ const shownScores = new Map<PanelId, string>()
 const scoreFlashUntil = new Map<PanelId, number>()
 const SCORE_FLASH_MS = 6000
 let labelRefreshTimer: number | null = null
-/** 365Scores link of each YouTube panel, as reported by the main process. */
+/** 365Scores link of each YouTube panel (and BLL panel without a William Hill feed), as reported by the main process. */
 const panelLive = new Map<PanelId, LiveMatchStatus>()
-/** Per-panel delay (s) chosen on a linked YouTube panel; memory only, like the rest of the panel state. */
+/** Per-panel delay (s) chosen on a 365Scores-linked panel; memory only, like the rest of the panel state. */
 const panelDelayOverride = new Map<PanelId, number>()
-/** Alerts of YouTube panels waiting for the video to catch up with the data. */
+/** Alerts of 365Scores-linked panels waiting for the video to catch up with the data. */
 const pendingAlerts = new Map<PanelId, Set<number>>()
 
 function clearPendingAlerts(id: PanelId) {
@@ -150,7 +150,7 @@ function isLiveLinked(id: PanelId) {
   return panelLive.get(id)?.status === 'linked'
 }
 
-/** Score delay of one panel: a linked YouTube panel may have its own; null hides the score everywhere. */
+/** Score delay of one panel: a 365Scores-linked panel may have its own; null hides the score everywhere. */
 function panelScoreDelayMs(id: PanelId) {
   const global = scoreDelayMs()
   if (global === null) return null
@@ -158,7 +158,7 @@ function panelScoreDelayMs(id: PanelId) {
   return own === undefined ? global : own * 1000
 }
 
-/** YouTube lives trail the 365Scores data, so their alerts wait as long as their score. BLL alerts stay immediate. */
+/** Videos trail the 365Scores data, so 365Scores alerts wait as long as their score. William Hill alerts stay immediate. */
 function panelAlertDelayMs(id: PanelId) {
   if (!isLiveLinked(id)) return 0
   const own = panelDelayOverride.get(id)
@@ -485,7 +485,7 @@ function liveDelayLabel(seconds: number) {
   return seconds === 0 ? 'na hora' : `${seconds} s`
 }
 
-/** The "⏱ 30 s" button of a linked YouTube panel, kept with the panel's other top-left buttons so it never covers the player's own controls. */
+/** The "⏱ 30 s" button of a 365Scores-linked panel, kept with the panel's other top-left buttons so it never covers the player's own controls. */
 function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: LiveMatchStatus | undefined, globalSec: number | null) {
   const controls = panelElement.querySelector<HTMLElement>(':scope > .panel__controls')
   let button = controls?.querySelector<HTMLElement>(':scope > .panel__delay') ?? null
@@ -513,7 +513,7 @@ function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: Liv
     </select>`
 }
 
-/** Prompt to pick the game of an ambiguous YouTube title, and the delay button of a linked one. Idempotent, like the auto controls. */
+/** Prompt to pick the game of an ambiguous title (YouTube, or BLL without a William Hill feed), and the delay button of a linked one. Idempotent, like the auto controls. */
 function updateLiveControls() {
   const globalSec = getAlertSettings().scoreDelaySec
   for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
@@ -2054,7 +2054,7 @@ onAlertShown((panelId, payload) => {
 })
 window.quadra?.onMatchEvent((payload) => {
   if (view !== 'grid') return
-  // YouTube lives trail the data: hold the alert as long as the panel's score is held.
+  // 365Scores-linked panels trail the data: hold the alert as long as the panel's score is held.
   const delay = panelAlertDelayMs(payload.panelId)
   if (delay <= 0) {
     deliverMatchEvent(payload)

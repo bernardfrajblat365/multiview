@@ -93,7 +93,7 @@ async function run() {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(`<!doctype html><title>BLL Test Catalog</title>
         <button id="game-a" onclick="window.open('/view/game-a?canal=2&title=' + encodeURIComponent('Time A x Time B'), 'game-a')">Jogo A</button>
-        <button id="game-b" onclick="window.open('/view/game-b?title=' + encodeURIComponent('Time C x Time D'), 'game-b')">Jogo B</button>
+        <button id="game-b" onclick="window.open('/view/game-b?title=' + encodeURIComponent('Time C x Time D') + '&evento=' + encodeURIComponent('Coritiba x Avaí'), 'game-b')">Jogo B</button>
         <div id="app"></div>
         <script>
           // Mirrors the BLL home: a Vue 2 tree whose ListEventosHome2 holds the listed games.
@@ -124,6 +124,23 @@ async function run() {
       ] }))
       return
     }
+    if (request.url?.startsWith('/web/games/')) {
+      // game-b has no William Hill feed: its BLL panel falls back to this 365Scores game.
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ games: [{
+        id: 9001, sportId: 1, statusGroup: 3, statusText: "30'", competitionDisplayName: 'Liga Teste',
+        startTime: new Date().toISOString(), homeCompetitor: { id: 1, name: 'Coritiba' }, awayCompetitor: { id: 2, name: 'Avaí' },
+      }] }))
+      return
+    }
+    if (request.url?.startsWith('/web/game/')) {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ game: {
+        id: 9001, statusGroup: 3, gameTime: 30, events: [],
+        homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0 }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0 },
+      } }))
+      return
+    }
     if (request.url?.startsWith('/watch')) {
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(fs.readFileSync(path.join(__dirname, 'fixtures', 'youtube-watch.html')))
@@ -149,7 +166,7 @@ async function run() {
   const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
     env: {
-      ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`,
+      ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl,
       QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube/search`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
     },
   })
@@ -215,6 +232,9 @@ async function run() {
     await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] input[name="url"]').value.includes('/view/game-b')`)
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.label === 'Time C x Time D'`)
+    // No William Hill feed in game-b: the panel links to the 365Scores game named by the player instead.
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="1"] .panel__delay')?.title.includes('365Scores: Coritiba x Avaí') === true`)
 
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       const source = document.querySelector('.panel[data-slot="0"]')

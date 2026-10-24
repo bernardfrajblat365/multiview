@@ -512,7 +512,9 @@ async function run() {
         title: dialog?.querySelector('#release-notes-title')?.textContent ?? '',
         items: dialog ? dialog.querySelectorAll('.release-notes__list li').length : 0,
         focused: document.activeElement?.matches('.release-notes [data-ok]') ?? false,
-        listScrolls: dialog ? getComputedStyle(dialog.querySelector('.release-notes__list')).overflowY === 'auto' : false,
+        versions: dialog ? dialog.querySelectorAll('.release-notes__version').length : 0,
+        olderHeadings: dialog ? [...dialog.querySelectorAll('.release-notes__version h3')].map((h) => h.textContent) : [],
+        listScrolls: dialog ? getComputedStyle(dialog.querySelector('.release-notes__scroll')).overflowY === 'auto' : false,
         fitsViewport: dialog ? dialog.querySelector('.release-notes__dialog').getBoundingClientRect().bottom <= innerHeight : false,
       }
     })()`)
@@ -521,6 +523,9 @@ async function run() {
     assert.equal(firstLaunch.open, true, JSON.stringify(firstLaunch))
     assert.match(firstLaunch.title, /^Novidades da versão /)
     assert.ok(firstLaunch.items > 0, JSON.stringify(firstLaunch))
+    // Older versions follow the current one, each under its own heading.
+    assert.ok(firstLaunch.versions >= 2 && firstLaunch.olderHeadings.length === firstLaunch.versions - 1 &&
+      firstLaunch.olderHeadings.every((heading) => /^Versão /.test(heading)), JSON.stringify(firstLaunch))
     assert.equal(firstLaunch.focused, true, JSON.stringify(firstLaunch))
     assert.equal(firstLaunch.listScrolls && firstLaunch.fitsViewport, true, JSON.stringify(firstLaunch))
     await window.webContents.executeJavaScript(`document.querySelector('.release-notes [data-ok]').click()`)

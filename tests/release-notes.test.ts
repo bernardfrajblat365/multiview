@@ -1,7 +1,7 @@
 import assert from 'node:assert/strict'
 import { readFileSync } from 'node:fs'
 import test from 'node:test'
-import { RELEASES, releaseToShow, type Release } from '../src/release-notes.ts'
+import { RELEASES, releaseHistory, releaseToShow, type Release } from '../src/release-notes.ts'
 
 const packageJson = JSON.parse(readFileSync(new URL('../package.json', import.meta.url), 'utf8')) as { version: string }
 const currentVersion = packageJson.version
@@ -61,4 +61,45 @@ test('RELEASES: toda nota tem título e corpo não vazios', () => {
 test('RELEASES: versões são únicas', () => {
   const versions = RELEASES.map((release) => release.version)
   assert.equal(new Set(versions).size, versions.length)
+})
+
+const historyReleases: readonly Release[] = [
+  { version: '2.0.0', label: '2.0', notes: [{ title: 'Dois', body: 'Corpo dois' }] },
+  { version: '1.1.0', label: '1.1', notes: [{ title: 'Um um', body: 'Corpo um um' }] },
+  { version: '1.0.0', label: '1.0', notes: [{ title: 'Um zero', body: 'Corpo um zero' }] },
+]
+
+test('releaseHistory com a versão mais nova retorna todas as versões na ordem', () => {
+  assert.deepEqual(releaseHistory(historyReleases[0], historyReleases), historyReleases)
+})
+
+test('releaseHistory com uma versão do meio retorna ela e só as mais antigas', () => {
+  assert.deepEqual(releaseHistory(historyReleases[1], historyReleases), [historyReleases[1], historyReleases[2]])
+})
+
+test('releaseHistory com a versão mais antiga retorna só ela', () => {
+  assert.deepEqual(releaseHistory(historyReleases[2], historyReleases), [historyReleases[2]])
+})
+
+test('releaseHistory com versão fora da lista retorna só essa versão', () => {
+  const outside: Release = { version: '9.9.9', label: '9.9', notes: [{ title: 'Fora', body: 'Corpo fora' }] }
+  const result = releaseHistory(outside, historyReleases)
+  assert.equal(result.length, 1)
+  assert.equal(result[0], outside)
+})
+
+test('releaseHistory compara pela versão, não pela identidade do objeto', () => {
+  const copy: Release = { version: '1.1.0', label: 'cópia', notes: [] }
+  const result = releaseHistory(copy, historyReleases)
+  assert.deepEqual(result, [historyReleases[1], historyReleases[2]])
+  assert.equal(result[0], historyReleases[1])
+})
+
+test('releaseHistory usa RELEASES por padrão', () => {
+  const index = RELEASES.findIndex((release) => release.version === currentVersion)
+  assert.ok(index >= 0, `falta entrada em RELEASES para ${currentVersion}`)
+  const result = releaseHistory(RELEASES[index])
+  assert.equal(result.length, RELEASES.length - index)
+  assert.equal(result[0].version, currentVersion)
+  assert.deepEqual(result, RELEASES.slice(index))
 })

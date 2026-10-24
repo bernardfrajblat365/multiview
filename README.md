@@ -87,7 +87,7 @@ npm run dist:release
 - Sempre pergunta antes de baixar e antes de reiniciar. Nada é instalado em segundo plano.
 - O botão **Verificar atualizações** na tela inicial força a verificação.
 - O updater valida HTTPS e o SHA-512 do `latest.yml`.
-- **Novidades:** na primeira abertura de uma versão nova, o Quadra mostra uma janela com a lista do que mudou (uma vez por versão; a última versão vista fica no `localStorage` do app). O botão **Novidades** na tela inicial reabre a lista. As notas ficam em `src/release-notes.ts`: a cada release, acrescente a entrada da nova versão no topo de `RELEASES` (o teste `tests/release-notes.test.ts` falha se a versão do `package.json` não tiver notas).
+- **Novidades:** na primeira abertura de uma versão nova, o Quadra mostra uma janela com a lista do que mudou (uma vez por versão; a última versão vista fica no `localStorage` do app). Abaixo das novidades da versão instalada vêm as das versões anteriores, cada uma com o seu título, para rolar e ver o histórico. O botão **Novidades** na tela inicial reabre a lista. As notas ficam em `src/release-notes.ts`: a cada release, acrescente a entrada da nova versão no topo de `RELEASES` (o teste `tests/release-notes.test.ts` falha se a versão do `package.json` não tiver notas).
 
 ### CI e release
 

@@ -1,5 +1,5 @@
 import { ALERT_SOUNDS, ALERT_SOUND_IDS, getAlertSound, playAlertSound } from './alert-sounds'
-import { SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
+import { AUTO_HIGHLIGHT_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
 import type { AlertKind } from './match-events'
 
 export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
@@ -36,6 +36,12 @@ export function onAlertSettingsChange(listener: (settings: AlertSettings) => voi
   return () => settingsListeners.delete(listener)
 }
 
+function durationLabel(seconds: number) {
+  if (seconds < 60) return `${seconds} s`
+  const rest = seconds % 60
+  return rest ? `${Math.floor(seconds / 60)} min ${rest} s` : `${seconds / 60} min`
+}
+
 function scoreDelayLabel(value: number | null) {
   if (value === null) return 'Não mostrar'
   return value === 0 ? 'Na hora' : `${value} s depois`
@@ -53,7 +59,11 @@ export function alertControlsHtml(idPrefix: string): string {
     <fieldset class="alert-kinds"><legend>Alertar em</legend>
       ${(Object.keys(KIND_NAME) as AlertKind[]).map((kind) => `<label><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_NAME[kind]}</label>`).join('')}
     </fieldset>
-    <label class="alert-auto"><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol por 45 s (3+ telas)</label>
+    <div class="alert-auto"><label><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol (3+ telas) por</label>
+      <select data-auto-highlight-sec aria-label="Tempo do destaque do gol"${settings.autoHighlight ? '' : ' disabled'}>
+        ${AUTO_HIGHLIGHT_OPTIONS.map((value) => `<option value="${value}"${settings.autoHighlightSec === value ? ' selected' : ''}>${durationLabel(value)}</option>`).join('')}
+      </select>
+    </div>
     <label class="alert-score-delay" title="O feed costuma chegar antes do vídeo; o atraso evita ver o gol no placar antes de vê-lo na tela. Nas lives do YouTube vale também para alertas e destaque, e cada painel pode ter o seu">Placar no painel
       <select data-score-delay>
         ${[null, ...SCORE_DELAY_OPTIONS].map((value) => `<option value="${value ?? 'off'}"${settings.scoreDelaySec === value ? ' selected' : ''}>${scoreDelayLabel(value)}</option>`).join('')}
@@ -113,8 +123,14 @@ export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
         saveAlertSettings(settings)
       }, { signal })
     }
+    const autoSec = controls.querySelector<HTMLSelectElement>('[data-auto-highlight-sec]')
     controls.querySelector<HTMLInputElement>('[data-auto-highlight]')?.addEventListener('change', (event) => {
       settings = { ...settings, autoHighlight: (event.target as HTMLInputElement).checked }
+      saveAlertSettings(settings)
+      if (autoSec) autoSec.disabled = !settings.autoHighlight
+    }, { signal })
+    autoSec?.addEventListener('change', () => {
+      settings = { ...settings, autoHighlightSec: Number(autoSec.value) }
       saveAlertSettings(settings)
     }, { signal })
     controls.querySelector<HTMLSelectElement>('[data-score-delay]')?.addEventListener('change', (event) => {

@@ -97,7 +97,7 @@ let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
 let showMatchLabels = true
 const forceReloadIds = new Set<PanelId>()
-/** Panels promoted to highlights by a goal; they return to the user's layout after 45 s. */
+/** Panels promoted to highlights by a goal; they return to the user's layout after the chosen time. */
 type AutoBaseline = { highlighted: PanelId[]; mode: LayoutMode; position: HighlightPosition | undefined; variant: string | undefined }
 let autoEntries: AutoEntry[] = []
 let autoBaseline: AutoBaseline | null = null
@@ -454,11 +454,12 @@ function tickAuto() {
 }
 
 function startAutoGoal(panelId: PanelId) {
-  if (view !== 'grid' || panels.length < AUTO_MIN_PANELS || !getAlertSettings().autoHighlight) return
+  const alertSettings = getAlertSettings()
+  if (view !== 'grid' || panels.length < AUTO_MIN_PANELS || !alertSettings.autoHighlight) return
   if (!autoBaseline) {
     autoBaseline = { highlighted: [...highlighted], mode: layoutMode, position: highlightPosition, variant: compositionVariant }
   }
-  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id))
+  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id), alertSettings.autoHighlightSec * 1000)
   autoEntries = result.autos
   if (!result.highlighted) {
     if (autoEntries.length === 0) autoBaseline = null

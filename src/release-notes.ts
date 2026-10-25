@@ -6,6 +6,16 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.2',
+    label: '1.1.2',
+    notes: [
+      {
+        title: 'Escolha quanto tempo o gol fica em destaque',
+        body: 'Ao lado de "Destacar o jogo do gol", na tela inicial ou no menu ⋯, dá para escolher por quanto tempo o painel do gol fica grande: de 15 segundos a 3 minutos (o padrão continua 45 segundos). A escolha fica salva para as próximas vezes.',
+      },
+    ],
+  },
+  {
     version: '1.1.1',
     label: '1.1.1',
     notes: [

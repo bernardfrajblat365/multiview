@@ -562,6 +562,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .toolbar__menu .alert-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; padding: 0.6rem 0.8rem 0.7rem; }
 .toolbar__menu .alert-auto, .toolbar__menu .alert-score-delay { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.55rem 0.8rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; }
 .toolbar__menu .alert-auto { justify-content: flex-start; }
+.toolbar__menu .alert-auto select { margin-left: auto; }
 .toolbar__menu .alert-score-delay select { min-width: 8.5rem; }
 .toolbar__menu .sound-picker__list { position: static; width: 100%; max-height: 11rem; margin-top: 4px; }
 
@@ -573,9 +574,11 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 @keyframes alert-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .panel__alert { animation: none; } }
 
-.alert-auto { display: inline-flex; align-items: center; gap: 0.35rem; font-size: 0.82rem; cursor: pointer; }
+.alert-auto { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; }
+.alert-auto label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
 .alert-score-delay { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; }
-.alert-score-delay select { border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.35rem; color: var(--ink); background: rgba(18,80,60,0.8); font: inherit; }
+.alert-auto select, .alert-score-delay select { border: 1px solid var(--line); border-radius: 6px; padding: 0.25rem 0.35rem; color: var(--ink); background: rgba(18,80,60,0.8); font: inherit; }
+.alert-auto select:disabled { opacity: 0.45; cursor: not-allowed; }
 .panel__auto-controls { position: absolute; z-index: 26; left: 50%; bottom: 0.6rem; transform: translateX(-50%); display: flex; align-items: center; gap: 0.4rem; padding: 0.25rem 0.5rem; border-radius: 999px; background: rgba(7,26,20,0.92); border: 1px solid var(--accent); pointer-events: auto; font-size: clamp(0.7rem, 2cqw, 0.9rem); white-space: nowrap; }
 .panel__auto-count { padding: 0 0.3rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; }
 .panel__auto-controls .btn { padding: 0.2rem 0.6rem; font-size: inherit; }

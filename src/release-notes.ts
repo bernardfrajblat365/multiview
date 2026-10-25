@@ -6,6 +6,16 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.3',
+    label: '1.1.3',
+    notes: [
+      {
+        title: 'Jogos do YouTube sem configurar nada',
+        body: 'O botão "Abrir jogos ao vivo do YouTube" agora funciona logo depois de instalar: o Quadra já vem com a chave da API do YouTube, então não precisa mais criar uma chave nem mexer no arquivo .env.',
+      },
+    ],
+  },
+  {
     version: '1.1.2',
     label: '1.1.2',
     notes: [

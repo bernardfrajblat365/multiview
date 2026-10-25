@@ -80,7 +80,11 @@ jobs:
         shell: pwsh
         env:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
-        run: npm run dist:release
+          QUADRA_BUILTIN_YOUTUBE_API_KEY: ${{ secrets.QUADRA_YOUTUBE_API_KEY }}
+        run: |
+          if ([string]::IsNullOrWhiteSpace($env:QUADRA_BUILTIN_YOUTUBE_API_KEY)) { throw 'Configure the QUADRA_YOUTUBE_API_KEY secret before building a release.' }
+          npm run dist:release
+          if ($LASTEXITCODE -ne 0) { throw "dist:release failed (exit $LASTEXITCODE)." }
 
       - name: Validate release metadata
         shell: pwsh

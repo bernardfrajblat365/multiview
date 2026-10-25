@@ -3,6 +3,7 @@ import test from 'node:test'
 import {
   DEFAULT_YOUTUBE_CHANNELS,
   MAX_YOUTUBE_CHANNELS,
+  chooseYoutubeApiKey,
   detectCompetition,
   isLiveGameTitle,
   isValidYoutubeApiKey,
@@ -688,6 +689,29 @@ test('readEnvValue ignora nomes parecidos', () => {
 test('readEnvValue aceita espaços em volta do = e = dentro do valor', () => {
   assert.equal(readEnvValue('YOUTUBE_API_KEY  =  abc', 'YOUTUBE_API_KEY'), 'abc')
   assert.equal(readEnvValue('YOUTUBE_API_KEY=a=b', 'YOUTUBE_API_KEY'), 'a=b')
+})
+
+test('chooseYoutubeApiKey prefere a chave própria à embutida', () => {
+  assert.equal(chooseYoutubeApiKey('AIzaPropria', 'AIzaEmbutida'), 'AIzaPropria')
+})
+
+test('chooseYoutubeApiKey usa a embutida quando a própria falta', () => {
+  assert.equal(chooseYoutubeApiKey(null, 'AIzaEmbutida'), 'AIzaEmbutida')
+  assert.equal(chooseYoutubeApiKey(undefined, 'AIzaEmbutida'), 'AIzaEmbutida')
+  assert.equal(chooseYoutubeApiKey('', 'AIzaEmbutida'), 'AIzaEmbutida')
+  assert.equal(chooseYoutubeApiKey('   ', 'AIzaEmbutida'), 'AIzaEmbutida')
+})
+
+test('chooseYoutubeApiKey remove espaços das duas chaves', () => {
+  assert.equal(chooseYoutubeApiKey('  AIzaPropria  ', 'AIzaEmbutida'), 'AIzaPropria')
+  assert.equal(chooseYoutubeApiKey(null, '  AIzaEmbutida  '), 'AIzaEmbutida')
+})
+
+test('chooseYoutubeApiKey retorna null quando nenhuma chave existe', () => {
+  assert.equal(chooseYoutubeApiKey(null, null), null)
+  assert.equal(chooseYoutubeApiKey(undefined, undefined), null)
+  assert.equal(chooseYoutubeApiKey('', ''), null)
+  assert.equal(chooseYoutubeApiKey('  ', '  '), null)
 })
 
 test('youtubeErrorStatus mapeia quotaExceeded para quota', () => {

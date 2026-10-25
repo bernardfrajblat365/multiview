@@ -96,6 +96,11 @@ export function isValidYoutubeApiKey(key: unknown): key is string {
   return typeof key === 'string' && API_KEY.test(key)
 }
 
+/** The user's own key (environment or `.env`) wins; otherwise the key baked into the build, if any. */
+export function chooseYoutubeApiKey(ownKey: string | null | undefined, builtInKey: string | null | undefined): string | null {
+  return ownKey?.trim() || builtInKey?.trim() || null
+}
+
 /** Reads one `NAME=value` line from a `.env` file (comments, `export` and surrounding quotes allowed); last one wins. */
 export function readEnvValue(text: string, name: string) {
   let value: string | null = null

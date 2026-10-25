@@ -989,8 +989,8 @@ function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean
 }
 
 const YOUTUBE_ERRORS: Record<Exclude<YoutubeLivesResult['status'], 'ok'>, string> = {
-  'no-key': 'Falta a chave da YouTube Data API. Coloque QUADRA_YOUTUBE_API_KEY=... no arquivo .env e clique em Atualizar lista.',
-  'invalid-key': 'A chave da YouTube Data API foi recusada. Confira QUADRA_YOUTUBE_API_KEY no .env e as restrições da chave no Google Cloud.',
+  'no-key': 'Esta versão do Quadra veio sem chave da YouTube Data API. Coloque QUADRA_YOUTUBE_API_KEY=... no arquivo .env e clique em Atualizar lista.',
+  'invalid-key': 'A chave da YouTube Data API foi recusada. Se você usa chave própria, confira QUADRA_YOUTUBE_API_KEY no .env; senão, atualize o Quadra.',
   'api-disabled': 'A YouTube Data API v3 não está ativada no projeto do Google Cloud desta chave.',
   quota: 'A cota diária da YouTube Data API acabou. Ela volta à meia-noite do horário do Pacífico.',
   unavailable: 'Não foi possível buscar as lives do YouTube. Confira a internet e clique em Atualizar lista.',

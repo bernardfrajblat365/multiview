@@ -2,6 +2,7 @@ import { app, net } from 'electron'
 import { readFile } from 'node:fs/promises'
 import { dirname, join } from 'node:path'
 import {
+  chooseYoutubeApiKey,
   isValidYoutubeApiKey,
   isYoutubeChannelId,
   MAX_YOUTUBE_CHANNELS,
@@ -44,7 +45,7 @@ function envFileCandidates() {
 }
 
 /** Read on every request so editing `.env` does not need a restart. The key is never logged nor sent to the renderer. */
-async function readApiKey() {
+async function readOwnApiKey() {
   const fromProcess = process.env[KEY_NAME]?.trim()
   if (fromProcess) return fromProcess
   for (const file of envFileCandidates()) {
@@ -53,6 +54,10 @@ async function readApiKey() {
     if (value) return value
   }
   return null
+}
+
+async function readApiKey() {
+  return chooseYoutubeApiKey(await readOwnApiKey(), __QUADRA_BUILTIN_YOUTUBE_API_KEY__)
 }
 
 async function apiKey(): Promise<{ key: string } | { status: 'no-key' | 'invalid-key' }> {

@@ -5,6 +5,8 @@ import type { AlertKind } from './match-events'
 import type { LiveMatchStatus } from './livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
+/** Crest data URLs in the feed's home/away order; null where there is none (both null: clear). */
+type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
 type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
 
 type QuadraBridge = {
@@ -32,6 +34,8 @@ type QuadraBridge = {
   openMonitor: () => void
   onMatchEvent: (callback: (payload: MatchEventPayload) => void) => () => void
   onMatchScore: (callback: (payload: MatchScorePayload) => void) => () => void
+  onMatchCrests: (callback: (payload: MatchCrestsPayload) => void) => () => void
+  onMatchEnded: (callback: (payload: { panelId: string }) => void) => () => void
   onLiveMatch: (callback: (payload: LiveMatchStatus) => void) => () => void
   chooseLiveMatch: (panelId: string, gameId: number | null) => void
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => () => void

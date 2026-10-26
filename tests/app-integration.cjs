@@ -88,6 +88,8 @@ async function run() {
   const youtubeTestKey = `AIza${'T'.repeat(35)}`
   const youtubeQueries = []
   let detailRequests = 0
+  let finishingDetailRequests = 0
+  const crestRequests = []
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
     if (request.url?.startsWith('/bll/')) {
@@ -101,10 +103,10 @@ async function run() {
           const list = {
             $options: { name: 'ListEventosHome2' }, $children: [],
             itens: [
-              { _id: 'game-c', nome: 'Time E x Time F 🔊', competicao: 'Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
-              { _id: 'game-d', nome: 'Time G x Time H', competicao: 'Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
-              { _id: 'game-e', nome: 'Time I x Time J', competicao: 'Outra Liga', situacao: 3, dataHora: 18, dataMinuto: 30 },
-              { _id: 'game-f', nome: 'Time K x Time L', competicao: 'Liga Teste, Grupo A', situacao: 1, dataHora: 21, dataMinuto: 0 },
+              { _id: 'game-c', nome: 'Time E x Time F 🔊', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
+              { _id: 'game-d', nome: 'Time G x Time H', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
+              { _id: 'game-e', nome: 'Time I x Time J', competicao: 'Brasil, Outra Liga', situacao: 3, dataHora: 18, dataMinuto: 30 },
+              { _id: 'game-f', nome: 'Time K x Time L', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 1, dataHora: 21, dataMinuto: 0 },
             ],
             formatarHora: (item) => String(item.dataHora).padStart(2, '0') + ':' + String(item.dataMinuto).padStart(2, '0'),
           }
@@ -143,13 +145,38 @@ async function run() {
       }
       return json({}, 404)
     }
+    if (request.url?.startsWith('/image/upload/')) {
+      // 365Scores crests: Coritiba (1) and Avaí (2) have one; any other team answers 404, like the CDN without a default image.
+      crestRequests.push(request.url)
+      if (!/\/Competitors\/[12]$/.test(request.url)) {
+        response.writeHead(404)
+        response.end()
+        return
+      }
+      response.writeHead(200, { 'content-type': 'image/png' })
+      response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'))
+      return
+    }
     if (request.url?.startsWith('/web/games/')) {
       // game-b has no William Hill feed: its BLL panel falls back to this 365Scores game.
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ games: [{
         id: 9001, sportId: 1, statusGroup: 3, statusText: "30'", competitionDisplayName: 'Liga Teste',
-        startTime: new Date().toISOString(), homeCompetitor: { id: 1, name: 'Coritiba' }, awayCompetitor: { id: 2, name: 'Avaí' },
+        startTime: new Date().toISOString(), homeCompetitor: { id: 1, name: 'Coritiba', imageVersion: 3 }, awayCompetitor: { id: 2, name: 'Avaí', imageVersion: 1 },
+      }, {
+        id: 9002, sportId: 1, statusGroup: 3, statusText: "88'", competitionDisplayName: 'Liga Teste',
+        startTime: new Date().toISOString(), homeCompetitor: { id: 3, name: 'Bahia' }, awayCompetitor: { id: 4, name: 'Vitória' },
       }] }))
+      return
+    }
+    if (request.url?.startsWith('/web/game/') && new URL(request.url, 'http://fixture').searchParams.get('gameId') === '9002') {
+      // Live for the first rounds, then over: its panel closes like a William Hill one.
+      finishingDetailRequests += 1
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ game: {
+        id: 9002, statusGroup: finishingDetailRequests <= 2 ? 3 : 4, gameTime: 90, events: [],
+        homeCompetitor: { id: 3, name: 'Bahia', score: 2, redCards: 0 }, awayCompetitor: { id: 4, name: 'Vitória', score: 1, redCards: 0 },
+      } }))
       return
     }
     if (request.url?.startsWith('/web/game/')) {
@@ -159,8 +186,23 @@ async function run() {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ game: {
         id: 9001, statusGroup: 3, gameTime: 30, events: [],
-        homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0 }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0 },
+        homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0, imageVersion: 3 }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0, imageVersion: 1 },
       } }))
+      return
+    }
+    if (request.url?.startsWith('/scoreboard/')) {
+      // William Hill scoreboard: second half for a few seconds after loading, then the match is over.
+      response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
+      response.end(`<!doctype html><title>Scoreboard fixture</title><div>Time W</div><div>1 - 0</div><div>Time Z</div>
+        <script>
+          let period = 'SECOND_HALF'
+          setTimeout(() => { period = 'GAME_FINISHED' }, 4000)
+          window.WH = { scoreboard: {
+            diffusion: { isConnected: true },
+            commentaries: { acceptIncident: () => true },
+            statistics: { getPeriod: () => period, acceptIncident: () => true },
+          } }
+        </script>`)
       return
     }
     if (request.url?.startsWith('/watch')) {
@@ -188,8 +230,9 @@ async function run() {
   const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
     env: {
-      ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl,
+      ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl, QUADRA_365SCORES_IMAGE_URL: baseUrl,
       QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
+      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`,
     },
   })
   try {
@@ -264,6 +307,12 @@ async function run() {
       throw new Error(`${error.message}; rótulo: ${label}; consultas ao detalhe: ${detailRequests}`)
     })
     assert.ok(detailRequests >= 2, 'O detalhe travado precisa ser consultado de novo.')
+    // Crests follow the names and score: one per team, beside each name, from the 365Scores CDN.
+    await waitForExpression(target,
+      `document.querySelectorAll('.panel[data-slot="1"] .panel__label img.panel__label-crest[src^="data:image/png;base64,"]').length === 2`).catch(async (error) => {
+      throw new Error(`${error.message}; escudos pedidos: ${JSON.stringify(crestRequests)}`)
+    })
+    assert.ok(crestRequests.some((url) => url.endsWith('/v3/Competitors/1')), 'O escudo usa a versão de imagem do time.')
 
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       const source = document.querySelector('.panel[data-slot="0"]')
@@ -363,9 +412,9 @@ async function run() {
       return { groups, ok: document.querySelector('.bll-batch [data-ok]').textContent }
     })()`)
     assert.deepEqual(batchList.groups, [
-      { title: 'Liga Teste, Grupo A (2)', items: ['17:00 Time E x Time F', '17:00 Time G x Time H'] },
-      { title: 'Outra Liga (1)', items: ['18:30 Time I x Time J'] },
-    ], 'O lote deve listar só jogos ao vivo, agrupados por competição e sem marcadores de som.')
+      { title: 'Brasil, Liga Teste (2)', items: ['17:00 Time E x Time F Grupo A', '17:00 Time G x Time H Grupo A'] },
+      { title: 'Brasil, Outra Liga (1)', items: ['18:30 Time I x Time J'] },
+    ], 'O lote deve listar só jogos ao vivo, agrupados por liga (fase ao lado do jogo) e sem marcadores de som.')
     assert.equal(batchList.ok, 'Abrir 2 jogos')
     const playerIdsBeforeBatch = (await fetchJson(`http://127.0.0.1:${port}/json`))
       .filter((candidate) => candidate.url.includes('/view/game-b')).map((candidate) => candidate.id).sort()
@@ -634,7 +683,36 @@ async function run() {
     assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
       `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => new URL(input.value).pathname)`),
     ['/view/game-c', '/view/game-d'], 'Na tela inicial, o lote deve abrir uma tela por jogo escolhido.')
-    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+
+    // The William Hill feed reports the end of the match: the panel counts down, "Manter aberto" keeps it.
+    const openFinishingMatch = (slot, closeAfter, query) => evaluate(target.webSocketDebuggerUrl, `(() => {
+      const select = document.querySelector('[data-close-finished]')
+      select.value = ${JSON.stringify(String(closeAfter))}
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      const panel = document.querySelector('.panel[data-slot="${slot}"]')
+      // Loaded panels keep the URL bar in the overlay; an empty one shows its own form.
+      const input = panel.querySelector('.panel__overlay input[name="url"]') ?? panel.querySelector('input[name="url"]')
+      input.value = ${JSON.stringify(baseUrl)} + ${JSON.stringify('/view/game-' + query)}
+      input.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+    })()`)
+    await openFinishingMatch(0, 30, `wh-7001?evento=${encodeURIComponent('Time W x Time Z')}&wh=7001`)
+    await waitForExpression(target, `/^Fim de jogo · fecha em \\d+ s$/.test(document.querySelector('.panel[data-slot="0"] [data-finished-count]')?.textContent ?? '')`, 30000)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-finished-keep]').click()`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `({ notice: Boolean(document.querySelector('.panel__finished')), panels: document.querySelectorAll('.panel').length })`),
+      { notice: false, panels: 2 }, '"Manter aberto" deve cancelar o fechamento.')
+    await openFinishingMatch(1, 0, `wh-7002?evento=${encodeURIComponent('Time W x Time Z')}&wh=7002`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 1`, 30000)
+    assert.equal(new URL(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel input[name="url"]').value`)).pathname, '/view/game-wh-7001',
+      'Só o painel do jogo encerrado deve fechar.')
+    // A BLL game without a William Hill feed, followed on 365Scores, closes too when 365Scores reports it over.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-add-panel').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 2`)
+    await openFinishingMatch(1, 0, `365?evento=${encodeURIComponent('Bahia x Vitória')}`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 1`, 30000)
+    assert.ok(finishingDetailRequests >= 3, 'O jogo do 365Scores precisa ter sido consultado até acabar.')
+    assert.equal(new URL(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel input[name="url"]').value`)).pathname, '/view/game-wh-7001',
+      'Só o painel do jogo do 365Scores encerrado deve fechar.')
+    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

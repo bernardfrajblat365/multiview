@@ -3,6 +3,9 @@ import test from 'node:test'
 import {
   batchCapacity,
   groupByCompetition,
+  groupByLeague,
+  leagueOf,
+  stageOf,
   parseBllEvents,
   planBatchOpen,
   type BllEvent,
@@ -244,4 +247,30 @@ test('batchCapacity nunca fica negativo quando panels.length > maxPanels', () =>
   ]
   assert.equal(batchCapacity(panels, 1), 0)
   assert.equal(batchCapacity([], 0), 0)
+})
+
+test('leagueOf e stageOf separam país e liga da fase', () => {
+  assert.equal(leagueOf('Italy, Serie C, Group C'), 'Italy, Serie C')
+  assert.equal(stageOf('Italy, Serie C, Group C'), 'Group C')
+  assert.equal(leagueOf('Austria, ATP, Vienna, Qualifying'), 'Austria, ATP')
+  assert.equal(stageOf('Austria, ATP, Vienna, Qualifying'), 'Vienna, Qualifying')
+  assert.equal(leagueOf('France, Ligue 1'), 'France, Ligue 1')
+  assert.equal(stageOf('France, Ligue 1'), '')
+  assert.equal(leagueOf("Ballon D'Or"), "Ballon D'Or")
+})
+
+test('groupByLeague junta as fases da mesma liga, ordena ligas por nome e jogos por horário', () => {
+  const event = (id: string, competition: string, time: string): BllEvent => ({ id, name: id, competition, time, live: true, url: id })
+  const groups = groupByLeague([
+    event('1', 'Brazil, Brasileirão Série B', '18:00'),
+    event('2', 'Asia, AFC Champions League Elite, East Region', '15:00'),
+    event('3', 'Outros', '10:00'),
+    event('4', 'Asia, AFC Champions League Elite, West Region', '12:00'),
+    event('5', 'Brazil, Brasileirão Série B', '16:00'),
+    event('6', 'Asia, AFC Champions League Elite, West Region', ''),
+    event('7', 'Brazil, Campeonato Brasileiro Série A', '20:00'),
+  ])
+  assert.deepEqual(groups.map((group) => group.competition), ['Asia, AFC Champions League Elite', 'Brazil, Brasileirão Série B', 'Brazil, Campeonato Brasileiro Série A', 'Outros'])
+  assert.deepEqual(groups[0].events.map((item) => item.id), ['4', '2', '6'])
+  assert.deepEqual(groups[1].events.map((item) => item.id), ['5', '1'])
 })

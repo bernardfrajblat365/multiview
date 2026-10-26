@@ -10,7 +10,8 @@ export type SoundNote = {
   gain: number
 }
 
-export type AlertSound = { id: string; label: string; notes: SoundNote[] }
+/** `notes` is empty for sounds that play an audio file (`src`). */
+export type AlertSound = { id: string; label: string; notes: SoundNote[]; src?: string }
 
 const n = (at: number, dur: number, freq: number, wave: OscillatorType = 'sine', gain = 0.5, to?: number): SoundNote => ({ at, dur, freq, wave, gain, to })
 
@@ -60,6 +61,9 @@ export const ALERT_SOUNDS: readonly AlertSound[] = [
   { id: 'telefone', label: 'Telefone antigo', notes: Array.from({ length: 8 }, (_, index) => n(index * 0.07, 0.06, index % 2 === 0 ? 1100 : 1400, 'square', 0.22)) },
   { id: 'corneta', label: 'Corneta de torcida', notes: [n(0, 0.4, 466, 'sawtooth', 0.34), n(0.45, 0.8, 622, 'sawtooth', 0.36)] },
   { id: 'cuco', label: 'Cuco', notes: [n(0, 0.28, 784, 'sine', 0.5), n(0.36, 0.45, 622, 'sine', 0.5)] },
+  { id: 'galvao-bueno', label: 'Galvão Bueno', notes: [], src: new URL('./assets/sounds/galvao-bueno.mp3', import.meta.url).href },
+  { id: 'gol-torcida', label: 'Gol torcida', notes: [], src: new URL('./assets/sounds/gol-torcida.mp3', import.meta.url).href },
+  { id: 'fox-sports', label: 'Fox Sports', notes: [], src: new URL('./assets/sounds/fox-sports.mp3', import.meta.url).href },
 ]
 
 export const ALERT_SOUND_IDS: readonly string[] = ALERT_SOUNDS.map((sound) => sound.id)
@@ -81,16 +85,51 @@ function getContext() {
   return audioContext
 }
 
+/**
+ * Level of the keep-alive signal: ~-80 dBFS DC, inaudible but not digital silence.
+ * With every panel muted no other stream holds the output open; Chromium parks a silent
+ * AudioContext on a fake sink and some outputs (Bluetooth, HDMI, USB) go idle, so the
+ * first ~0.5–1 s of an alert (the whole whistle) was lost while they woke up.
+ */
+export const KEEP_AWAKE_LEVEL = 1e-4
+let keepAwake: ConstantSourceNode | null = null
+
+/** Keeps the alert output stream running while alerts can fire (idempotent). */
+export function setAlertAudioAwake(awake: boolean) {
+  if (!awake) {
+    if (keepAwake) {
+      keepAwake.stop()
+      keepAwake.disconnect()
+      keepAwake = null
+    }
+    return
+  }
+  const context = getContext()
+  if (!context || keepAwake) return
+  keepAwake = context.createConstantSource()
+  keepAwake.offset.value = KEEP_AWAKE_LEVEL
+  keepAwake.connect(context.destination)
+  keepAwake.start()
+}
+
 /** Plays a sound. `force` skips the throttle (used by the preview in the picker). */
 export function playAlertSound(id: string, options: { volume?: number; force?: boolean } = {}) {
   const now = Date.now()
   if (!options.force && now - lastPlayedAt < THROTTLE_MS) return false
+  const volume = Math.max(0, Math.min(1, options.volume ?? 0.8))
+  const sound = getAlertSound(id)
+  if (sound.src) {
+    lastPlayedAt = now
+    const audio = new Audio(sound.src)
+    audio.volume = volume
+    void audio.play().catch(() => {})
+    return true
+  }
   const context = getContext()
   if (!context) return false
   lastPlayedAt = now
-  const volume = Math.max(0, Math.min(1, options.volume ?? 0.8))
   const start = context.currentTime + 0.02
-  for (const note of getAlertSound(id).notes) {
+  for (const note of sound.notes) {
     const oscillator = context.createOscillator()
     const gain = context.createGain()
     const from = start + note.at

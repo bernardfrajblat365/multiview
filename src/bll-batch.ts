@@ -61,6 +61,34 @@ export function groupByCompetition<T extends BllEvent>(events: T[]): BllEventGro
   return [...groups].map(([competition, items]) => ({ competition, events: items }))
 }
 
+/** BLL names competitions "Country, League, Stage" ("Italy, Serie C, Group C"); the league is country plus league. */
+export function leagueOf(competition: string) {
+  const parts = competition.split(',').map((part) => part.trim())
+  return parts.slice(0, 2).filter(Boolean).join(', ') || competition
+}
+
+/** The stage left after the league name ("Group D"), or '' when there is none. */
+export function stageOf(competition: string) {
+  return competition.slice(leagueOf(competition).length).replace(/^\s*,\s*/, '').trim()
+}
+
+/** Groups events by league (all stages together), leagues in alphabetical order with "Outros" last, games by time inside each league. */
+export function groupByLeague<T extends BllEvent>(events: T[]): BllEventGroup<T>[] {
+  const groups = new Map<string, T[]>()
+  for (const event of events) {
+    const league = leagueOf(event.competition)
+    const group = groups.get(league)
+    if (group) group.push(event)
+    else groups.set(league, [event])
+  }
+  return [...groups]
+    .sort(([a], [b]) => Number(a === 'Outros') - Number(b === 'Outros') || a.localeCompare(b, 'pt-BR', { sensitivity: 'base' }))
+    .map(([competition, items]) => ({
+      competition,
+      events: [...items].sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')),
+    }))
+}
+
 /** Fills empty panels first, then asks for new panels up to `maxPanels`; games already open are skipped. */
 export function planBatchOpen(panels: PanelSlot[], urls: string[], maxPanels: number): BatchPlan {
   const open = new Set(panels.map((panel) => panel.url).filter(Boolean))

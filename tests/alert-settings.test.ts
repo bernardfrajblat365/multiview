@@ -28,3 +28,21 @@ test('JSON corrompido devolve as configurações padrão', () => {
   const settings = parseAlertSettings('{não é json', SOUND_IDS)
   assert.deepEqual(settings, DEFAULT_ALERT_SETTINGS)
 })
+
+test('closeFinishedSec padrão é 60 quando não há configuração salva', () => {
+  assert.equal(parseAlertSettings(null, SOUND_IDS).closeFinishedSec, 60)
+})
+
+test('closeFinishedSec válido é mantido', () => {
+  assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: 120 }), SOUND_IDS).closeFinishedSec, 120)
+  assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: 0 }), SOUND_IDS).closeFinishedSec, 0)
+})
+
+test('closeFinishedSec nulo é mantido e significa não fechar', () => {
+  assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: null }), SOUND_IDS).closeFinishedSec, null)
+})
+
+test('closeFinishedSec inválido volta para 60', () => {
+  assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: 45 }), SOUND_IDS).closeFinishedSec, 60)
+  assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: '60' }), SOUND_IDS).closeFinishedSec, 60)
+})

@@ -30,3 +30,4 @@ release
 .env
 .env.*
 !.env.example
+artifacts/bll-feed

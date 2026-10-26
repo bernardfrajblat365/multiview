@@ -807,3 +807,41 @@ test('um pedido travado se recupera em poucos segundos: as esperas de 1 a 4 falh
   const total = [1, 2, 3, 4].reduce((sum, failures) => sum + retryDelayMs(failures, 'stall'), 0)
   assert.equal(total, 3000)
 })
+
+// Escudos: id e versão da imagem de cada time ---------------------------------
+
+test('parseGameList preenche homeTeam/awayTeam com id e imageVersion do competidor', () => {
+  const [first] = parseGameList({
+    games: [
+      row(601, {
+        homeCompetitor: { id: 8508, name: 'Santos', imageVersion: 2 },
+        awayCompetitor: { id: 9001, name: 'Pumas', imageVersion: 5 },
+      }),
+    ],
+  })
+  assert.ok(first)
+  assert.deepEqual(first.homeTeam, { id: 8508, imageVersion: 2 })
+  assert.deepEqual(first.awayTeam, { id: 9001, imageVersion: 5 })
+})
+
+test('parseGameList põe imageVersion 0 quando o competidor não traz a versão', () => {
+  const [first] = parseGameList({ games: [row(602)] })
+  assert.ok(first)
+  assert.deepEqual(first.homeTeam, { id: 1, imageVersion: 0 })
+  assert.deepEqual(first.awayTeam, { id: 2, imageVersion: 0 })
+})
+
+test('parseGameDetail guarda imageVersion em cada lado do jogo', () => {
+  const detail = parseGameDetail({
+    game: {
+      id: 701,
+      statusGroup: 3,
+      gameTime: 30,
+      homeCompetitor: { id: 10, name: 'Lille', score: 1, redCards: 0, imageVersion: 4 },
+      awayCompetitor: { id: 11, name: 'Galatasaray', score: 0, redCards: 0 },
+    },
+  })
+  assert.ok(detail)
+  assert.equal(detail.home.imageVersion, 4)
+  assert.equal(detail.away.imageVersion, 0)
+})

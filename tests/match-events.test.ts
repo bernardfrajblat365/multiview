@@ -4,8 +4,10 @@ import {
   alertLabel,
   classifyIncident,
   createScannerState,
+  detectMatchEnd,
   extractWilliamHillId,
   filterNew,
+  HISTORY_GRACE_MS,
   type RawIncident,
 } from '../src/match-events.ts'
 import { ALERT_SOUNDS, ALERT_SOUND_IDS } from '../src/alert-sounds.ts'
@@ -78,11 +80,15 @@ test('monta o rótulo do alerta', () => {
   assert.equal(alertLabel('red', '', 0), 'CARTÃO VERMELHO')
 })
 
-test('há 30 sons únicos e válidos', () => {
-  assert.equal(ALERT_SOUNDS.length, 30)
-  assert.equal(new Set(ALERT_SOUND_IDS).size, 30)
+test('há 33 sons únicos e válidos', () => {
+  assert.equal(ALERT_SOUNDS.length, 33)
+  assert.equal(new Set(ALERT_SOUND_IDS).size, 33)
   for (const sound of ALERT_SOUNDS) {
     assert.ok(sound.label.length > 0)
+    if (sound.src) {
+      assert.equal(sound.notes.length, 0, `${sound.id} arquivo não tem notas`)
+      continue
+    }
     assert.ok(sound.notes.length > 0)
     for (const note of sound.notes) {
       assert.ok(note.freq > 20 && note.freq < 12000, `${sound.id} freq`)
@@ -178,7 +184,54 @@ test('preferências: valores não booleanos, JSON null e chaves extras', () => {
     JSON.stringify({ soundId: 'gongo', volume: 11, kinds: { goal: false, extra: true } }),
     ALERT_SOUND_IDS,
   )
-  assert.deepEqual(extra, { soundId: 'gongo', kinds: { goal: false, penalty: true, red: true, yellow: false, var: true }, autoHighlight: true, autoHighlightSec: 45, scoreDelaySec: 0 })
+  assert.deepEqual(extra, { soundId: 'gongo', kinds: { goal: false, penalty: true, red: true, yellow: false, var: true }, autoHighlight: true, autoHighlightSec: 45, scoreDelaySec: 0, closeFinishedSec: 60 })
+})
+
+test('detectMatchEnd avisa o fim uma vez quando a partida estava ao vivo', () => {
+  const state = createScannerState(NOW)
+  assert.equal(detectMatchEnd(state, 'SECOND_HALF', 0), false)
+  assert.equal(detectMatchEnd(state, 'GAME_FINISHED', NOW + 1000), true)
+  assert.equal(detectMatchEnd(state, 'GAME_FINISHED', NOW + 2000), false)
+})
+
+test('detectMatchEnd ignora fim de partida que já estava encerrada ao abrir', () => {
+  const state = createScannerState(NOW)
+  assert.equal(detectMatchEnd(state, 'GAME_FINISHED', 0), false)
+  assert.equal(state.ended, false)
+})
+
+test('detectMatchEnd ignora fim antigo do histórico e aceita fim depois de abrir', () => {
+  const old = createScannerState(NOW)
+  assert.equal(detectMatchEnd(old, 'GAME_FINISHED', NOW - HISTORY_GRACE_MS - 1000), false)
+  const fresh = createScannerState(NOW)
+  assert.equal(detectMatchEnd(fresh, 'GAME_FINISHED', NOW + 1000), true)
+})
+
+test('detectMatchEnd não conta NOT_STARTED como partida ao vivo', () => {
+  const state = createScannerState(NOW)
+  assert.equal(detectMatchEnd(state, 'NOT_STARTED', 0), false)
+  assert.equal(state.live, false)
+  assert.equal(detectMatchEnd(state, 'GAME_FINISHED', 0), false)
+})
+
+test('detectMatchEnd usa o horário do fim quando o período não pode ser lido', () => {
+  const state = createScannerState(NOW)
+  assert.equal(detectMatchEnd(state, '', NOW + 1000), true)
+  assert.equal(detectMatchEnd(state, '', NOW + 2000), false)
+})
+
+test('detectMatchEnd dá prioridade ao período ao vivo sobre o horário do fim', () => {
+  const state = createScannerState(NOW)
+  assert.equal(detectMatchEnd(state, 'SECOND_HALF', NOW + 1000), false)
+  assert.equal(state.live, true)
+  assert.equal(state.ended, false)
+})
+
+test('detectMatchEnd continua ao vivo na prorrogação e nos pênaltis', () => {
+  const state = createScannerState(NOW)
+  assert.equal(detectMatchEnd(state, 'FIRST_HALF_EXTRA_TIME', 0), false)
+  assert.equal(detectMatchEnd(state, 'PENALTIES', 0), false)
+  assert.equal(detectMatchEnd(state, 'GAME_FINISHED', NOW + 1000), true)
 })
 
 test('preferência de auto-destaque: padrão ligado e valor salvo respeitado', () => {

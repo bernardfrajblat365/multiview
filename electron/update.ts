@@ -1,7 +1,8 @@
 import type { MessageBoxOptions, MessageBoxReturnValue } from 'electron'
 import type { AppUpdater } from 'electron-updater'
+import { formatReleaseNotesForDialog, releaseNotesFromUpdateInfo } from './release-notes.ts'
 
-type UpdateInfo = { version?: unknown }
+type UpdateInfo = { version?: unknown; releaseNotes?: unknown }
 type UpdateState = 'idle' | 'checking' | 'prompting-download' | 'downloading' | 'downloaded' | 'installing'
 export type UpdateCheckResult = 'updated' | 'available' | 'ready' | 'busy' | 'disabled' | 'error'
 
@@ -13,6 +14,8 @@ type AutoUpdateOptions = {
   showMessageBox: UpdateDialog
   quitAndInstall: () => void
   onInstallError?: () => void
+  /** Fallback when the update feed carries no notes (e.g. GitHub release body). */
+  fetchReleaseNotes?: (version: string) => Promise<string[]>
   log?: (message: string) => void
 }
 
@@ -31,6 +34,7 @@ export function createAutoUpdateController({
   showMessageBox,
   quitAndInstall,
   onInstallError,
+  fetchReleaseNotes,
   log = () => {},
 }: AutoUpdateOptions): AutoUpdateController {
   let state: UpdateState = 'idle'
@@ -47,13 +51,31 @@ export function createAutoUpdateController({
   updater.allowDowngrade = false
   updater.disableWebInstaller = true
 
+  const notesDetail = async (info: UpdateInfo) => {
+    let notes = releaseNotesFromUpdateInfo(info)
+    if (notes.length === 0 && fetchReleaseNotes && typeof info.version === 'string') {
+      try {
+        notes = await fetchReleaseNotes(info.version)
+      } catch {
+        log('Não foi possível obter as novidades da atualização.')
+      }
+    }
+    const text = formatReleaseNotesForDialog(notes)
+    return text ? `Novidades:
+${text}
+
+` : ''
+  }
+
   const promptDownload = async (info: UpdateInfo) => {
     try {
+      const notes = await notesDetail(info)
+      if (state !== 'prompting-download') return
       const result = await showMessageBox({
         type: 'info',
         title: 'Atualização disponível',
         message: `A versão ${versionLabel(info)} do Quadra está disponível.`,
-        detail: 'Baixar agora? Os painéis continuam funcionando enquanto o download acontece.',
+        detail: notes + 'Baixar agora? Os painéis continuam funcionando enquanto o download acontece.',
         buttons: ['Atualizar', 'Agora não'],
         defaultId: 0,
         cancelId: 1,

@@ -19,6 +19,7 @@ import {
   type LiveMatchStatus,
   type LiveState,
 } from '../src/livescore-365'
+import type { CrestTeams } from '../src/team-crests'
 import { alertLabel, type MatchIncident } from '../src/match-events'
 import { logScanner } from './scanner-log'
 import type { ScannerScore } from './scoreboard-scanner'
@@ -47,12 +48,15 @@ type Poller = {
   home: string
   away: string
   score: string
+  teams?: CrestTeams
   failures: number
   /** When the current run of failures started, for the "back" line. */
   failingSince: number
   lastPbpAt: number
   timer?: ReturnType<typeof setTimeout>
   stopped: boolean
+  /** Seen live (statusGroup 3): only then the end closes the panels; a game already over when linked doesn't. */
+  sawLive: boolean
 }
 
 const BASE_URL = process.env.QUADRA_365SCORES_URL ?? 'https://webws.365scores.com'
@@ -101,6 +105,10 @@ export function createLiveScoreLinker(options: {
   onEvent: (event: LiveEvent) => void
   onScore: (score: ScannerScore) => void
   onStatus: (status: LiveMatchStatus) => void
+  /** The game is over; reported once, only for a game seen being played. */
+  onEnd?: (end: { panelIds: string[] }) => void
+  /** Every freshly downloaded games list (crests of live games are prefetched from it). */
+  onList?: (games: Game365[]) => void
 }) {
   const links = new Map<string, PanelLink>()
   const pollers = new Map<number, Poller>()
@@ -126,6 +134,7 @@ export function createLiveScoreLinker(options: {
       )
       if (schedule.status === 'rejected') logScanner(`365Scores: agenda do dia indisponível (${schedule.reason instanceof Error ? schedule.reason.message : 'erro'}); só os ${games.length} jogos ao vivo da lista curta`, '365')
       listCache = { at: Date.now(), games }
+      options.onList?.(games)
       return games
     })().finally(() => { listPending = null })
     return listPending
@@ -140,7 +149,7 @@ export function createLiveScoreLinker(options: {
     const key = `${poller.home}|${poller.away}|${poller.score}`
     if (!force && key === poller.sentKey) return
     poller.sentKey = key
-    options.onScore({ panelIds, home: poller.home, away: poller.away, score: poller.score })
+    options.onScore({ panelIds, home: poller.home, away: poller.away, score: poller.score, teams: poller.teams })
   }
 
   function schedulePoll(poller: Poller, delay: number) {
@@ -213,6 +222,10 @@ export function createLiveScoreLinker(options: {
     }
     poller.home = detail.home.name
     poller.away = detail.away.name
+    poller.teams = {
+      home: { id: detail.home.id, imageVersion: detail.home.imageVersion ?? 0 },
+      away: { id: detail.away.id, imageVersion: detail.away.imageVersion ?? 0 },
+    }
     poller.score = `${detail.home.score} - ${detail.away.score}`
     publishScore(poller)
     const coverage = detail.events ? 'events' : 'score'
@@ -231,9 +244,11 @@ export function createLiveScoreLinker(options: {
         // The commentary is a bonus (penalty awarded, VAR): a failed read waits for the next round.
       }
     }
+    if (detail.statusGroup === 3) poller.sawLive = true
     if (detail.statusGroup === 4) {
       logScanner(`[${poller.label}] jogo encerrado (${poller.score}); 365Scores parou de consultar`, '365')
       poller.stopped = true
+      if (poller.sawLive) options.onEnd?.({ panelIds: [...poller.panelIds] })
       return
     }
     schedulePoll(poller, POLL_MS)
@@ -266,7 +281,7 @@ export function createLiveScoreLinker(options: {
     const label = `${game.home} x ${game.away}`
     let poller = pollers.get(game.id)
     if (!poller) {
-      poller = { gameId: game.id, label, panelIds: new Set(), state: createLiveState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false }
+      poller = { gameId: game.id, label, panelIds: new Set(), state: createLiveState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false, sawLive: false }
       pollers.set(game.id, poller)
       schedulePoll(poller, 0)
     }
@@ -349,7 +364,7 @@ export function createLiveScoreLinker(options: {
     for (const poller of [...pollers.values()]) stopPoller(poller)
   }
 
-  return { consider, choose, detach, destroyAll, size: () => pollers.size }
+  return { consider, choose, detach, destroyAll, listGames, size: () => pollers.size }
 }
 
 /** Cheap pre-check so pages without "A x B" in the title never hit the API. */

@@ -15,7 +15,13 @@ export type Game365 = {
   /** 1 scheduled, 2 scheduled or "Result. Final" in the live list, 3 live, 4 finished. */
   statusGroup: number
   statusText: string
+  /** Crest references; absent when the API leaves out the ids. */
+  homeTeam?: TeamRef365
+  awayTeam?: TeamRef365
 }
+
+/** A team's id and crest version: enough to build its crest URL. */
+export type TeamRef365 = { id: number; imageVersion: number }
 
 export type Candidate365 = { id: number; label: string; detail: string }
 
@@ -34,7 +40,7 @@ export type MatchResult =
   | { status: 'ambiguous'; candidates: Game365[] }
   | { status: 'none' }
 
-export type Side365 = { id: number; name: string; score: number; redCards: number }
+export type Side365 = { id: number; name: string; score: number; redCards: number; imageVersion?: number }
 
 /** `/web/game/?gameId=` reduced to what the alerts need. `events` is null for leagues without incident coverage. */
 export type Detail365 = {
@@ -212,6 +218,12 @@ export function teamsFromTitle(title: string): { home: string; away: string; qua
   return { home, away, qualifiers: teamQualifiers(title, `${teams.home} ${teams.away}`), competition: detectCompetition(title) }
 }
 
+function teamRef(raw: Record<string, unknown>): TeamRef365 | undefined {
+  const id = Number(raw.id)
+  if (!Number.isSafeInteger(id) || id <= 0) return undefined
+  return { id, imageVersion: Math.max(0, Math.floor(finiteNumber(raw.imageVersion))) }
+}
+
 function competitorNames(raw: Record<string, unknown>) {
   const names = [raw.name, raw.longName, raw.shortName].map((value) => cleanText(value)).filter(Boolean)
   return [...new Set(names)]
@@ -243,6 +255,8 @@ export function parseGameList(raw: unknown): Game365[] {
       startTime: Number.isFinite(startTime) ? startTime : 0,
       statusGroup: finiteNumber(game.statusGroup),
       statusText: cleanText(game.statusText, 40),
+      homeTeam: teamRef(home),
+      awayTeam: teamRef(away),
     })
   }
   return parsed
@@ -346,7 +360,13 @@ function parseSide(raw: unknown): Side365 | null {
   const id = Number(side.id)
   const name = competitorNames(side)[0]
   if (!Number.isSafeInteger(id) || !name) return null
-  return { id, name, score: Math.max(0, finiteNumber(side.score)), redCards: Math.max(0, finiteNumber(side.redCards)) }
+  return {
+    id,
+    name,
+    score: Math.max(0, finiteNumber(side.score)),
+    redCards: Math.max(0, finiteNumber(side.redCards)),
+    imageVersion: Math.max(0, Math.floor(finiteNumber(side.imageVersion))),
+  }
 }
 
 /** Validates a `/web/game/` response. */

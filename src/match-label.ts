@@ -36,6 +36,8 @@ const LINE_EM = 1.3
 /** Dismiss button + horizontal padding, in em. */
 const CHROME_EM = 2.2
 const STACKED_HEIGHT_EM = 2 * LINE_EM + 0.4
+/** One crest (1.15 em) plus the gap beside it. */
+const CREST_EM = 1.6
 const SCORE_RE = /^(\d{1,3})\s*[-–:x]\s*(\d{1,3})$/i
 const TEAM_STOPWORDS = new Set(['fc', 'cf', 'sc', 'ac', 'ec', 'cr', 'se', 'ca', 'afc', 'club', 'clube', 'de', 'da', 'do', 'del', 'la', 'el', 'the', 'and'])
 
@@ -130,18 +132,18 @@ function sameTeam(a: string, b: string) {
   return teamTokens(b).some((token) => tokens.has(token))
 }
 
-/**
- * The feed's home/away order can differ from the player's title. When the title
- * clearly lists the feed's teams the other way round, the score is flipped to match.
- */
-export function orientScore(
-  titleTeams: { home: string; away: string },
-  feedTeams: { home: string; away: string },
-  score: MatchScore,
-): MatchScore {
+type Teams = { home: string; away: string }
+
+/** The feed's home/away order can differ from the player's title: true when the title clearly lists them the other way round. */
+export function teamsReversed(titleTeams: Teams, feedTeams: Teams) {
   const reversed = sameTeam(titleTeams.home, feedTeams.away) && sameTeam(titleTeams.away, feedTeams.home)
   const straight = sameTeam(titleTeams.home, feedTeams.home) || sameTeam(titleTeams.away, feedTeams.away)
-  return reversed && !straight ? { home: score.away, away: score.home } : score
+  return reversed && !straight
+}
+
+/** The feed's score in the title's team order. */
+export function orientScore(titleTeams: Teams, feedTeams: Teams, score: MatchScore): MatchScore {
+  return teamsReversed(titleTeams, feedTeams) ? { home: score.away, away: score.home } : score
 }
 
 function containRect(panelWidth: number, panelHeight: number, contentAspect: number): NormRect {
@@ -156,22 +158,22 @@ function containRect(panelWidth: number, panelHeight: number, contentAspect: num
   return { x: 0, y: (1 - height) / 2, width, height }
 }
 
-function inlineWidthEm(home: string, away: string, hasScore: boolean) {
-  // Names + score pill ("2 – 1" with padding) or "x", plus the gaps between them.
-  return CHAR_EM * (home.length + away.length) + (hasScore ? 4.2 : 1.2) + 1 + CHROME_EM
+function inlineWidthEm(home: string, away: string, hasScore: boolean, hasCrests: boolean) {
+  // Names + score pill ("2 – 1" with padding) or "x", plus the gaps between them, and a crest beside each name.
+  return CHAR_EM * (home.length + away.length) + (hasScore ? 4.2 : 1.2) + 1 + CHROME_EM + (hasCrests ? 2 * CREST_EM : 0)
 }
 
-function stackedWidthEm(home: string, away: string, hasScore: boolean) {
-  return CHAR_EM * Math.max(home.length, away.length) + (hasScore ? 1.8 : 0) + CHROME_EM
+function stackedWidthEm(home: string, away: string, hasScore: boolean, hasCrests: boolean) {
+  return CHAR_EM * Math.max(home.length, away.length) + (hasScore ? 1.8 : 0) + CHROME_EM + (hasCrests ? CREST_EM : 0)
 }
 
 type Fit = { layout: MatchLabelLayout; fontPx: number }
 
 /** Largest font (≤ preferred) that fits the full names in a horizontal box: one line first, then two rows. */
-function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean): Fit | null {
-  const inline = Math.min(preferredPx, heightPx / LINE_EM, widthPx / inlineWidthEm(home, away, hasScore))
+function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean, hasCrests: boolean): Fit | null {
+  const inline = Math.min(preferredPx, heightPx / LINE_EM, widthPx / inlineWidthEm(home, away, hasScore, hasCrests))
   if (inline >= MIN_FIT_FONT_PX) return { layout: 'inline', fontPx: inline }
-  const stacked = Math.min(preferredPx, heightPx / STACKED_HEIGHT_EM, widthPx / stackedWidthEm(home, away, hasScore))
+  const stacked = Math.min(preferredPx, heightPx / STACKED_HEIGHT_EM, widthPx / stackedWidthEm(home, away, hasScore, hasCrests))
   if (stacked >= MIN_FIT_FONT_PX) return { layout: 'stacked', fontPx: stacked }
   return null
 }
@@ -194,11 +196,14 @@ export function placeMatchLabel(options: {
   home: string
   away: string
   score?: MatchScore | null
+  /** Room for a team crest beside each name. */
+  crests?: boolean
 }): MatchLabelPlacement {
   const panelWidth = Math.max(1, options.panelWidth)
   const panelHeight = Math.max(1, options.panelHeight)
   const { home, away } = options
   const hasScore = Boolean(options.score)
+  const hasCrests = Boolean(options.crests)
   const preferredPx = clamp(panelHeight * 0.05, MIN_FONT_PX, MAX_FONT_PX)
   const videoRect = options.videoRect ?? containRect(panelWidth, panelHeight, REFERENCE_ASPECT)
   const videoBottom = videoRect.y + videoRect.height
@@ -206,8 +211,8 @@ export function placeMatchLabel(options: {
   const topBarPx = videoRect.y * panelHeight
   const bottomBarPx = (1 - videoBottom) * panelHeight
 
-  const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore) : null
-  const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore) : null
+  const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore, hasCrests) : null
+  const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore, hasCrests) : null
   // A single line beats two rows of the same size; ties go to the bottom bar.
   const rank = (fit: Fit | null) => (fit ? fit.fontPx + (fit.layout === 'inline' ? 0.5 : 0) : -1)
   if (bottom && rank(bottom) >= rank(top)) {
@@ -232,11 +237,11 @@ export function placeMatchLabel(options: {
   const maxWidthPx = Math.max(1, videoRect.width * panelWidth)
   const overlayPreferred = clamp(panelHeight * 0.06, MIN_FIT_FONT_PX, MAX_OVERLAY_FONT_PX)
   let layout: MatchLabelLayout = 'inline'
-  let fontPx = Math.min(overlayPreferred, maxWidthPx / inlineWidthEm(home, away, hasScore))
+  let fontPx = Math.min(overlayPreferred, maxWidthPx / inlineWidthEm(home, away, hasScore, hasCrests))
   if (fontPx < Math.min(overlayPreferred, 12)) {
     layout = 'stacked'
     // Never below the minimum: very long names wrap inside their row instead of being cut.
-    fontPx = Math.max(MIN_FIT_FONT_PX, Math.min(overlayPreferred, maxWidthPx / stackedWidthEm(home, away, hasScore)))
+    fontPx = Math.max(MIN_FIT_FONT_PX, Math.min(overlayPreferred, maxWidthPx / stackedWidthEm(home, away, hasScore, hasCrests)))
   }
   // Extra height above the text is the gradient's fade-in.
   const heightPx = (layout === 'inline' ? LINE_EM + OVERLAY_FADE_EM : STACKED_HEIGHT_EM + OVERLAY_FADE_EM) * fontPx

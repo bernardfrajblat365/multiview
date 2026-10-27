@@ -6,6 +6,32 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.4',
+    label: '1.1.4',
+    notes: [
+      {
+        title: 'Escudos dos times no placar',
+        body: 'O nome do jogo no painel agora mostra o escudo de cada time ao lado do nome, nos jogos da BLL e nas lives do YouTube. O nome e o placar aparecem na hora, como antes, e os escudos entram logo em seguida, em geral em menos de um segundo. Se o time não tiver escudo ou o jogo não for encontrado, o rótulo fica só com os nomes.',
+      },
+      {
+        title: 'Jogos da BLL separados por liga',
+        body: 'Em "Abrir vários jogos da BLL", os jogos agora aparecem juntos por liga, em ordem alfabética: todos os jogos de uma liga (com todos os grupos e fases dela), depois os da próxima, e assim por diante. Dentro de cada liga eles seguem pelo horário, e o grupo ou a fase aparece ao lado do nome do jogo.',
+      },
+      {
+        title: 'Novos sons de gol',
+        body: 'Três sons novos para o alerta de gol, escolhidos no seletor de som: Galvão Bueno, Gol torcida e Fox Sports.',
+      },
+      {
+        title: 'Painel fecha sozinho quando o jogo acaba',
+        body: 'Nos jogos com placar ao vivo (BLL e lives do YouTube ligadas ao 365Scores), quando o jogo termina o painel mostra "Fim de jogo · fecha em…" e fecha sozinho depois de 1 minuto, abrindo espaço para as outras telas. O botão "Manter aberto" cancela. Em "Fechar o painel quando o jogo acabar" (tela inicial ou menu ⋯) dá para escolher na hora, 30 segundos, 1, 2 ou 5 minutos, ou não fechar. Desfazer traz o painel de volta.',
+      },
+      {
+        title: 'Som do alerta com todas as telas mudas',
+        body: 'Em alguns fones e caixas de som (Bluetooth, HDMI, USB), o som do alerta de gol não tocava quando todas as telas estavam sem som, porque a saída de áudio "dormia". Agora a saída fica pronta enquanto houver jogo aberto, e o alerta toca mesmo com tudo mudo.',
+      },
+    ],
+  },
+  {
     version: '1.1.3',
     label: '1.1.3',
     notes: [

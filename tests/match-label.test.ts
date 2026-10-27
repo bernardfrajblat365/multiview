@@ -8,6 +8,7 @@ import {
   parseScore,
   placeMatchLabel,
   splitMatchTeams,
+  teamsReversed,
   type NormRect,
 } from '../src/match-label.ts'
 
@@ -336,4 +337,50 @@ test('orientScore mantém o placar quando os nomes não têm relação', () => {
     { home: 2, away: 1 },
   )
   assert.deepEqual(score, { home: 2, away: 1 })
+})
+
+test('teamsReversed é verdadeiro quando o feed lista os times trocados e falso na mesma ordem', () => {
+  const title = { home: 'Flamengo', away: 'Palmeiras' }
+  assert.equal(teamsReversed(title, { home: 'Palmeiras', away: 'Flamengo' }), true)
+  assert.equal(teamsReversed(title, { home: 'Flamengo', away: 'Palmeiras' }), false)
+})
+
+test('orientScore continua invertendo o placar quando o feed vem ao contrário', () => {
+  const title = { home: 'Flamengo', away: 'Palmeiras' }
+  assert.deepEqual(orientScore(title, { home: 'Palmeiras', away: 'Flamengo' }, { home: 2, away: 1 }), { home: 1, away: 2 })
+  assert.deepEqual(orientScore(title, { home: 'Flamengo', away: 'Palmeiras' }, { home: 2, away: 1 }), { home: 2, away: 1 })
+})
+
+test('placeMatchLabel com escudos não aumenta a fonte no mesmo modo e layout', () => {
+  const cases = [
+    { panelWidth: 400, panelHeight: 300, home: 'Internacional de Porto Alegre', away: 'Sociedade Esportiva Palmeiras' },
+    { panelWidth: 1280, panelHeight: 720, home: 'Al Ettifaq', away: 'Al Ittihad' },
+    { panelWidth: 240, panelHeight: 400, home: 'Borussia Monchengladbach', away: 'Eintracht Frankfurt', score: { home: 1, away: 0 } },
+  ]
+  for (const options of cases) {
+    const plain = placeMatchLabel(options)
+    const withCrests = placeMatchLabel({ ...options, crests: true })
+    if (withCrests.mode === plain.mode && withCrests.layout === plain.layout) {
+      assert.ok(withCrests.fontPx <= plain.fontPx, `fonte com escudos ${withCrests.fontPx} > ${plain.fontPx}`)
+    }
+  }
+})
+
+test('placeMatchLabel com escudos só muda de layout para empilhado, nunca o contrário', () => {
+  const cases = [
+    { panelWidth: 400, panelHeight: 300, home: 'Internacional de Porto Alegre', away: 'Sociedade Esportiva Palmeiras' },
+    { panelWidth: 240, panelHeight: 400, home: 'Borussia Monchengladbach', away: 'Eintracht Frankfurt', score: { home: 1, away: 0 } },
+  ]
+  for (const options of cases) {
+    const plain = placeMatchLabel(options)
+    const withCrests = placeMatchLabel({ ...options, crests: true })
+    if (withCrests.layout !== plain.layout) assert.equal(withCrests.layout, 'stacked')
+  }
+})
+
+test('placeMatchLabel com escudos reduz a fonte ou empilha em barra estreita', () => {
+  const options = { panelWidth: 400, panelHeight: 300, home: 'Internacional de Porto Alegre', away: 'Sociedade Esportiva Palmeiras' }
+  const plain = placeMatchLabel(options)
+  const withCrests = placeMatchLabel({ ...options, crests: true })
+  assert.ok(withCrests.fontPx < plain.fontPx || (withCrests.layout === 'stacked' && plain.layout === 'inline'))
 })

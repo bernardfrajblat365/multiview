@@ -24,6 +24,10 @@ export type MatchIncident = {
 export type ScannerState = {
   seen: Set<string>
   attachedAt: number
+  /** The feed showed the match being played while this scanner watched it. */
+  live: boolean
+  /** The end of the match was already reported. */
+  ended: boolean
 }
 
 /** Incidents older than this at attach time are replayed history, never alerted. */
@@ -60,7 +64,29 @@ export function classifyIncident(raw: RawIncident): MatchIncident | null {
 }
 
 export function createScannerState(now: number): ScannerState {
-  return { seen: new Set(), attachedAt: now }
+  return { seen: new Set(), attachedAt: now, live: false, ended: false }
+}
+
+/** Clock period of the William Hill feed once the match is over (also after extra time and penalties). */
+export const FINISHED_PERIOD = 'GAME_FINISHED'
+/** Feed incident at the final whistle; only trusted when the clock period can't be read. */
+export const END_INCIDENT_TYPE = 'END_OF_MATCH'
+
+/**
+ * True once, the first time the feed says the match is over. A match that was already
+ * over when the scanner attached replays its end from history and is never reported,
+ * so opening a finished game doesn't close its panel right away.
+ */
+export function detectMatchEnd(state: ScannerState, period: string, endAt: number): boolean {
+  if (state.ended) return false
+  const finished = period === FINISHED_PERIOD || (!period && endAt > 0)
+  if (!finished) {
+    if (period && period !== 'NOT_STARTED') state.live = true
+    return false
+  }
+  if (!state.live && !(endAt > 0 && endAt >= state.attachedAt - HISTORY_GRACE_MS)) return false
+  state.ended = true
+  return true
 }
 
 /**

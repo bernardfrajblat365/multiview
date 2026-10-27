@@ -2,12 +2,15 @@ import { BrowserWindow } from 'electron'
 import {
   ALERT_INCIDENT_TYPES,
   createScannerState,
+  detectMatchEnd,
+  END_INCIDENT_TYPE,
   filterNew,
   type MatchIncident,
   type RawIncident,
   type ScannerState,
 } from '../src/match-events'
 import { logScanner } from './scanner-log'
+import type { CrestTeams } from '../src/team-crests'
 
 export type ScannerEvent = {
   eventId: string
@@ -17,11 +20,21 @@ export type ScannerEvent = {
   score: string
 }
 
+export type ScannerEnd = {
+  eventId: string
+  panelIds: string[]
+  home: string
+  away: string
+  score: string
+}
+
 export type ScannerScore = {
   panelIds: string[]
   home: string
   away: string
   score: string
+  /** 365Scores teams, for their crests; William Hill scores leave them out. */
+  teams?: CrestTeams
 }
 
 type Scanner = {
@@ -79,6 +92,7 @@ const hookScript = `(() => {
         window.__quadraUpdates = (window.__quadraUpdates || 0) + 1
         if (Array.isArray(incidents)) {
           for (const item of incidents) {
+            if (item && item.type === ${JSON.stringify(END_INCIDENT_TYPE)} && !window.__quadraEndAt) window.__quadraEndAt = Date.parse(item.timestamp) || Date.now()
             if (!item || !types.has(item.type) || window.__quadraSeen.has(item.id)) continue
             window.__quadraSeen.add(item.id)
             if (window.__quadraQueue.length < 400) {
@@ -102,10 +116,15 @@ const drainScript = `(() => {
   const lines = (document.body ? document.body.innerText : '').split('\\n').map((line) => line.trim()).filter(Boolean)
   const scoreIndex = lines.findIndex((line) => /^\\d+\\s*-\\s*\\d+$/.test(line))
   const D = window.WH && window.WH.scoreboard && window.WH.scoreboard.diffusion
+  const stats = window.WH && window.WH.scoreboard && window.WH.scoreboard.statistics
+  let period = ''
+  try { period = stats && typeof stats.getPeriod === 'function' ? String(stats.getPeriod() || '') : '' } catch (e) {}
   return {
     hooked: Boolean(window.__quadraHooked),
     connected: Boolean(D && D.isConnected),
     updates: window.__quadraUpdates || 0,
+    period: /^[A-Z_]{1,40}$/.test(period) ? period : '',
+    endAt: Number(window.__quadraEndAt) || 0,
     queue,
     home: scoreIndex > 0 ? lines[scoreIndex - 1].slice(0, 80) : '',
     away: scoreIndex >= 0 && lines[scoreIndex + 1] ? lines[scoreIndex + 1].slice(0, 80) : '',
@@ -135,6 +154,8 @@ function isAllowedScoreboardUrl(value: string) {
 export function createScoreboardScanners(options: {
   onEvent: (event: ScannerEvent) => void
   onScore?: (score: ScannerScore) => void
+  /** The feed says the match is over; reported once per match. */
+  onEnd?: (end: ScannerEnd) => void
 }) {
   const scanners = new Map<string, Scanner>()
   const panelToEvent = new Map<string, string>()
@@ -179,6 +200,8 @@ export function createScoreboardScanners(options: {
     const result = await contents.executeJavaScript(drainScript).catch(() => null) as {
       connected?: boolean
       updates?: number
+      period?: string
+      endAt?: number
       queue?: RawIncident[]
       home?: string
       away?: string
@@ -197,7 +220,15 @@ export function createScoreboardScanners(options: {
       scanner.lastMessageAt = Date.now()
     }
     const queue = Array.isArray(result.queue) ? result.queue : []
-    if (queue.length === 0) return
+    if (queue.length > 0) emitIncidents(scanner, queue)
+    const period = typeof result.period === 'string' ? result.period : ''
+    if (detectMatchEnd(scanner.state, period, Number(result.endAt) || 0)) {
+      logScanner(`[${scanner.label}] fim de jogo${period ? ` (${period})` : ''} ${scanner.score}`.trim(), 'wh')
+      options.onEnd?.({ eventId: scanner.eventId, panelIds: [...scanner.panelIds], home: scanner.home, away: scanner.away, score: scanner.score })
+    }
+  }
+
+  function emitIncidents(scanner: Scanner, queue: RawIncident[]) {
     const { fresh, ignored } = filterNew(scanner.state, queue)
     if (ignored > 0) logScanner(`[${scanner.label}] ${ignored} lance(s) do histórico ignorado(s)`, 'wh')
     for (const incident of fresh) {

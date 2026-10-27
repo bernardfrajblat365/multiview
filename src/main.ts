@@ -1,7 +1,7 @@
 import './style.css'
 import { version } from '../package.json'
 import { normalizeUrl } from './routing'
-import { batchCapacity, groupByCompetition, planBatchOpen, type BllEvent, type BllEventGroup } from './bll-batch'
+import { batchCapacity, groupByCompetition, groupByLeague, planBatchOpen, stageOf, type BllEvent, type BllEventGroup } from './bll-batch'
 import {
   DEFAULT_YOUTUBE_CHANNELS,
   loadYoutubeChannels,
@@ -11,6 +11,7 @@ import {
   type YoutubeChannelResult,
   type YoutubeLivesResult,
 } from './youtube-lives'
+import { setAlertAudioAwake } from './alert-sounds'
 import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
@@ -36,6 +37,7 @@ import {
   parseScore,
   placeMatchLabel,
   splitMatchTeams,
+  teamsReversed,
   type MatchScore,
   type NormRect,
 } from './match-label'
@@ -108,6 +110,9 @@ const panelVideoRects = new Map<PanelId, NormRect | null>()
 const dismissedMatchLabels = new Set<PanelId>()
 /** Teams and score history from the William Hill feed, per panel. */
 const panelFeeds = new Map<PanelId, { home: string; away: string; timeline: ScoreTimeline }>()
+type Crests = { home: string | null; away: string | null }
+/** Team crests (data URLs, in the feed's home/away order) from 365Scores; they arrive after the names and score. */
+const panelCrests = new Map<PanelId, Crests>()
 /** Last score shown per panel, to flash the label when it changes. */
 const shownScores = new Map<PanelId, string>()
 const scoreFlashUntil = new Map<PanelId, number>()
@@ -120,6 +125,12 @@ const panelDelayOverride = new Map<PanelId, number>()
 /** Alerts of 365Scores-linked panels waiting for the video to catch up with the data. */
 const pendingAlerts = new Map<PanelId, Set<number>>()
 
+/** Panels whose match the William Hill feed reported over, counting down to close; "Manter aberto" cancels. */
+const finishedPanels = new Map<PanelId, { showAt: number; closeAt: number }>()
+let finishedTimer: number | null = null
+/** A panel can't close while the user is organizing, dragging or answering a dialog; it tries again after this. */
+const FINISHED_RETRY_MS = 5000
+
 function clearPendingAlerts(id: PanelId) {
   for (const timer of pendingAlerts.get(id) ?? []) window.clearTimeout(timer)
   pendingAlerts.delete(id)
@@ -129,22 +140,26 @@ function clearPanelMatchState(id: PanelId) {
   panelLive.delete(id)
   panelDelayOverride.delete(id)
   clearPendingAlerts(id)
+  finishedPanels.delete(id)
   panelTitles.delete(id)
   panelVideoRects.delete(id)
   dismissedMatchLabels.delete(id)
   panelFeeds.delete(id)
+  panelCrests.delete(id)
   shownScores.delete(id)
   scoreFlashUntil.delete(id)
 }
 
 function clearAllPanelMatchState() {
   for (const id of [...pendingAlerts.keys()]) clearPendingAlerts(id)
+  finishedPanels.clear()
   panelLive.clear()
   panelDelayOverride.clear()
   panelTitles.clear()
   panelVideoRects.clear()
   dismissedMatchLabels.clear()
   panelFeeds.clear()
+  panelCrests.clear()
   shownScores.clear()
   scoreFlashUntil.clear()
 }
@@ -193,7 +208,7 @@ function scheduleLabelRefresh(now: number) {
   }, Math.max(0, next - now) + 30)
 }
 
-function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null } | null {
+function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null; crests: Crests } | null {
   const feed = panelFeeds.get(id)
   const titleLabel = extractMatchLabel(panelTitles.get(id) ?? '')
   const titleTeams = titleLabel ? splitMatchTeams(titleLabel) : null
@@ -203,7 +218,21 @@ function panelMatch(id: PanelId, now: number): { home: string; away: string; sco
   const delay = panelScoreDelayMs(id)
   let score = feed && delay !== null ? visibleScore(feed.timeline, now, delay) : null
   if (score && titleTeams && feedTeams) score = orientScore(titleTeams, feedTeams, score)
-  return { ...teams, score }
+  const feedCrests = panelCrests.get(id) ?? { home: null, away: null }
+  const crests = titleTeams && feedTeams && teamsReversed(titleTeams, feedTeams)
+    ? { home: feedCrests.away, away: feedCrests.home }
+    : feedCrests
+  return { ...teams, score, crests }
+}
+
+function crestImage(src: string | null, fresh: boolean) {
+  if (!src) return null
+  const image = document.createElement('img')
+  // A crest that just arrived fades in; later rebuilds (score changes) show it at once.
+  image.className = fresh ? 'panel__label-crest panel__label-crest--new' : 'panel__label-crest'
+  image.alt = ''
+  image.src = src
+  return image
 }
 
 function labelSpan(className: string, text: string) {
@@ -269,6 +298,7 @@ function updatePanelLabels() {
       home: match.home,
       away: match.away,
       score: match.score,
+      crests: Boolean(match.crests.home || match.crests.away),
     })
     const labelElement = existing ?? document.createElement('div')
     if (!existing) {
@@ -289,23 +319,30 @@ function updatePanelLabels() {
     labelElement.style.setProperty('--label-font', `${placement.fontPx}px`)
 
     // Rebuild the content only when it changes, so the flash animation is not restarted by every poll.
-    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText].join('|')
+    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, match.crests.home ?? '', match.crests.away ?? ''].join('|')
     if (labelElement.dataset.contentKey === contentKey) continue
     labelElement.dataset.contentKey = contentKey
+    const shownCrests = labelElement.dataset.crests ?? ''
+    const homeCrest = crestImage(match.crests.home, !shownCrests.includes('h'))
+    const awayCrest = crestImage(match.crests.away, !shownCrests.includes('a'))
+    labelElement.dataset.crests = `${homeCrest ? 'h' : ''}${awayCrest ? 'a' : ''}`
     const dismiss = ensureMatchLabelDismiss(labelElement, id)
     const chip = document.createElement('div')
     chip.className = 'panel__label-chip'
     chip.setAttribute('aria-hidden', 'true')
     if (placement.layout === 'inline') {
+      if (homeCrest) chip.append(homeCrest)
       chip.append(
         labelSpan('panel__label-team', match.home),
         labelSpan(match.score ? 'panel__label-score' : 'panel__label-vs', match.score ? scoreText : 'x'),
         labelSpan('panel__label-team', match.away),
       )
+      if (awayCrest) chip.append(awayCrest)
     } else {
-      for (const [team, goals] of [[match.home, match.score?.home], [match.away, match.score?.away]] as const) {
+      for (const [team, goals, crest] of [[match.home, match.score?.home, homeCrest], [match.away, match.score?.away, awayCrest]] as const) {
         const row = document.createElement('div')
         row.className = 'panel__label-row'
+        if (crest) row.append(crest)
         row.append(labelSpan('panel__label-team', team))
         if (goals !== undefined) row.append(labelSpan('panel__label-goals', String(goals)))
         chip.append(row)
@@ -446,6 +483,64 @@ function updateAutoControls() {
   }
 }
 
+function updateFinishedControls() {
+  const now = Date.now()
+  for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
+    const entry = finishedPanels.get(panelElement.dataset.panelId ?? '')
+    let controls = panelElement.querySelector<HTMLElement>(':scope > .panel__finished')
+    // Hidden until the score delay passes, so the notice doesn't spoil the end before the video shows it.
+    if (!entry || now < entry.showAt) {
+      controls?.remove()
+      continue
+    }
+    if (!controls) {
+      controls = document.createElement('div')
+      controls.className = 'panel__finished'
+      controls.innerHTML = '<span class="panel__finished-count" role="status" data-finished-count></span><button type="button" class="btn btn--ghost" data-finished-keep title="Não fechar este painel">Manter aberto</button>'
+      panelElement.append(controls)
+    }
+    const count = controls.querySelector<HTMLElement>('[data-finished-count]')
+    const text = `Fim de jogo · fecha em ${Math.max(0, Math.ceil((entry.closeAt - now) / 1000))} s`
+    if (count && count.textContent !== text) count.textContent = text
+  }
+}
+
+function tickFinished() {
+  const now = Date.now()
+  const busy = view !== 'grid' || editorOpen || dragState !== null || document.querySelector('.confirm') !== null
+  for (const [id, entry] of finishedPanels) {
+    if (now < entry.closeAt) continue
+    if (!panelById(id) || panels.length <= MIN_PANELS) {
+      finishedPanels.delete(id)
+    } else if (busy) {
+      entry.closeAt = now + FINISHED_RETRY_MS
+    } else {
+      finishedPanels.delete(id)
+      removePanel(id)
+    }
+  }
+  if (finishedPanels.size === 0 && finishedTimer !== null) {
+    window.clearInterval(finishedTimer)
+    finishedTimer = null
+  }
+  updateFinishedControls()
+}
+
+function onMatchEnded(id: PanelId) {
+  const { closeFinishedSec, scoreDelaySec } = getAlertSettings()
+  if (closeFinishedSec === null || !panelById(id)?.url || finishedPanels.has(id)) return
+  // 365Scores-linked panels wait their own delay (the video trails the data), William Hill ones the score delay.
+  const showAt = Date.now() + (isLiveLinked(id) ? panelAlertDelayMs(id) : (scoreDelaySec ?? 0) * 1000)
+  finishedPanels.set(id, { showAt, closeAt: showAt + closeFinishedSec * 1000 })
+  finishedTimer ??= window.setInterval(tickFinished, 1000)
+  tickFinished()
+}
+
+function keepFinishedPanel(id: PanelId) {
+  finishedPanels.delete(id)
+  updateFinishedControls()
+}
+
 function tickAuto() {
   const { autos, changed } = expireAutos(autoEntries, Date.now())
   autoEntries = autos
@@ -552,6 +647,7 @@ app.addEventListener('click', (event) => {
   if (!panelId) return
   if (target.closest('[data-auto-pin]')) pinAutoPanel(panelId)
   else if (target.closest('[data-auto-back]')) releaseAutoPanel(panelId)
+  if (target.closest('[data-finished-keep]')) keepFinishedPanel(panelId)
   const choice = target.closest<HTMLElement>('[data-live-choose]')?.dataset.liveChoose
   if (choice) window.quadra?.chooseLiveMatch(panelId, choice === 'none' ? null : Number(choice))
 })
@@ -983,7 +1079,7 @@ function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean
     ${group.events.map((event) => {
       const isOpen = open.has(event.url)
       return `<label class="bll-batch__item${isOpen ? ' is-open' : ''}"><input type="checkbox" data-url="${escapeHtml(event.url)}" data-group-item="${groupIndex}"${isOpen ? ' checked disabled' : ''}>
-        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}<span>${escapeHtml(event.name)}</span>${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
+        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}<span>${escapeHtml(event.name)}</span>${event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
     }).join('')}
   </fieldset>`).join('')
 }
@@ -1105,7 +1201,7 @@ function openBatch(source: BatchSource) {
       status.textContent = config.empty
       return
     }
-    list.innerHTML = batchListHtml(groupByCompetition(result.events), fromChooser)
+    list.innerHTML = batchListHtml(source === 'bll' ? groupByLeague(result.events) : groupByCompetition(result.events), fromChooser)
     updateSelection()
   }
   const finish = () => {
@@ -1281,6 +1377,7 @@ function togglePanelAlerts(id: PanelId) {
     clearAlert(id, app)
     releaseAutoPanel(id)
   }
+  syncAlertAudio()
   const button = app.querySelector<HTMLButtonElement>(`[data-panel-id="${CSS.escape(id)}"] [data-alerts]`)
   if (!button) return
   const label = panelAlertsLabel(panel)
@@ -1562,7 +1659,13 @@ function setChromeInteractive(interactive: boolean) {
   window.quadra?.setChromeInteractive(interactive, !interactive && !editing)
 }
 
+/** The alert output stays open while a game can alert, even with every panel muted. */
+function syncAlertAudio() {
+  setAlertAudioAwake(view === 'grid' && panels.some((panel) => panel.url && !panel.alertsOff))
+}
+
 function syncLayout() {
+  syncAlertAudio()
   if (view === 'choose') {
     setChromeInteractive(true)
     window.quadra?.setLayout({ view: 'choose', panelCount: panels.length, mode: layoutMode, panels: [] })
@@ -2135,6 +2238,7 @@ function renderGrid() {
   updatePanelLabels()
   applyAlertStates(app)
   updateAutoControls()
+  updateFinishedControls()
   updateLiveControls()
   focusPendingPanel()
 }
@@ -2175,6 +2279,7 @@ window.quadra?.onMatchScore(({ panelId, home, away, score }) => {
   const parsed = parseScore(score)
   if (!parsed) {
     panelFeeds.delete(panelId)
+    panelCrests.delete(panelId)
   } else {
     const feed = panelFeeds.get(panelId) ?? { home: '', away: '', timeline: createScoreTimeline() }
     feed.home = home
@@ -2182,6 +2287,12 @@ window.quadra?.onMatchScore(({ panelId, home, away, score }) => {
     pushScore(feed.timeline, Date.now(), parsed)
     panelFeeds.set(panelId, feed)
   }
+  updatePanelLabels()
+})
+window.quadra?.onMatchCrests(({ panelId, home, away }) => {
+  if (!panelById(panelId)) return
+  if (!home && !away) panelCrests.delete(panelId)
+  else panelCrests.set(panelId, { home, away })
   updatePanelLabels()
 })
 onAlertSettingsChange(() => {
@@ -2207,6 +2318,7 @@ window.quadra?.onMatchEvent((payload) => {
   timers.add(timer)
   pendingAlerts.set(payload.panelId, timers)
 })
+window.quadra?.onMatchEnded(({ panelId }) => onMatchEnded(panelId))
 window.quadra?.onLiveMatch((status) => {
   if (!panelById(status.panelId)) return
   if (status.status === 'off') {

@@ -1,5 +1,5 @@
 import { ALERT_SOUNDS, ALERT_SOUND_IDS, getAlertSound, playAlertSound } from './alert-sounds'
-import { AUTO_HIGHLIGHT_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
+import { AUTO_HIGHLIGHT_OPTIONS, CLOSE_FINISHED_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
 import type { AlertKind } from './match-events'
 
 export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
@@ -47,6 +47,11 @@ function scoreDelayLabel(value: number | null) {
   return value === 0 ? 'Na hora' : `${value} s depois`
 }
 
+function closeFinishedLabel(value: number | null) {
+  if (value === null) return 'Não fechar'
+  return value === 0 ? 'Na hora' : `${durationLabel(value)} depois`
+}
+
 export function alertControlsHtml(idPrefix: string): string {
   const current = getAlertSound(settings.soundId)
   return `<div class="alert-controls" data-alert-controls>
@@ -67,6 +72,11 @@ export function alertControlsHtml(idPrefix: string): string {
     <label class="alert-score-delay" title="O feed costuma chegar antes do vídeo; o atraso evita ver o gol no placar antes de vê-lo na tela. Nas lives do YouTube vale também para alertas e destaque, e cada painel pode ter o seu">Placar no painel
       <select data-score-delay>
         ${[null, ...SCORE_DELAY_OPTIONS].map((value) => `<option value="${value ?? 'off'}"${settings.scoreDelaySec === value ? ' selected' : ''}>${scoreDelayLabel(value)}</option>`).join('')}
+      </select>
+    </label>
+    <label class="alert-close-finished" title="Quando o feed William Hill (jogos da BLL) disser que o jogo acabou. A contagem começa depois do atraso do placar e o painel mostra um botão para mantê-lo aberto">Fechar o painel quando o jogo acabar
+      <select data-close-finished>
+        ${[null, ...CLOSE_FINISHED_OPTIONS].map((value) => `<option value="${value ?? 'off'}"${settings.closeFinishedSec === value ? ' selected' : ''}>${closeFinishedLabel(value)}</option>`).join('')}
       </select>
     </label>
     <button type="button" class="btn btn--ghost" data-open-monitor title="Mostra os logs da engine que escaneia os lances">Monitor de lances</button>
@@ -138,6 +148,11 @@ export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
       settings = { ...settings, scoreDelaySec: value === 'off' ? null : Number(value) }
       saveAlertSettings(settings)
       for (const listener of settingsListeners) listener(settings)
+    }, { signal })
+    controls.querySelector<HTMLSelectElement>('[data-close-finished]')?.addEventListener('change', (event) => {
+      const value = (event.target as HTMLSelectElement).value
+      settings = { ...settings, closeFinishedSec: value === 'off' ? null : Number(value) }
+      saveAlertSettings(settings)
     }, { signal })
     controls.querySelector('[data-open-monitor]')?.addEventListener('click', () => window.quadra?.openMonitor(), { signal })
   }

@@ -1,4 +1,4 @@
-import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, session, WebContentsView } from 'electron'
+import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, net, session, WebContentsView } from 'electron'
 import electronUpdater from 'electron-updater'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -8,7 +8,8 @@ import { alertLabel, extractWilliamHillId } from '../src/match-events'
 import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
-import { createScoreboardScanners } from './scoreboard-scanner'
+import { createTeamCrests } from './team-crests'
+import { createScoreboardScanners, type ScannerScore } from './scoreboard-scanner'
 import {
   createLoadPacer,
   PLAYBACK_CHECK_INTERVAL_MS,
@@ -21,6 +22,7 @@ import { getScannerLogBacklog, logScanner, onScannerLog } from './scanner-log'
 import { listYoutubeLives, resolveYoutubeChannel } from './youtube-search'
 import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSkipScript, youtubePlayerCss } from './youtube-player'
 import { createAutoUpdateController } from './update'
+import { fetchGitHubReleaseNotes } from './release-notes'
 
 const { autoUpdater } = electronUpdater
 
@@ -287,6 +289,7 @@ const scanners = createScoreboardScanners({
     }
   },
   onScore: sendMatchScore,
+  onEnd: sendMatchEnded,
 })
 /** YouTube panels and BLL players without a William Hill feed: links the panel to a 365Scores game by the teams in its title, then polls that game. */
 const liveScores = createLiveScoreLinker({
@@ -305,13 +308,29 @@ const liveScores = createLiveScoreLinker({
     }
   },
   onScore: sendMatchScore,
-  onStatus: (status) => overlayWindow?.webContents.send('quadra:live-match', status),
+  onStatus: (status) => {
+    // Unlinked (other video, no match): its crests go with it.
+    if (status.status === 'off') teamCrests.clear(status.panelId)
+    overlayWindow?.webContents.send('quadra:live-match', status)
+  },
+  onEnd: sendMatchEnded,
+  onList: (games) => teamCrests.prefetch(games),
+})
+/** Crests for the match label, from 365Scores; they follow the names and score, never hold them up. */
+const teamCrests = createTeamCrests({
+  listGames: () => liveScores.listGames(),
+  onCrests: (crests) => overlayWindow?.webContents.send('quadra:match-crests', crests),
 })
 
-function sendMatchScore({ panelIds, home, away, score }: { panelIds: string[]; home: string; away: string; score: string }) {
+function sendMatchEnded({ panelIds }: { panelIds: string[] }) {
+  for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-ended', { panelId })
+}
+
+function sendMatchScore({ panelIds, home, away, score, teams }: ScannerScore) {
   for (const panelId of panelIds) {
     overlayWindow?.webContents.send('quadra:match-score', { panelId, home, away, score })
   }
+  teamCrests.show(panelIds, home, away, teams)
 }
 const testUserDataPath = process.env.QUADRA_TEST_USER_DATA
 if (testUserDataPath) app.setPath('userData', testUserDataPath)
@@ -704,6 +723,7 @@ function stopMatchDetection(panelId: string) {
   matchDetections.delete(panelId)
   scanners.detach(panelId)
   liveScores.detach(panelId)
+  teamCrests.clear(panelId)
   overlayWindow?.webContents.send('quadra:match-score', { panelId, home: '', away: '', score: '' })
 }
 
@@ -714,6 +734,7 @@ function stopMatchDetection(panelId: string) {
  */
 function startMatchDetection(contents: Electron.WebContents, panelId: string) {
   stopMatchDetection(panelId)
+  teamCrests.warm()
   let attempts = 0
   let fallback = false
   const startFallback = (name: string) => {
@@ -776,7 +797,10 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
     if (!isMainFrame) return
     void syncYoutubePlayer()
     // Leaving /watch inside YouTube's SPA: the live is gone, so is its 365Scores link (a BLL player keeps its fallback).
-    if (slotId && !isYoutubeWatchUrl(url) && !matchSportsPlayerUrl(url)) liveScores.detach(slotId)
+    if (slotId && !isYoutubeWatchUrl(url) && !matchSportsPlayerUrl(url)) {
+      liveScores.detach(slotId)
+      teamCrests.clear(slotId)
+    }
   })
   contents.on('did-finish-load', () => {
     youtubeCssKey = undefined // full load clears inserted CSS
@@ -931,6 +955,7 @@ function openMonitorWindow() {
 function closeOwnedWindows() {
   scanners.destroyAll()
   liveScores.destroyAll()
+  teamCrests.reset()
   for (const id of [...matchDetections.keys()]) stopMatchDetection(id)
   if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
   destroyAllSlotViews()
@@ -947,6 +972,7 @@ function installAutoUpdater() {
     updater: autoUpdater,
     showMessageBox: (options) => dialog.showMessageBox(options),
     quitAndInstall: () => autoUpdater.quitAndInstall(),
+    fetchReleaseNotes: (version) => fetchGitHubReleaseNotes(version, (url, init) => net.fetch(String(url), init)),
     log: (message) => console.warn(`[updater] ${message}`),
   })
   void autoUpdateController.check()
@@ -1227,6 +1253,7 @@ function createWindow() {
     }
     scanners.destroyAll()
     liveScores.destroyAll()
+    teamCrests.reset()
     if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
     destroyAllSlotViews()
     scheduleFullscreenPrioritySync()

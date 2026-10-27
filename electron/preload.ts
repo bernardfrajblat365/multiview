@@ -6,6 +6,7 @@ import type { AlertKind } from '../src/match-events'
 import type { LiveMatchStatus } from '../src/livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
+type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
 type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
 
 const quadra = {
@@ -68,6 +69,11 @@ const quadra = {
     ipcRenderer.on('quadra:match-event', listener)
     return () => ipcRenderer.removeListener('quadra:match-event', listener)
   },
+  onMatchEnded: (callback: (payload: { panelId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string }) => callback(payload)
+    ipcRenderer.on('quadra:match-ended', listener)
+    return () => ipcRenderer.removeListener('quadra:match-ended', listener)
+  },
   onLiveMatch: (callback: (payload: LiveMatchStatus) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: LiveMatchStatus) => callback(payload)
     ipcRenderer.on('quadra:live-match', listener)
@@ -78,6 +84,11 @@ const quadra = {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchScorePayload) => callback(payload)
     ipcRenderer.on('quadra:match-score', listener)
     return () => ipcRenderer.removeListener('quadra:match-score', listener)
+  },
+  onMatchCrests: (callback: (payload: MatchCrestsPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: MatchCrestsPayload) => callback(payload)
+    ipcRenderer.on('quadra:match-crests', listener)
+    return () => ipcRenderer.removeListener('quadra:match-crests', listener)
   },
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; title: string }) => callback(payload)

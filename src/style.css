@@ -491,6 +491,9 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .toolbar .btn--icon { padding: 0; width: 2.55rem; min-width: 2.55rem; height: 2.55rem; font-size: 1.35rem; }
 .toolbar__menu { position: absolute; right: 0; bottom: calc(100% + 0.4rem); display: grid; gap: 0.35rem; width: max-content; min-width: 13rem; padding: 0.45rem; border: 1px solid var(--line); border-radius: 10px; background: rgba(7,26,20,0.97); box-shadow: 0 14px 34px rgba(0,0,0,0.45); }
 .toolbar__menu[hidden] { display: none; }
+/* Actions and alert options side by side so the menu fits a 768 px tall screen. */
+.toolbar__menu:not([hidden]) { display: flex; align-items: flex-start; gap: 0.7rem; }
+.toolbar__menu-actions { display: grid; gap: 0.35rem; min-width: 13rem; }
 .toolbar__menu .btn { width: 100%; text-align: left; }
 
 .confirm { position: fixed; inset: 0; z-index: 100; display: grid; place-items: center; padding: 1.25rem; background: rgba(2,8,6,0.72); backdrop-filter: blur(6px); }
@@ -592,7 +595,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .alert-kinds { display: flex; flex-wrap: wrap; gap: 0.2rem 0.9rem; margin: 0; padding: 0.25rem 0.7rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; font-size: 0.82rem; }
 .alert-kinds legend { padding: 0 0.3rem; color: var(--ink-muted); font-size: 0.72rem; }
 .alert-kinds label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; white-space: nowrap; }
-.toolbar__menu .alert-controls { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 0.6rem; margin: 0.35rem 0 0; padding-top: 0.7rem; border-top: 1px solid rgba(200,245,96,0.2); }
+.toolbar__menu .alert-controls { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 0.6rem; margin: 0; padding-left: 0.7rem; border-left: 1px solid rgba(200,245,96,0.2); }
 .toolbar__menu .alert-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; padding: 0.6rem 0.8rem 0.7rem; }
 .toolbar__menu .alert-auto, .toolbar__menu .alert-score-delay, .toolbar__menu .alert-close-finished { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.55rem 0.8rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; }
 .toolbar__menu .alert-auto { justify-content: flex-start; }

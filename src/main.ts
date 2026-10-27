@@ -2252,6 +2252,7 @@ function renderGrid() {
       <button type="button" class="btn btn--ghost" id="btn-fullscreen">${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}</button>
       <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon" id="btn-more" aria-label="Mais opções" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu"><svg viewBox="0 0 24 24" width="1.25rem" height="1.25rem" fill="currentColor" aria-hidden="true" focusable="false" style="display:block"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
+          <div class="toolbar__menu-actions">
           <button type="button" class="btn btn--ghost" id="btn-bll-batch" role="menuitem">Abrir vários jogos da BLL…</button>
           <button type="button" class="btn btn--ghost" id="btn-youtube-batch" role="menuitem">Abrir jogos ao vivo do YouTube…</button>
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
@@ -2259,6 +2260,7 @@ function renderGrid() {
           <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>
           <button type="button" class="btn btn--ghost" id="btn-undo" role="menuitem"${canUndo ? '' : ' disabled'}>Desfazer</button>
           <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">Limpar todos</button>
+          </div>
           ${alertControlsHtml('menu')}
         </div>
       </div>

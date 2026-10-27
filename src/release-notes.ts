@@ -6,8 +6,8 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
-    version: '1.1.4',
-    label: '1.1.4',
+    version: '1.1.5',
+    label: '1.1.5',
     notes: [
       {
         title: 'Escudos dos times no placar',

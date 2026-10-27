@@ -117,7 +117,7 @@ A revisão independente considera a confirmação manual suficiente para o crit�
 
 ## Executar o build integrado
 
-Instale `castlabs-evs==1.3.2` no Python usado pelo build e autentique localmente com `python -m castlabs_evs.account refresh`. Execute `npm run dist:release`. Para venv, defina `EVS_PYTHON` com o caminho do `python.exe`. `EVS_CONFIG_FILE` permite indicar um arquivo de autenticação fora do repositório. O build usa modo não interativo e não imprime a saída bruta do cliente EVS.
+Instale `castlabs-evs==1.3.2` no Python usado pelo build e autentique localmente com `python -m castlabs_evs.account refresh`. Execute `npm run dist:release`. Para venv, defina `EVS_PYTHON` com o caminho do `python.exe`. `EVS_CONFIG_FILE` permite indicar um arquivo de autenticação fora do repositório. O build usa modo não interativo e não imprime a saída do cliente EVS quando dá certo; se `sign-pkg`/`verify-pkg` falhar, o erro mostra as últimas 25 linhas com e-mails, tokens, senhas e sequências longas mascarados.
 
 No GitHub Actions, configure `EVS_AUTH_JSON` com o JSON de autenticação gerado pelo cliente EVS. O workflow grava esse secret somente no diretório temporário do runner e o remove com `if: always()`. Em 25/09/2026, o secret foi configurado em `bernard-014/multiview-desktop` a partir do arquivo de autenticação local; a presença e a data foram verificadas, sem ler o valor remoto de volta. Não cole o conteúdo em chat, issues ou arquivos versionados. Renove o secret se a autenticação expirar.
 

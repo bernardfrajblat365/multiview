@@ -1,7 +1,9 @@
 import { ALERT_KINDS, type AlertKind } from './match-events.ts'
 
 export type AlertSettings = {
+  /** Sound of every alert except goals. */
   soundId: string
+  goalSoundId: string
   kinds: Record<AlertKind, boolean>
   /** Promote the panel with a goal to a highlight for `autoHighlightSec` (3+ panels). */
   autoHighlight: boolean
@@ -23,6 +25,7 @@ const STORAGE_KEY = 'quadra:alert-settings'
 
 export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
   soundId: 'apito-arbitro',
+  goalSoundId: 'gol-torcida',
   kinds: { goal: true, penalty: true, red: true, yellow: false, var: true },
   autoHighlight: true,
   autoHighlightSec: 45,
@@ -31,11 +34,14 @@ export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
 }
 
 export function parseAlertSettings(raw: string | null, validSoundIds: readonly string[]): AlertSettings {
-  const next: AlertSettings = { soundId: DEFAULT_ALERT_SETTINGS.soundId, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds }, autoHighlight: DEFAULT_ALERT_SETTINGS.autoHighlight, autoHighlightSec: DEFAULT_ALERT_SETTINGS.autoHighlightSec, scoreDelaySec: DEFAULT_ALERT_SETTINGS.scoreDelaySec, closeFinishedSec: DEFAULT_ALERT_SETTINGS.closeFinishedSec }
+  const next: AlertSettings = { soundId: DEFAULT_ALERT_SETTINGS.soundId, goalSoundId: DEFAULT_ALERT_SETTINGS.goalSoundId, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds }, autoHighlight: DEFAULT_ALERT_SETTINGS.autoHighlight, autoHighlightSec: DEFAULT_ALERT_SETTINGS.autoHighlightSec, scoreDelaySec: DEFAULT_ALERT_SETTINGS.scoreDelaySec, closeFinishedSec: DEFAULT_ALERT_SETTINGS.closeFinishedSec }
   if (!raw) return next
   try {
     const parsed = JSON.parse(raw) as Partial<AlertSettings> | null
     if (parsed && typeof parsed.soundId === 'string' && validSoundIds.includes(parsed.soundId)) next.soundId = parsed.soundId
+    // Settings saved before the goal had its own sound keep playing the one sound the user picked.
+    if (parsed && typeof parsed.goalSoundId === 'string' && validSoundIds.includes(parsed.goalSoundId)) next.goalSoundId = parsed.goalSoundId
+    else if (parsed && parsed.goalSoundId === undefined && typeof parsed.soundId === 'string' && validSoundIds.includes(parsed.soundId)) next.goalSoundId = parsed.soundId
     if (typeof parsed?.autoHighlight === 'boolean') next.autoHighlight = parsed.autoHighlight
     if (typeof parsed?.autoHighlightSec === 'number' && AUTO_HIGHLIGHT_OPTIONS.includes(parsed.autoHighlightSec)) next.autoHighlightSec = parsed.autoHighlightSec
     if (parsed?.scoreDelaySec === null) next.scoreDelaySec = null

@@ -15,9 +15,11 @@ import {
   retryDelayMs,
   parsePbpFeed,
   sourceKeyOf,
+  SPORT_IDS,
   type Game365,
   type LiveMatchStatus,
   type LiveState,
+  type Sport365,
 } from '../src/livescore-365'
 import type { CrestTeams } from '../src/team-crests'
 import { alertLabel, type MatchIncident } from '../src/match-events'
@@ -30,6 +32,7 @@ type PanelLink = {
   /** YouTube video id, or the player path of a BLL panel without a William Hill feed. */
   sourceKey: string
   title: string
+  sport: Sport365
   gameId: number | null
   candidates: Game365[]
   attempts: number
@@ -41,6 +44,8 @@ type PanelLink = {
 type Poller = {
   gameId: number
   label: string
+  /** Basketball: names, crests and score only, no alerts and no closing at the end. */
+  sport: Sport365
   panelIds: Set<string>
   state: LiveState
   coverage: 'events' | 'score' | null
@@ -107,37 +112,42 @@ export function createLiveScoreLinker(options: {
   onStatus: (status: LiveMatchStatus) => void
   /** The game is over; reported once, only for a game seen being played. */
   onEnd?: (end: { panelIds: string[] }) => void
-  /** Every freshly downloaded games list (crests of live games are prefetched from it). */
+  /** Every freshly downloaded football games list (crests of live games are prefetched from it). */
   onList?: (games: Game365[]) => void
 }) {
   const links = new Map<string, PanelLink>()
   const pollers = new Map<number, Poller>()
-  let listCache: { at: number; games: Game365[] } | null = null
-  let listPending: Promise<Game365[]> | null = null
+  const listCache = new Map<Sport365, { at: number; games: Game365[] }>()
+  const listPending = new Map<Sport365, Promise<Game365[]>>()
   let serial = 0
 
-  /** Live games plus today's schedule: the live list alone stops at 100 games. */
-  function listGames(): Promise<Game365[]> {
-    if (listCache && Date.now() - listCache.at < LIST_CACHE_MS) return Promise.resolve(listCache.games)
-    listPending ??= (async () => {
+  /** Live games plus today's schedule of one sport: the live list alone stops at 100 games. */
+  function listGames(sport: Sport365 = 'football'): Promise<Game365[]> {
+    const cached = listCache.get(sport)
+    if (cached && Date.now() - cached.at < LIST_CACHE_MS) return Promise.resolve(cached.games)
+    const pending = listPending.get(sport)
+    if (pending) return pending
+    const sports = String(SPORT_IDS[sport])
+    const request = (async () => {
       const now = new Date()
       const today = brazilDate(now)
       const startDate = brazilHour(now) < LATE_NIGHT_HOUR ? brazilDate(new Date(now.getTime() - 24 * 3600_000)) : today
       const [current, schedule] = await Promise.allSettled([
-        fetchJson(apiUrl('/web/games/current/', { sports: '1' })),
-        fetchJson(apiUrl('/web/games/allscores/', { sports: '1', startDate, endDate: today, showOdds: 'false' })),
+        fetchJson(apiUrl('/web/games/current/', { sports })),
+        fetchJson(apiUrl('/web/games/allscores/', { sports, startDate, endDate: today, showOdds: 'false' })),
       ])
       if (current.status === 'rejected' && schedule.status === 'rejected') throw current.reason
       const games = mergeGameLists(
-        current.status === 'fulfilled' ? parseGameList(current.value) : [],
-        schedule.status === 'fulfilled' ? parseGameList(schedule.value) : [],
+        current.status === 'fulfilled' ? parseGameList(current.value, SPORT_IDS[sport]) : [],
+        schedule.status === 'fulfilled' ? parseGameList(schedule.value, SPORT_IDS[sport]) : [],
       )
-      if (schedule.status === 'rejected') logScanner(`365Scores: agenda do dia indisponível (${schedule.reason instanceof Error ? schedule.reason.message : 'erro'}); só os ${games.length} jogos ao vivo da lista curta`, '365')
-      listCache = { at: Date.now(), games }
-      options.onList?.(games)
+      if (schedule.status === 'rejected') logScanner(`365Scores: agenda do dia${sport === 'basketball' ? ' (basquete)' : ''} indisponível (${schedule.reason instanceof Error ? schedule.reason.message : 'erro'}); só os ${games.length} jogos ao vivo da lista curta`, '365')
+      listCache.set(sport, { at: Date.now(), games })
+      if (sport === 'football') options.onList?.(games)
       return games
-    })().finally(() => { listPending = null })
-    return listPending
+    })().finally(() => { listPending.delete(sport) })
+    listPending.set(sport, request)
+    return request
   }
 
   function sendStatus(panelId: string, status: Omit<LiveMatchStatus, 'panelId'>) {
@@ -180,6 +190,17 @@ export function createLiveScoreLinker(options: {
     schedulePoll(poller, delay)
   }
 
+  function setScore(poller: Poller, detail: NonNullable<ReturnType<typeof parseGameDetail>>) {
+    poller.home = detail.home.name
+    poller.away = detail.away.name
+    poller.teams = {
+      home: { id: detail.home.id, imageVersion: detail.home.imageVersion ?? 0 },
+      away: { id: detail.away.id, imageVersion: detail.away.imageVersion ?? 0 },
+    }
+    poller.score = `${detail.home.score} - ${detail.away.score}`
+    publishScore(poller)
+  }
+
   async function poll(poller: Poller) {
     poller.timer = undefined
     let raw: unknown
@@ -205,6 +226,17 @@ export function createLiveScoreLinker(options: {
       logScanner(`[${poller.label}] 365Scores voltou a responder após ${poller.failures} falha(s) (${seconds} s sem dados)`, '365')
     }
     poller.failures = 0
+    if (poller.sport === 'basketball') {
+      // Score only for now: no alerts, and the panel stays open when the game ends.
+      setScore(poller, detail)
+      if (detail.statusGroup === 4) {
+        logScanner(`[${poller.label}] jogo encerrado (${poller.score}); 365Scores parou de consultar`, '365')
+        poller.stopped = true
+        return
+      }
+      schedulePoll(poller, POLL_MS)
+      return
+    }
     if (!detail.events) {
       // Without events the red cards come from the red-card count, which only the games list carries.
       try {
@@ -220,14 +252,7 @@ export function createLiveScoreLinker(options: {
       }
       if (poller.stopped) return
     }
-    poller.home = detail.home.name
-    poller.away = detail.away.name
-    poller.teams = {
-      home: { id: detail.home.id, imageVersion: detail.home.imageVersion ?? 0 },
-      away: { id: detail.away.id, imageVersion: detail.away.imageVersion ?? 0 },
-    }
-    poller.score = `${detail.home.score} - ${detail.away.score}`
-    publishScore(poller)
+    setScore(poller, detail)
     const coverage = detail.events ? 'events' : 'score'
     if (coverage !== poller.coverage) {
       poller.coverage = coverage
@@ -281,14 +306,14 @@ export function createLiveScoreLinker(options: {
     const label = `${game.home} x ${game.away}`
     let poller = pollers.get(game.id)
     if (!poller) {
-      poller = { gameId: game.id, label, panelIds: new Set(), state: createLiveState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false, sawLive: false }
+      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false, sawLive: false }
       pollers.set(game.id, poller)
       schedulePoll(poller, 0)
     }
     poller.panelIds.add(panelId)
-    sendStatus(panelId, { status: 'linked', label, coverage: poller.coverage })
+    sendStatus(panelId, { status: 'linked', label, coverage: poller.coverage, sport: poller.sport })
     publishScore(poller, [panelId], true)
-    logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id})`, '365')
+    logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id}${poller.sport === 'basketball' ? ', basquete: só placar' : ''})`, '365')
   }
 
   async function resolve(panelId: string) {
@@ -300,13 +325,13 @@ export function createLiveScoreLinker(options: {
     sendStatus(panelId, { status: 'searching' })
     let games: Game365[]
     try {
-      games = await listGames()
+      games = await listGames(entry.sport)
     } catch {
       games = []
     }
     const current = links.get(panelId)
     if (!current || current.token !== token) return
-    const result = matchGame(current.title, games, Date.now())
+    const result = matchGame(current.title, games, Date.now(), current.sport)
     if (result.status === 'matched') {
       link(panelId, result.game)
     } else if (result.status === 'ambiguous') {
@@ -322,18 +347,19 @@ export function createLiveScoreLinker(options: {
 
   /**
    * Called with every title of a YouTube watch page, and with the match name of a BLL player
-   * that has no William Hill feed; a new video/player or a title that names other teams starts over.
+   * that has no William Hill feed (basketball BLL games among them); a new video/player or a title
+   * that names other teams starts over.
    */
-  function consider(panelId: string, url: string, title: string) {
+  function consider(panelId: string, url: string, title: string, sport: Sport365 = 'football') {
     const sourceKey = sourceKeyOf(url)
     const existing = links.get(panelId)
-    if (existing && existing.sourceKey === sourceKey && (existing.gameId !== null || existing.title === title)) return
+    if (existing && existing.sourceKey === sourceKey && existing.sport === sport && (existing.gameId !== null || existing.title === title)) return
     unlink(panelId)
     if (!sourceKey || !matchTitle(title)) {
       sendStatus(panelId, { status: 'off' })
       return
     }
-    links.set(panelId, { sourceKey, title, gameId: null, candidates: [], attempts: 0, token: 0 })
+    links.set(panelId, { sourceKey, title, sport, gameId: null, candidates: [], attempts: 0, token: 0 })
     void resolve(panelId)
   }
 

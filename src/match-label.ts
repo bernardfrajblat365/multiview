@@ -20,6 +20,8 @@ const TIME_PREFIX_RE = /^\d{1,2}:\d{2}\s+-\s+/
 const YOUTUBE_SUFFIX_RE = /\s+-\s+YouTube$/i
 /** Speaker / megaphone markers often prepended by live players (e.g. BLL). */
 const SOUND_EMOJI_RE = /[\u{1F507}-\u{1F50A}\u{1F4E2}\u{1F4E3}]/gu
+/** Sport the BLL puts in front of the name (🏀, 🎾, ⚽, 🏈, 🏐, 🏒): the label shows the teams only. */
+const SPORT_EMOJI_RE = /[\u{1F3C0}\u{1F3BE}\u{26BD}\u{1F3C8}\u{1F3D0}\u{1F3D2}]\u{FE0F}?/gu
 const MAX_LABEL_LENGTH = 80
 const MIN_FONT_PX = 11
 const MAX_FONT_PX = 22
@@ -50,7 +52,7 @@ function cleanSegment(value: string) {
 }
 
 export function stripSoundMarkers(value: string) {
-  return cleanSegment(value.replace(SOUND_EMOJI_RE, ''))
+  return cleanSegment(value.replace(SOUND_EMOJI_RE, '').replace(SPORT_EMOJI_RE, ''))
 }
 
 function candidateSegments(title: string) {
@@ -116,6 +118,29 @@ export function parseScore(value: string): MatchScore | null {
 
 export function formatScore(score: MatchScore) {
   return `${score.home} – ${score.away}`
+}
+
+/**
+ * Digit columns of a score that rolls from one number to another, right-aligned: each column lists
+ * what that slot shows on the way, so 98 → 101 is ['', '1'], ['9', '0'], ['8', '9', '0', '1'].
+ * A slot going up steps through the digits in between like a roulette; anything else just swaps.
+ */
+export function rollColumns(from: number, to: number): string[][] {
+  const width = Math.max(String(from).length, String(to).length)
+  const oldDigits = String(from).padStart(width, ' ')
+  const newDigits = String(to).padStart(width, ' ')
+  return [...newDigits].map((digit, index) => {
+    const start = oldDigits[index].trim()
+    const end = digit.trim()
+    if (start === end) return [end]
+    if (to < from || !start || !end) return [start, end]
+    const column = [start]
+    for (let value = Number(start); String(value) !== end; ) {
+      value = (value + 1) % 10
+      column.push(String(value))
+    }
+    return column
+  })
 }
 
 function teamTokens(name: string) {

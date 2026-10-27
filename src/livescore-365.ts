@@ -25,6 +25,17 @@ export type TeamRef365 = { id: number; imageVersion: number }
 
 export type Candidate365 = { id: number; label: string; detail: string }
 
+/** Sports looked up in 365Scores: football (YouTube and BLL) and basketball (BLL, score only). */
+export type Sport365 = 'football' | 'basketball'
+
+/** The API's `sports` / `sportId` value. */
+export const SPORT_IDS: Record<Sport365, number> = { football: 1, basketball: 2 }
+
+/** The BLL marks the sport with an emoji in front of the match name ("🏀 Boston Celtics x Brooklyn Nets", "🎾 ATP Vienna"); football has none. */
+export function sportOfBllName(name: string): Sport365 {
+  return name.includes('\u{1F3C0}') ? 'basketball' : 'football'
+}
+
 /** Sent to the UI as `quadra:live-match` for each YouTube panel. */
 export type LiveMatchStatus = {
   panelId: string
@@ -33,6 +44,8 @@ export type LiveMatchStatus = {
   /** `events`: cards and VAR too; `score`: the league has no incident data, so only goals (from the score) and red-card counts. */
   coverage?: 'events' | 'score' | null
   candidates?: Candidate365[]
+  /** Basketball games show names, crests and score only (no alerts yet). */
+  sport?: Sport365
 }
 
 export type MatchResult =
@@ -108,7 +121,9 @@ const SUBTYPE_OWN_GOAL = 2
 const SUBTYPE_PENALTY_GOAL = 3
 const SUBTYPE_SECOND_YELLOW = 21
 
-const CLUB_WORDS = new Set(['fc', 'cf', 'sc', 'ac', 'ec', 'cr', 'se', 'ca', 'afc', 'cd', 'sad', 'club', 'clube', 'de', 'da', 'do', 'del', 'la', 'el', 'the', 'and', 'e'])
+const CLUB_WORDS = new Set(['fc', 'cf', 'sc', 'ac', 'ec', 'cr', 'se', 'ca', 'afc', 'cd', 'sad', 'club', 'clube', 'de', 'da', 'do', 'del', 'la', 'el', 'the', 'and', 'e',
+  // Basketball clubs: "KK Crvena zvezda" / "Crvena Zvezda", "Paris Basketball", "Valencia Basket".
+  'bc', 'kk', 'bk', 'basket', 'basketball'])
 /** Words shared by many clubs; a title naming a team only by these is ambiguous. */
 const GENERIC_WORDS = new Set(['atletico', 'real', 'inter', 'internacional', 'sporting', 'nacional', 'united', 'city', 'sport', 'athletic', 'racing', 'deportivo', 'union', 'olympique', 'dynamo', 'dinamo', 'america', 'universidad', 'independiente', 'estudiantes', 'santa', 'sao', 'saint', 'st', 'fk', 'sk', 'ks'])
 /** State and city suffixes written either way ("Atlético-MG" / "Atlético Mineiro"). */
@@ -116,6 +131,8 @@ const TOKEN_ALIASES: Record<string, string> = {
   mg: 'mineiro', pr: 'paranaense', go: 'goianiense', sp: 'paulista', rj: 'carioca', athletico: 'atletico', utd: 'united', man: 'manchester',
   // City names written in Portuguese or English in titles, local in 365Scores ("Slavia Praga" / "Slavia Praha").
   praga: 'praha', prague: 'praha', moscou: 'moscow', moskva: 'moscow', bucareste: 'bucuresti', bucharest: 'bucuresti',
+  // "Bayern München" in the BLL, "Bayern de Munique" / "Bayern Munich" in 365Scores; "Barça Basket" / "Barcelona".
+  munchen: 'munich', munique: 'munich', barca: 'barcelona',
 }
 /** Nicknames used in Brazilian titles. Keys and values are normalized names. */
 const NICKNAMES: Record<string, string> = {
@@ -198,6 +215,24 @@ function bestSimilarity(name: string, variants: readonly string[]) {
   return Math.max(0, ...variants.map((variant) => teamSimilarity(name, variant)))
 }
 
+/** Words of 4+ letters that name few clubs: "Baskonia", "Milano". */
+function distinctiveTokens(name: string) {
+  return teamTokens(name).filter((token) => token.length >= 4 && !GENERIC_WORDS.has(token))
+}
+
+/**
+ * Basketball names carry sponsors that 365Scores leaves out ("Kosner Baskonia" / "Baskonia Vitoria",
+ * "EA7 Emporio Armani Milano" / "Olimpia Milano"). Among the day's few basketball games, one shared
+ * distinctive word is enough to link; two games sharing it still make the user choose.
+ */
+function looseSimilarity(name: string, variants: readonly string[]) {
+  const best = bestSimilarity(name, variants)
+  if (best >= LINK_SCORE) return best
+  const own = distinctiveTokens(name)
+  const shared = variants.some((variant) => distinctiveTokens(variant).some((token) => own.some((other) => tokensMatch(token, other))))
+  return shared ? LINK_SCORE : best
+}
+
 function cleanTitleTeam(value: string, side: 'home' | 'away') {
   let text = value.replace(/#\S+/g, ' ').replace(/\b\d{1,2}\/\d{1,2}(?:\/\d{2,4})?\b/g, ' ').replace(/\b20\d\d\b/g, ' ')
   // "AO VIVO: Flamengo" / "Palmeiras (Brasileirão)": keep the side next to the "x".
@@ -229,8 +264,8 @@ function competitorNames(raw: Record<string, unknown>) {
   return [...new Set(names)]
 }
 
-/** Validates a games list response. Unknown shapes give an empty list. */
-export function parseGameList(raw: unknown): Game365[] {
+/** Validates a games list response, keeping only games of `sportId`. Unknown shapes give an empty list. */
+export function parseGameList(raw: unknown, sportId = SPORT_IDS.football): Game365[] {
   const games = raw && typeof raw === 'object' ? (raw as { games?: unknown }).games : null
   if (!Array.isArray(games)) return []
   const parsed: Game365[] = []
@@ -240,7 +275,7 @@ export function parseGameList(raw: unknown): Game365[] {
     const id = Number(game.id)
     const home = game.homeCompetitor && typeof game.homeCompetitor === 'object' ? game.homeCompetitor as Record<string, unknown> : null
     const away = game.awayCompetitor && typeof game.awayCompetitor === 'object' ? game.awayCompetitor as Record<string, unknown> : null
-    if (!Number.isSafeInteger(id) || id <= 0 || !home || !away || (game.sportId !== undefined && game.sportId !== 1)) continue
+    if (!Number.isSafeInteger(id) || id <= 0 || !home || !away || (game.sportId !== undefined && game.sportId !== sportId)) continue
     const homeNames = competitorNames(home)
     const awayNames = competitorNames(away)
     if (homeNames.length === 0 || awayNames.length === 0) continue
@@ -281,9 +316,10 @@ function sameSet(a: Set<string>, b: Set<string>) {
  * `fit`: how well the game's teams match the title's (either order), 0..1.
  * `rank`: fit plus small nudges toward a live game, today's games and the title's competition.
  */
-export function scoreGame(teams: NonNullable<ReturnType<typeof teamsFromTitle>>, game: Game365, now: number) {
-  const straight = Math.min(bestSimilarity(teams.home, game.homeNames), bestSimilarity(teams.away, game.awayNames))
-  const reversed = Math.min(bestSimilarity(teams.home, game.awayNames), bestSimilarity(teams.away, game.homeNames))
+export function scoreGame(teams: NonNullable<ReturnType<typeof teamsFromTitle>>, game: Game365, now: number, sport: Sport365 = 'football') {
+  const similarity = sport === 'basketball' ? looseSimilarity : bestSimilarity
+  const straight = Math.min(similarity(teams.home, game.homeNames), similarity(teams.away, game.awayNames))
+  const reversed = Math.min(similarity(teams.home, game.awayNames), similarity(teams.away, game.homeNames))
   let fit = Math.max(straight, reversed)
   if (fit === 0) return { fit: 0, rank: 0 }
   // A youth/women's/reserve side never links on its own to a senior one (or the other way round).
@@ -297,11 +333,11 @@ export function scoreGame(teams: NonNullable<ReturnType<typeof teamsFromTitle>>,
 }
 
 /** Links only when one game clearly fits both teams; otherwise returns up to three candidates for the user. */
-export function matchGame(title: string, games: readonly Game365[], now: number): MatchResult {
+export function matchGame(title: string, games: readonly Game365[], now: number, sport: Sport365 = 'football'): MatchResult {
   const teams = teamsFromTitle(title)
   if (!teams) return { status: 'none' }
   const ranked = games
-    .map((game) => ({ game, ...scoreGame(teams, game, now) }))
+    .map((game) => ({ game, ...scoreGame(teams, game, now, sport) }))
     .filter((entry) => entry.fit >= CANDIDATE_SCORE)
     .sort((a, b) => b.rank - a.rank)
   if (ranked.length === 0) return { status: 'none' }

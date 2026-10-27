@@ -1,3 +1,4 @@
+import { BLL_ENDED_SITUATION, BLL_LIVE_SITUATION } from './bll-end.ts'
 import { sportOfBllName } from './livescore-365.ts'
 import { stripSoundMarkers } from './match-label.ts'
 
@@ -18,8 +19,6 @@ export type BatchPlan = {
 
 const MAX_TEXT = 200
 const EVENT_ID = /^[A-Za-z0-9_-]{1,64}$/
-/** BLL only lets regular accounts open events in this state (`abrirEvento`). */
-const LIVE_SITUATION = 3
 
 function cleanText(value: unknown) {
   return typeof value === 'string'
@@ -36,7 +35,8 @@ export function parseBllEvents(raw: unknown, toUrl: (id: string) => string | nul
     if (!row || typeof row !== 'object') continue
     const item = row as Record<string, unknown>
     const id = typeof item.id === 'string' ? item.id : ''
-    if (!EVENT_ID.test(id) || seen.has(id)) continue
+    // Finished games are read only to close their panels; the batch never lists them.
+    if (!EVENT_ID.test(id) || seen.has(id) || item.situation === BLL_ENDED_SITUATION) continue
     const url = toUrl(id)
     if (!url) continue
     seen.add(id)
@@ -46,7 +46,8 @@ export function parseBllEvents(raw: unknown, toUrl: (id: string) => string | nul
       name: stripSoundMarkers(rawName) || 'Jogo sem nome',
       competition: cleanText(item.competition) || 'Outros',
       time: cleanText(item.time).slice(0, 5),
-      live: item.situation === LIVE_SITUATION,
+      // BLL only lets regular accounts open live events (`abrirEvento`).
+      live: item.situation === BLL_LIVE_SITUATION,
       url,
       ...(sportOfBllName(rawName) === 'basketball' ? { basketball: true } : {}),
     })

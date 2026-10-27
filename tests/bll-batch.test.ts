@@ -126,6 +126,11 @@ test('parseBllEvents marca live apenas quando situation é 3', () => {
   assert.deepEqual(events.map((event) => event.live), [true, false, false, false])
 })
 
+test('parseBllEvents deixa de fora os jogos encerrados (situation 4)', () => {
+  const events = parseBllEvents([{ id: 'v', name: 'Ao vivo', situation: 3 }, { id: 'e', name: 'Encerrado', situation: 4 }], toUrl)
+  assert.deepEqual(events.map((event) => event.id), ['v'])
+})
+
 test('parseBllEvents monta o url a partir do id', () => {
   const [event] = parseBllEvents([{ id: 'abc123', name: 'Jogo' }], toUrl)
   assert.equal(event.url, 'https://bll.example/evento/abc123')

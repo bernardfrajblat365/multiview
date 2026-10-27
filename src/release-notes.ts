@@ -9,6 +9,7 @@ export const RELEASES: readonly Release[] = [
     version: '1.1.6',
     label: '1.1.6',
     notes: [
+      { title: 'Fecha qualquer jogo da BLL', body: 'Quando a BLL marca o jogo como encerrado, o painel fecha sozinho: basquete, tênis e futebol sem radar.' },
       { title: 'Placar do basquete', body: 'Jogos 🏀 da BLL (NBA, Euroliga) mostram times, escudos e placar ao vivo. Ainda sem alertas.' },
       { title: '🏀 na lista da BLL', body: 'Em "Abrir vários jogos da BLL", os jogos de basquete aparecem com 🏀.' },
       { title: 'Placar do basquete discreto', body: 'O placar não acende a cada cesta: só os números rolam.' },

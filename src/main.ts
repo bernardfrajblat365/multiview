@@ -126,8 +126,10 @@ const panelDelayOverride = new Map<PanelId, number>()
 /** Alerts of 365Scores-linked panels waiting for the video to catch up with the data. */
 const pendingAlerts = new Map<PanelId, Set<number>>()
 
-/** Panels whose match the William Hill feed reported over, counting down to close; "Manter aberto" cancels. */
+/** Panels whose match a source (William Hill, 365Scores or the BLL list) reported over, counting down to close; "Manter aberto" cancels. */
 const finishedPanels = new Map<PanelId, { showAt: number; closeAt: number }>()
+/** "Manter aberto" holds for the rest of the match: a later end notice from another source doesn't count down again. */
+const keptFinishedPanels = new Set<PanelId>()
 let finishedTimer: number | null = null
 /** A panel can't close while the user is organizing, dragging or answering a dialog; it tries again after this. */
 const FINISHED_RETRY_MS = 5000
@@ -142,6 +144,7 @@ function clearPanelMatchState(id: PanelId) {
   panelDelayOverride.delete(id)
   clearPendingAlerts(id)
   finishedPanels.delete(id)
+  keptFinishedPanels.delete(id)
   panelTitles.delete(id)
   panelVideoRects.delete(id)
   dismissedMatchLabels.delete(id)
@@ -154,6 +157,7 @@ function clearPanelMatchState(id: PanelId) {
 function clearAllPanelMatchState() {
   for (const id of [...pendingAlerts.keys()]) clearPendingAlerts(id)
   finishedPanels.clear()
+  keptFinishedPanels.clear()
   panelLive.clear()
   panelDelayOverride.clear()
   panelTitles.clear()
@@ -575,7 +579,7 @@ function tickFinished() {
 
 function onMatchEnded(id: PanelId) {
   const { closeFinishedSec, scoreDelaySec } = getAlertSettings()
-  if (closeFinishedSec === null || !panelById(id)?.url || finishedPanels.has(id)) return
+  if (closeFinishedSec === null || !panelById(id)?.url || finishedPanels.has(id) || keptFinishedPanels.has(id)) return
   // 365Scores-linked panels wait their own delay (the video trails the data), William Hill ones the score delay.
   const showAt = Date.now() + (isLiveLinked(id) ? panelAlertDelayMs(id) : (scoreDelaySec ?? 0) * 1000)
   finishedPanels.set(id, { showAt, closeAt: showAt + closeFinishedSec * 1000 })
@@ -585,6 +589,7 @@ function onMatchEnded(id: PanelId) {
 
 function keepFinishedPanel(id: PanelId) {
   finishedPanels.delete(id)
+  keptFinishedPanels.add(id)
   updateFinishedControls()
 }
 

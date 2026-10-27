@@ -92,9 +92,14 @@ async function run() {
   const crestRequests = []
   let basketballListRequests = 0
   let basketballDetailRequests = 0
+  let bllEndOpened = false
+  let bllEndListLoads = 0
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
     if (request.url?.startsWith('/bll/')) {
+      // Once its player opens, "game-bllend" is listed live on the next home load, then under "Encerrados".
+      const bllEnd = bllEndOpened ? (bllEndListLoads++ === 0 ? 3 : 4) : 0
+      const bllEndRow = `{ _id: 'game-bllend', nome: 'Time X x Time Y', competicao: 'Brasil, Liga Final', situacao: ${bllEnd}, dataHora: 16, dataMinuto: 0 }`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(`<!doctype html><title>BLL Test Catalog</title>
         <button id="game-a" onclick="window.open('/view/game-a?canal=2&title=' + encodeURIComponent('Time A x Time B'), 'game-a')">Jogo A</button>
@@ -109,7 +114,9 @@ async function run() {
               { _id: 'game-d', nome: 'Time G x Time H', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
               { _id: 'game-e', nome: '🏀 Time I x Time J', competicao: 'Brasil, Outra Liga', situacao: 3, dataHora: 18, dataMinuto: 30 },
               { _id: 'game-f', nome: 'Time K x Time L', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 1, dataHora: 21, dataMinuto: 0 },
+              ${bllEnd === 3 ? bllEndRow : ''}
             ],
+            itensEncerrados: [${bllEnd === 4 ? bllEndRow : ''}],
             formatarHora: (item) => String(item.dataHora).padStart(2, '0') + ':' + String(item.dataMinuto).padStart(2, '0'),
           }
           document.querySelector('#app').__vue__ = { $options: { name: 'App' }, $children: [list] }
@@ -233,6 +240,7 @@ async function run() {
       return
     }
     if (request.url?.startsWith('/view/')) {
+      if (request.url.startsWith('/view/game-bllend')) bllEndOpened = true
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(createSportsPlayerFixture(new URL(request.url, `http://${request.headers.host}`)))
       return
@@ -254,7 +262,7 @@ async function run() {
     env: {
       ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl, QUADRA_365SCORES_IMAGE_URL: baseUrl,
       QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
-      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`,
+      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`, QUADRA_BLL_END_POLL_MS: '1500',
     },
   })
   try {
@@ -780,7 +788,17 @@ async function run() {
     assert.ok(basketballDetailRequests >= 4, 'O jogo de basquete precisa ter sido consultado até acabar.')
     await wait(1500)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelectorAll('.panel').length`), 2, 'O painel de basquete não fecha no fim do jogo.')
-    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    // Any BLL game closes once the BLL list moves it from "Ao Vivo" to "Encerrado" (no William Hill or 365Scores needed).
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-add-panel').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 3`)
+    await openFinishingMatch(2, 0, `bllend?evento=${encodeURIComponent('Time X x Time Y')}`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 2`, 30000).catch((error) => {
+      throw new Error(`${error.message}; leituras da lista da BLL depois de abrir o jogo: ${bllEndListLoads}`)
+    })
+    assert.ok(bllEndListLoads >= 2, 'A lista da BLL precisa ter mostrado o jogo ao vivo e depois encerrado.')
+    assert.ok(!(await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel input[name="url"]')].some((input) => input.value.includes('game-bllend'))`)), 'Só o painel do jogo encerrado na BLL deve fechar.')
+    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

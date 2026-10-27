@@ -3,6 +3,7 @@ import electronUpdater from 'electron-updater'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
 import { parseBllEvents, type BllEventsResult } from '../src/bll-batch'
+import { bllEventIdOf, createBllEndTracker, parseBllSituations, type BllPanelGame } from '../src/bll-end'
 import type { Bounds, LayoutPayload, PanelPayload } from '../src/layout'
 import { alertLabel, extractWilliamHillId } from '../src/match-events'
 import { sportOfBllName } from '../src/livescore-365'
@@ -251,7 +252,7 @@ const detectMatchScript = `(() => {
   if (!evento) return null
   return { id: evento.williamHillId == null ? null : String(evento.williamHillId), nome: String(evento.nome || '') }
 })()`
-/** Read-only: copies id, name, competition, time and status of each listed game from the BLL home list. */
+/** Read-only: copies id, name, competition, time and status of each listed game from the BLL home list, finished ones (`itensEncerrados`) included. */
 const listEventsScript = `(() => {
   const root = document.querySelector('#app')
   const find = (vm) => {
@@ -265,7 +266,7 @@ const listEventsScript = `(() => {
   const time = (item) => {
     try { return typeof vm.formatarHora === 'function' ? String(vm.formatarHora(item)) : '' } catch { return '' }
   }
-  return vm.itens.map((item) => ({
+  return vm.itens.concat(Array.isArray(vm.itensEncerrados) ? vm.itensEncerrados : []).map((item) => ({
     id: String(item._id || ''),
     name: String(item.nome || ''),
     competition: String(item.competicao || ''),
@@ -549,7 +550,11 @@ const BLL_LIST_POLL_MS = 400
 const BLL_LIST_IDLE_MS = 90000
 let bllListWindow: BrowserWindow | null = null
 let bllListIdleTimer: NodeJS.Timeout | null = null
-let bllListPending: Promise<BllEventsResult> | null = null
+let bllListPending: Promise<unknown[] | null> | null = null
+/** While a BLL player is open, the list is read this often to spot games the BLL marks "Encerrado". */
+const BLL_END_POLL_MS = Number(process.env.QUADRA_BLL_END_POLL_MS) || 60000
+const bllEnds = createBllEndTracker()
+let bllEndTimer: NodeJS.Timeout | null = null
 
 function closeBllListWindow() {
   if (bllListIdleTimer) clearTimeout(bllListIdleTimer)
@@ -597,20 +602,60 @@ async function readBllListRows(contents: Electron.WebContents) {
   return Array.isArray(rows) ? rows : null
 }
 
-async function loadBllsportEvents(): Promise<BllEventsResult> {
-  const catalog = getSportsCatalog('bllsport')
+async function loadBllListRows() {
   const listWindow = getBllListWindow()
   if (bllListIdleTimer) clearTimeout(bllListIdleTimer)
-  await listWindow.loadURL(catalog.homeUrl).catch(() => {})
+  await listWindow.loadURL(getSportsCatalog('bllsport').homeUrl).catch(() => {})
   const raw = await readBllListRows(listWindow.webContents)
   bllListIdleTimer = setTimeout(closeBllListWindow, BLL_LIST_IDLE_MS)
-  if (!Array.isArray(raw)) return { status: 'unavailable' }
+  if (raw) checkBllEnds(raw)
+  return raw
+}
+
+/** One read of the BLL home list at a time, shared by the batch dialog and the end watch. */
+function readBllList() {
+  bllListPending ??= loadBllListRows().finally(() => { bllListPending = null })
+  return bllListPending
+}
+
+async function listBllsportEvents(): Promise<BllEventsResult> {
+  const catalog = getSportsCatalog('bllsport')
+  const raw = await readBllList()
+  if (!raw) return { status: 'unavailable' }
   return { status: 'ok', events: parseBllEvents(raw, (id) => normalizeSportsPlayerUrl(catalog, `/view/${encodeURIComponent(id)}`)) }
 }
 
-function listBllsportEvents() {
-  bllListPending ??= loadBllsportEvents().finally(() => { bllListPending = null })
-  return bllListPending
+function bllPanelGames(): BllPanelGame[] {
+  const homeUrl = getSportsCatalog('bllsport').homeUrl
+  const games: BllPanelGame[] = []
+  for (const [panelId, state] of slotViews) {
+    const eventId = bllEventIdOf(state.url, homeUrl)
+    if (eventId) games.push({ panelId, eventId })
+  }
+  return games
+}
+
+/** Panels whose game the BLL moved from "Ao Vivo" to "Encerrado" get the same end notice as William Hill and 365Scores. */
+function checkBllEnds(raw: unknown[]) {
+  const ended = bllEnds.update(bllPanelGames(), parseBllSituations(raw))
+  for (const panelId of ended) logScanner(`[${panelId}] BLL marcou o jogo como encerrado`)
+  if (ended.length > 0) sendMatchEnded({ panelIds: ended })
+}
+
+function stopBllEndWatch() {
+  if (bllEndTimer) clearInterval(bllEndTimer)
+  bllEndTimer = null
+}
+
+/** Watches the BLL list only while some panel plays a BLL game; the first read happens right away so the game is seen live. */
+function syncBllEndWatch() {
+  if (bllPanelGames().length === 0) {
+    stopBllEndWatch()
+    return
+  }
+  if (bllEndTimer) return
+  bllEndTimer = setInterval(() => { void readBllList() }, BLL_END_POLL_MS)
+  void readBllList()
 }
 
 function sanitizePanelTitle(title: string) {
@@ -960,6 +1005,7 @@ function closeOwnedWindows() {
   liveScores.destroyAll()
   teamCrests.reset()
   for (const id of [...matchDetections.keys()]) stopMatchDetection(id)
+  stopBllEndWatch()
   if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
   destroyAllSlotViews()
   closeBllListWindow()
@@ -1054,6 +1100,7 @@ function applyLayout(payload: LayoutPayload) {
   }
   if (payload.view === 'choose') {
     destroyAllSlotViews()
+    syncBllEndWatch()
     raiseOverlay()
     return
   }
@@ -1087,6 +1134,7 @@ function applyLayout(payload: LayoutPayload) {
   for (const id of [...slotViews.keys()]) {
     if (!visibleSlots.has(id)) destroySlotView(id)
   }
+  syncBllEndWatch()
   raiseOverlay()
 }
 

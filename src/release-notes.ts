@@ -6,125 +6,67 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.6',
+    label: '1.1.6',
+    notes: [
+      { title: 'Placar do basquete', body: 'Jogos 🏀 da BLL (NBA, Euroliga) mostram times, escudos e placar ao vivo. Ainda sem alertas.' },
+      { title: '🏀 na lista da BLL', body: 'Em "Abrir vários jogos da BLL", os jogos de basquete aparecem com 🏀.' },
+      { title: 'Placar do basquete discreto', body: 'O placar não acende a cada cesta: só os números rolam.' },
+      { title: 'Som próprio para o gol', body: 'Escolha um "Som do gol" e um "Som dos outros alertas".' },
+      { title: '× só com o mouse em cima', body: 'O × que esconde o nome dos times só aparece com o mouse sobre os nomes.' },
+    ],
+  },
+  {
     version: '1.1.5',
     label: '1.1.5',
     notes: [
-      {
-        title: 'Escudos dos times no placar',
-        body: 'O nome do jogo no painel agora mostra o escudo de cada time ao lado do nome, nos jogos da BLL e nas lives do YouTube. O nome e o placar aparecem na hora, como antes, e os escudos entram logo em seguida, em geral em menos de um segundo. Se o time não tiver escudo ou o jogo não for encontrado, o rótulo fica só com os nomes.',
-      },
-      {
-        title: 'Jogos da BLL separados por liga',
-        body: 'Em "Abrir vários jogos da BLL", os jogos agora aparecem juntos por liga, em ordem alfabética: todos os jogos de uma liga (com todos os grupos e fases dela), depois os da próxima, e assim por diante. Dentro de cada liga eles seguem pelo horário, e o grupo ou a fase aparece ao lado do nome do jogo.',
-      },
-      {
-        title: 'Novos sons de gol',
-        body: 'Três sons novos para o alerta de gol, escolhidos no seletor de som: Galvão Bueno, Gol torcida e Fox Sports.',
-      },
-      {
-        title: 'Painel fecha sozinho quando o jogo acaba',
-        body: 'Nos jogos com placar ao vivo (BLL e lives do YouTube ligadas ao 365Scores), quando o jogo termina o painel mostra "Fim de jogo · fecha em…" e fecha sozinho depois de 1 minuto, abrindo espaço para as outras telas. O botão "Manter aberto" cancela. Em "Fechar o painel quando o jogo acabar" (tela inicial ou menu ⋯) dá para escolher na hora, 30 segundos, 1, 2 ou 5 minutos, ou não fechar. Desfazer traz o painel de volta.',
-      },
-      {
-        title: 'Som do alerta com todas as telas mudas',
-        body: 'Em alguns fones e caixas de som (Bluetooth, HDMI, USB), o som do alerta de gol não tocava quando todas as telas estavam sem som, porque a saída de áudio "dormia". Agora a saída fica pronta enquanto houver jogo aberto, e o alerta toca mesmo com tudo mudo.',
-      },
+      { title: 'Escudos dos times', body: 'O nome do jogo no painel mostra o escudo de cada time.' },
+      { title: 'BLL separada por liga', body: 'Em "Abrir vários jogos da BLL", os jogos ficam juntos por liga, em ordem alfabética.' },
+      { title: 'Novos sons de gol', body: 'Galvão Bueno, Gol torcida e Fox Sports.' },
+      { title: 'Painel fecha no fim do jogo', body: 'Quando o jogo acaba, o painel fecha sozinho (padrão 1 min). "Manter aberto" cancela; o tempo é ajustável.' },
+      { title: 'Alerta com tudo mudo', body: 'O som do alerta toca mesmo com todas as telas sem som.' },
     ],
   },
   {
     version: '1.1.3',
     label: '1.1.3',
     notes: [
-      {
-        title: 'Jogos do YouTube sem configurar nada',
-        body: 'O botão "Abrir jogos ao vivo do YouTube" agora funciona logo depois de instalar: o Quadra já vem com a chave da API do YouTube, então não precisa mais criar uma chave nem mexer no arquivo .env.',
-      },
+      { title: 'YouTube sem configurar nada', body: 'O botão de jogos ao vivo do YouTube funciona logo após instalar, sem chave própria.' },
     ],
   },
   {
     version: '1.1.2',
     label: '1.1.2',
     notes: [
-      {
-        title: 'Escolha quanto tempo o gol fica em destaque',
-        body: 'Ao lado de "Destacar o jogo do gol", na tela inicial ou no menu ⋯, dá para escolher por quanto tempo o painel do gol fica grande: de 15 segundos a 3 minutos (o padrão continua 45 segundos). A escolha fica salva para as próximas vezes.',
-      },
+      { title: 'Tempo do destaque do gol', body: 'Escolha por quanto tempo o gol fica em destaque: de 15 s a 3 min (padrão 45 s).' },
     ],
   },
   {
     version: '1.1.1',
     label: '1.1.1',
     notes: [
-      {
-        title: 'Jogos do YouTube pelos canais oficiais',
-        body: 'A lista de jogos ao vivo do YouTube agora procura só nos canais que transmitem os jogos com imagens (CazéTV, ge tv, ESPN Brasil, Canal GOAT e outros), então param de aparecer canais não oficiais e entram as lives grandes que antes ficavam de fora. No botão Canais… você adiciona um canal pelo @ ou pelo link, ou remove os que não quer.',
-      },
-      {
-        title: 'Recarregar um painel',
-        body: 'O botão de recarregar (seta verde), entre o lápis de editar o link e a lixeira, recarrega só a página daquele painel, sem mexer nos outros.',
-      },
-      {
-        title: 'Desligar os alertas de um painel',
-        body: 'O botão do sino, logo à esquerda da lixeira, desliga todos os alertas daquele painel (som, aviso na tela e destaque do gol) sem mexer nos outros. Clique de novo para religar.',
-      },
-      {
-        title: 'Nome do jogo na base do vídeo',
-        body: 'Quando o vídeo tem faixas pretas só dos lados (por exemplo, um jogo em destaque), o nome dos times aparece numa legenda na parte de baixo do vídeo, e não mais empilhado numa das faixas. A legenda cresce junto com o painel, então o jogo em destaque fica com o nome maior e dá para ler de longe.',
-      },
-      {
-        title: 'Alertas também nos jogos da BLL sem lances',
-        body: 'Quando um jogo da BLL não tem o placar ao vivo da William Hill, o Quadra procura o mesmo jogo no 365Scores, como já faz nas lives do YouTube. Os alertas de gol, pênalti, cartão e VAR voltam a funcionar nesses jogos, e o botão ⏱ do painel ajusta o atraso. Se o Quadra não tiver certeza do jogo, o painel pergunta qual é.',
-      },
-      {
-        title: 'Jogos encontrados no 365Scores com mais precisão',
-        body: 'Em dias cheios o Quadra deixava de encontrar parte dos jogos no 365Scores, inclusive do Brasileirão. Agora ele procura em todos os jogos do dia. Gols que o 365Scores mostra no placar antes de registrar o lance também alertam, e um mesmo gol ou cartão vermelho não alerta duas vezes.',
-      },
-      {
-        title: 'Histórico de novidades',
-        body: 'Esta janela agora mostra também o que mudou nas versões anteriores. Role para baixo para ver as novidades de cada versão.',
-      },
+      { title: 'YouTube pelos canais oficiais', body: 'A lista de lives vem só dos canais oficiais. "Canais…" adiciona ou remove canais.' },
+      { title: 'Recarregar um painel', body: 'A seta verde recarrega só aquele painel.' },
+      { title: 'Desligar alertas de um painel', body: 'O sino desliga os alertas daquele painel.' },
+      { title: 'Nome do jogo na base do vídeo', body: 'Com faixas pretas só dos lados, o nome vira legenda embaixo, maior no destaque.' },
+      { title: 'Alertas na BLL sem lances', body: 'Jogos da BLL sem William Hill usam o 365Scores para placar e alertas.' },
+      { title: '365Scores mais preciso', body: 'Encontra mais jogos e não repete o mesmo gol ou cartão.' },
+      { title: 'Histórico de novidades', body: 'Role para baixo para ver as versões anteriores.' },
     ],
   },
   {
     version: '1.1.0',
     label: '1.1',
     notes: [
-      {
-        title: 'Alertas de lances',
-        body: 'Nos jogos da BLL e nas lives do YouTube ligadas a um jogo, o Quadra toca um som e destaca o painel quando sai gol, pênalti, cartão vermelho, cartão amarelo ou decisão do VAR. Em "Alertar em" você escolhe quais lances avisam, e em "Som do alerta" escolhe entre 30 sons (clicar num som já toca uma amostra). As escolhas ficam salvas.',
-      },
-      {
-        title: 'Destaque automático do gol',
-        body: 'Com 3 telas ou mais, o jogo que teve gol cresce sozinho por 45 segundos e depois volta ao layout de antes. No painel destacado, "📌 Fixar" mantém o destaque e "↩ Voltar" desfaz na hora. Com muitas telas, um segundo painel cresce junto para o gol ficar bem visível. Dá para desligar em "Destacar o jogo do gol por 45 s".',
-      },
-      {
-        title: 'Nome do jogo e placar no painel',
-        body: 'Cada painel mostra o nome inteiro dos times e o placar: nas faixas pretas do vídeo quando existem, ou numa legenda na parte de baixo. Em "Placar no painel" você atrasa o placar (10 a 60 s) para não ver o gol antes de ele aparecer no vídeo, ou esconde o placar. O × no rótulo esconde só aquele painel.',
-      },
-      {
-        title: 'Abrir vários jogos da BLL de uma vez',
-        body: 'O botão "Abrir vários jogos da BLL", na tela inicial e no menu ⋯, lista os jogos ao vivo agrupados por campeonato, sem abrir o site. Marque os jogos e o Quadra cria uma tela para cada um (até 18). Os players agora abrem um de cada vez e são recarregados sozinhos se ficarem pretos.',
-      },
-      {
-        title: 'Lives de futebol do YouTube',
-        body: 'O botão "Abrir jogos ao vivo do YouTube" busca as transmissões de jogos que estão ao vivo agora e abre as que você marcar. Precisa de uma chave da YouTube Data API no arquivo .env do Quadra.',
-      },
-      {
-        title: 'YouTube só com o vídeo',
-        body: 'Nas lives e vídeos do YouTube, o painel mostra só o player, ocupando o espaço todo, sem chat nem a página em volta. Anúncios são pulados ou bloqueados quando possível.',
-      },
-      {
-        title: 'Placar e lances do 365Scores nas lives do YouTube',
-        body: 'Quando o título da live tem "Time A x Time B", o Quadra encontra o jogo no 365Scores e passa a mostrar placar e alertas desse painel. Se houver dúvida, o painel pergunta "Qual jogo é este?". Como a live costuma vir atrasada, o botão "⏱" no canto superior esquerdo do painel ajusta o atraso dos alertas (até 2 minutos) para não estragar a surpresa.',
-      },
-      {
-        title: 'Botão Voltar no canto',
-        body: 'O "← Voltar" saiu da barra de ferramentas e fica no canto superior esquerdo. Ele aparece quando você mexe o mouse ali e some sozinho depois de 2 segundos.',
-      },
-      {
-        title: 'Monitor de lances',
-        body: 'O botão "Monitor de lances" abre uma janela com o registro do que o Quadra está lendo de cada jogo. Ajuda a entender por que um alerta tocou ou não.',
-      },
+      { title: 'Alertas de lances', body: 'Som e destaque no painel em gol, pênalti, cartões e VAR. Escolha os lances e o som.' },
+      { title: 'Destaque automático do gol', body: 'Com 3+ telas, o jogo do gol cresce por 45 s. "Fixar" mantém, "Voltar" desfaz.' },
+      { title: 'Nome do jogo e placar', body: 'Cada painel mostra os times e o placar, com atraso opcional contra spoiler.' },
+      { title: 'Vários jogos da BLL de uma vez', body: 'Marque os jogos ao vivo e o Quadra abre uma tela para cada (até 18).' },
+      { title: 'Lives do YouTube', body: 'Busca os jogos ao vivo no YouTube e abre os que você marcar.' },
+      { title: 'YouTube só com o vídeo', body: 'Só o player, sem chat; anúncios pulados quando possível.' },
+      { title: '365Scores nas lives do YouTube', body: 'Placar e alertas pelo 365Scores; o botão ⏱ ajusta o atraso.' },
+      { title: 'Voltar no canto', body: 'O "← Voltar" fica no canto superior esquerdo e some sozinho.' },
+      { title: 'Monitor de lances', body: 'Mostra o que o Quadra está lendo de cada jogo.' },
     ],
   },
 ]

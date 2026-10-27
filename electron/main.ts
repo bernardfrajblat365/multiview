@@ -5,6 +5,7 @@ import { fileURLToPath } from 'node:url'
 import { parseBllEvents, type BllEventsResult } from '../src/bll-batch'
 import type { Bounds, LayoutPayload, PanelPayload } from '../src/layout'
 import { alertLabel, extractWilliamHillId } from '../src/match-events'
+import { sportOfBllName } from '../src/livescore-365'
 import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
@@ -740,8 +741,10 @@ function startMatchDetection(contents: Electron.WebContents, panelId: string) {
   const startFallback = (name: string) => {
     if (fallback || contents.isDestroyed()) return
     fallback = true
-    logScanner(`[${panelId}] jogo sem feed de lances (williamHillId ausente); buscando no 365Scores: ${name || contents.getURL()}`, '365')
-    liveScores.consider(panelId, contents.getURL(), name)
+    // Basketball games ("🏀 …") never have a William Hill feed; 365Scores gives them names, crests and score.
+    const sport = sportOfBllName(name)
+    logScanner(`[${panelId}] ${sport === 'basketball' ? 'jogo de basquete' : 'jogo sem feed de lances (williamHillId ausente)'}; buscando no 365Scores: ${name || contents.getURL()}`, '365')
+    liveScores.consider(panelId, contents.getURL(), name, sport)
   }
   const timer = setInterval(() => {
     attempts += 1

@@ -167,6 +167,21 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
   animation: label-score-pulse 0.7s ease-in-out 3;
 }
 @keyframes label-score-pulse { 50% { transform: scale(1.12); } }
+/* Basketball: a digit that changed rolls up through the numbers in between, like a roulette; colors stay put. */
+.panel__label-roll {
+  display: inline-block;
+  height: 1.3em;
+  overflow: hidden;
+  vertical-align: bottom;
+}
+.panel__label-roll-strip {
+  display: flex;
+  flex-direction: column;
+  transform: translateY(var(--roll-end));
+  animation: label-score-roll calc(0.35s + var(--roll-steps) * 0.12s) cubic-bezier(0.2, 0.7, 0.2, 1) both;
+}
+.panel__label-roll-digit { display: block; height: 1.3em; line-height: 1.3em; }
+@keyframes label-score-roll { from { transform: translateY(0); } }
 .panel__label-dismiss {
   pointer-events: auto;
   flex: 0 0 auto;
@@ -186,19 +201,23 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
   display: grid;
   place-items: center;
   cursor: pointer;
-  opacity: 0.55;
+  opacity: 0;
+  visibility: hidden;
+  transition: opacity 0.15s ease, visibility 0s linear 0.15s;
   text-shadow: none;
+}
+/* Only while the pointer is over the team names (or keyboard focus). */
+.panel__label.is-hovered .panel__label-dismiss,
+.panel__label-dismiss:focus-visible {
+  opacity: 0.9;
+  visibility: visible;
+  transition: opacity 0.15s ease;
 }
 .panel__label-dismiss:hover,
 .panel__label-dismiss:focus-visible {
   opacity: 1;
   background: rgba(0, 0, 0, 0.72);
   outline: 1px solid rgba(244, 255, 232, 0.55);
-}
-.panel:hover .panel__label-dismiss,
-.panel:focus-within .panel__label-dismiss,
-.grid-shell.is-toolbar-visible .panel__label-dismiss {
-  opacity: 0.9;
 }
 /* Two rows (one per team): names wrap instead of being cut. */
 .panel__label[data-layout="stacked"] .panel__label-chip {
@@ -222,6 +241,7 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 @media (prefers-reduced-motion: reduce) {
   .panel__label--flash .panel__label-score,
   .panel__label--flash .panel__label-goals,
+  .panel__label-roll-strip,
   .panel__label-crest--new { animation: none; }
 }
 .panel__controls { position: absolute; top: 0.45rem; left: 0.45rem; z-index: 22; display: flex; gap: 0.3rem; opacity: 0; pointer-events: none; transition: opacity 0.16s ease; }
@@ -513,6 +533,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .yt-channels__message { margin: 0; min-height: 1.2em; font-size: 0.86rem; }
 .yt-channels__restore { justify-self: start; }
 .bll-batch__time { min-width: 2.8rem; font-variant-numeric: tabular-nums; opacity: 0.8; }
+.bll-batch__sport { flex: none; line-height: 1; }
 
 @container (max-width: 420px) {
   .panel__bar input { flex: 1 1 100%; }

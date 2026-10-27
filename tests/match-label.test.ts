@@ -7,10 +7,22 @@ import {
   orientScore,
   parseScore,
   placeMatchLabel,
+  rollColumns,
   splitMatchTeams,
   teamsReversed,
   type NormRect,
 } from '../src/match-label.ts'
+
+test('rollColumns sobe cada dígito pelos números do meio, como roleta', () => {
+  assert.deepEqual(rollColumns(95, 97), [['9'], ['5', '6', '7']])
+  assert.deepEqual(rollColumns(98, 101), [['', '1'], ['9', '0'], ['8', '9', '0', '1']])
+  assert.deepEqual(rollColumns(7, 7), [['7']])
+})
+
+test('rollColumns só troca o dígito quando o placar diminui', () => {
+  assert.deepEqual(rollColumns(101, 99), [['1', ''], ['0', '9'], ['1', '9']])
+  assert.deepEqual(rollColumns(12, 10), [['1'], ['2', '0']])
+})
 
 test('extrai confronto puro do BLL e remove prefixos de canal/hora', () => {
   assert.equal(extractMatchLabel('Al Ettifaq x Al Ittihad'), 'Al Ettifaq x Al Ittihad')
@@ -24,6 +36,12 @@ test('remove emoji de som do título do confronto', () => {
   assert.equal(extractMatchLabel('(2) 🔊 Al Ettifaq x Al Ittihad'), 'Al Ettifaq x Al Ittihad')
   assert.equal(extractMatchLabel('Flamengo x Palmeiras 🔉'), 'Flamengo x Palmeiras')
   assert.equal(extractMatchLabel('📢 Real Madrid vs Barcelona | AO VIVO - YouTube'), 'Real Madrid x Barcelona')
+})
+
+test('remove o emoji de esporte que a BLL põe antes do nome', () => {
+  assert.equal(extractMatchLabel('🏀 Boston Celtics x Brooklyn Nets'), 'Boston Celtics x Brooklyn Nets')
+  assert.equal(extractMatchLabel('🏀 BC Dubai x Paris Basketball 🔊'), 'BC Dubai x Paris Basketball')
+  assert.equal(extractMatchLabel('⚽️ Santos x Pumas'), 'Santos x Pumas')
 })
 
 test('extrai confronto de títulos YouTube com vs, × e sufixos', () => {

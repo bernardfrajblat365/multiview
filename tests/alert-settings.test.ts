@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DEFAULT_ALERT_SETTINGS, parseAlertSettings } from '../src/alert-settings.ts'
 
-const SOUND_IDS = [DEFAULT_ALERT_SETTINGS.soundId]
+const SOUND_IDS = [DEFAULT_ALERT_SETTINGS.soundId, DEFAULT_ALERT_SETTINGS.goalSoundId, 'gongo', 'sirene']
 
 test('scoreDelaySec padrão é 0 quando não há configuração salva', () => {
   const settings = parseAlertSettings(null, SOUND_IDS)
@@ -45,4 +45,20 @@ test('closeFinishedSec nulo é mantido e significa não fechar', () => {
 test('closeFinishedSec inválido volta para 60', () => {
   assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: 45 }), SOUND_IDS).closeFinishedSec, 60)
   assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: '60' }), SOUND_IDS).closeFinishedSec, 60)
+})
+
+test('som do gol é separado do som dos outros alertas', () => {
+  assert.notEqual(DEFAULT_ALERT_SETTINGS.goalSoundId, DEFAULT_ALERT_SETTINGS.soundId)
+  const settings = parseAlertSettings(JSON.stringify({ soundId: 'sirene', goalSoundId: 'gongo' }), SOUND_IDS)
+  assert.equal(settings.soundId, 'sirene')
+  assert.equal(settings.goalSoundId, 'gongo')
+})
+
+test('preferência salva antes do som do gol usa o som escolhido também para o gol', () => {
+  assert.equal(parseAlertSettings(JSON.stringify({ soundId: 'sirene' }), SOUND_IDS).goalSoundId, 'sirene')
+})
+
+test('som do gol inválido volta para o padrão do gol', () => {
+  assert.equal(parseAlertSettings(JSON.stringify({ soundId: 'sirene', goalSoundId: 'inexistente' }), SOUND_IDS).goalSoundId, DEFAULT_ALERT_SETTINGS.goalSoundId)
+  assert.equal(parseAlertSettings(JSON.stringify({ goalSoundId: 'inexistente' }), SOUND_IDS).goalSoundId, DEFAULT_ALERT_SETTINGS.goalSoundId)
 })

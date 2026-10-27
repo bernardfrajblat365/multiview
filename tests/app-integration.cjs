@@ -90,6 +90,8 @@ async function run() {
   let detailRequests = 0
   let finishingDetailRequests = 0
   const crestRequests = []
+  let basketballListRequests = 0
+  let basketballDetailRequests = 0
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
     if (request.url?.startsWith('/bll/')) {
@@ -105,7 +107,7 @@ async function run() {
             itens: [
               { _id: 'game-c', nome: 'Time E x Time F 🔊', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
               { _id: 'game-d', nome: 'Time G x Time H', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 3, dataHora: 17, dataMinuto: 0 },
-              { _id: 'game-e', nome: 'Time I x Time J', competicao: 'Brasil, Outra Liga', situacao: 3, dataHora: 18, dataMinuto: 30 },
+              { _id: 'game-e', nome: '🏀 Time I x Time J', competicao: 'Brasil, Outra Liga', situacao: 3, dataHora: 18, dataMinuto: 30 },
               { _id: 'game-f', nome: 'Time K x Time L', competicao: 'Brasil, Liga Teste, Grupo A', situacao: 1, dataHora: 21, dataMinuto: 0 },
             ],
             formatarHora: (item) => String(item.dataHora).padStart(2, '0') + ':' + String(item.dataMinuto).padStart(2, '0'),
@@ -146,15 +148,35 @@ async function run() {
       return json({}, 404)
     }
     if (request.url?.startsWith('/image/upload/')) {
-      // 365Scores crests: Coritiba (1) and Avaí (2) have one; any other team answers 404, like the CDN without a default image.
+      // 365Scores crests: Coritiba (1), Avaí (2), Celtics (5) and Nets (6) have one; any other team answers 404, like the CDN without a default image.
       crestRequests.push(request.url)
-      if (!/\/Competitors\/[12]$/.test(request.url)) {
+      if (!/\/Competitors\/[1256]$/.test(request.url)) {
         response.writeHead(404)
         response.end()
         return
       }
       response.writeHead(200, { 'content-type': 'image/png' })
       response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'))
+      return
+    }
+    if (request.url?.startsWith('/web/games/') && new URL(request.url, 'http://fixture').searchParams.get('sports') === '2') {
+      // Basketball list: a BLL "🏀" game is looked up here, never among the football games.
+      basketballListRequests += 1
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ games: [{
+        id: 9101, sportId: 2, statusGroup: 3, statusText: 'Q3', competitionDisplayName: 'NBA',
+        startTime: new Date().toISOString(), homeCompetitor: { id: 5, name: 'Boston Celtics', imageVersion: 6 }, awayCompetitor: { id: 6, name: 'Brooklyn Nets', imageVersion: 2 },
+      }] }))
+      return
+    }
+    if (request.url?.startsWith('/web/game/') && new URL(request.url, 'http://fixture').searchParams.get('gameId') === '9101') {
+      // Live for the first rounds (a three-pointer in the 3rd), then over: a basketball panel stays open (score only, no closing yet).
+      basketballDetailRequests += 1
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ game: {
+        id: 9101, statusGroup: basketballDetailRequests <= 3 ? 3 : 4, gameTime: 6,
+        homeCompetitor: { id: 5, name: 'Boston Celtics', score: basketballDetailRequests >= 3 ? 101 : 98, imageVersion: 6 }, awayCompetitor: { id: 6, name: 'Brooklyn Nets', score: 95, imageVersion: 2 },
+      } }))
       return
     }
     if (request.url?.startsWith('/web/games/')) {
@@ -279,6 +301,24 @@ async function run() {
     assert.equal(labelBeforeSwap.label, 'Time A x Time B')
     assert.ok(labelBeforeSwap.mode, 'O rótulo precisa ter um modo de posicionamento.')
     assert.equal(labelBeforeSwap.hasDismiss, true, 'O rótulo precisa ter um X para ocultar.')
+    const dismissHover = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const panel = document.querySelector('.panel[data-slot="0"]')
+      const chip = panel.querySelector('.panel__label-chip')
+      const dismiss = panel.querySelector('[data-dismiss-label]')
+      const visible = () => getComputedStyle(dismiss).visibility === 'visible'
+      const rect = chip.getBoundingClientRect()
+      const panelRect = panel.getBoundingClientRect()
+      const move = (x, y) => document.dispatchEvent(new MouseEvent('mousemove', { clientX: x, clientY: y, bubbles: true }))
+      const before = visible()
+      move(rect.left + rect.width / 2, rect.top + rect.height / 2)
+      const over = visible()
+      move(panelRect.left + 4, panelRect.top + panelRect.height / 2)
+      // Hiding fades out over 0.15 s, so the class tells whether it is leaving.
+      const away = panel.querySelector('.panel__label').classList.contains('is-hovered')
+      return { before, over, away }
+    })()`)
+    assert.deepEqual(dismissHover, { before: false, over: true, away: false },
+      'O X do rótulo só pode aparecer com o mouse sobre os nomes dos times.')
     assert.equal(firstBllPlayer.id, firstPlayerId, 'A chegada do título não pode recriar o WebContents do painel.')
 
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-dismiss-label]').click()`)
@@ -413,8 +453,8 @@ async function run() {
     })()`)
     assert.deepEqual(batchList.groups, [
       { title: 'Brasil, Liga Teste (2)', items: ['17:00 Time E x Time F Grupo A', '17:00 Time G x Time H Grupo A'] },
-      { title: 'Brasil, Outra Liga (1)', items: ['18:30 Time I x Time J'] },
-    ], 'O lote deve listar só jogos ao vivo, agrupados por liga (fase ao lado do jogo) e sem marcadores de som.')
+      { title: 'Brasil, Outra Liga (1)', items: ['18:30 🏀 Time I x Time J'] },
+    ], 'O lote deve listar só jogos ao vivo, agrupados por liga (fase ao lado do jogo), sem marcadores de som e com 🏀 nos jogos de basquete.')
     assert.equal(batchList.ok, 'Abrir 2 jogos')
     const playerIdsBeforeBatch = (await fetchJson(`http://127.0.0.1:${port}/json`))
       .filter((candidate) => candidate.url.includes('/view/game-b')).map((candidate) => candidate.id).sort()
@@ -712,7 +752,35 @@ async function run() {
     assert.ok(finishingDetailRequests >= 3, 'O jogo do 365Scores precisa ter sido consultado até acabar.')
     assert.equal(new URL(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel input[name="url"]').value`)).pathname, '/view/game-wh-7001',
       'Só o painel do jogo do 365Scores encerrado deve fechar.')
-    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    // A BLL basketball game ("🏀", no William Hill feed) gets the 365Scores names, crests and score; it does not close at the end.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-add-panel').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 2`)
+    await openFinishingMatch(1, 0, `basket?evento=${encodeURIComponent('🏀 Boston Celtics x Brooklyn Nets 🔊')}`)
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.score === '98 – 95'`, 20000).catch(async (error) => {
+      const label = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ ...document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset })`)
+      throw new Error(`${error.message}; rótulo: ${label}; listas de basquete pedidas: ${basketballListRequests}`)
+    })
+    await waitForExpression(target,
+      `document.querySelectorAll('.panel[data-slot="1"] .panel__label img.panel__label-crest[src^="data:image/png;base64,"]').length === 2`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__label').dataset.label`), 'Boston Celtics x Brooklyn Nets',
+      'O rótulo do jogo de basquete usa os nomes do 365Scores.')
+    assert.ok(crestRequests.some((url) => url.endsWith('/v6/Competitors/5')), 'O escudo do time de basquete vem do CDN do 365Scores.')
+    assert.ok((await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__delay')?.title ?? ''`)).includes('basquete'))
+    // A basket rolls the digits that changed (98 → 101) without lighting up the label.
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.score === '101 – 95'`, 20000)
+    const basketballRoll = JSON.parse(await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({
+      flash: document.querySelector('.panel[data-slot="1"] .panel__label').classList.contains('panel__label--flash'),
+      rolls: document.querySelectorAll('.panel[data-slot="1"] .panel__label-roll').length,
+    })`))
+    assert.equal(basketballRoll.flash, false, 'Cesta no basquete não acende o placar.')
+    assert.equal(basketballRoll.rolls, 3, 'Os três dígitos do 98 → 101 rolam como roleta.')
+    const basketballDeadline = Date.now() + 20000
+    while (Date.now() < basketballDeadline && basketballDetailRequests < 4) await wait(200)
+    assert.ok(basketballDetailRequests >= 4, 'O jogo de basquete precisa ter sido consultado até acabar.')
+    await wait(1500)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelectorAll('.panel').length`), 2, 'O painel de basquete não fecha no fim do jogo.')
+    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

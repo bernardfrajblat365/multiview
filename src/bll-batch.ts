@@ -1,6 +1,8 @@
+import { sportOfBllName } from './livescore-365.ts'
 import { stripSoundMarkers } from './match-label.ts'
 
-export type BllEvent ={ id: string; name: string; competition: string; time: string; live: boolean; url: string }
+/** `basketball`: the BLL name started with 🏀 (the emoji itself is stripped from `name`). */
+export type BllEvent = { id: string; name: string; competition: string; time: string; live: boolean; url: string; basketball?: boolean }
 export type BllEventGroup<T extends BllEvent = BllEvent> = { competition: string; events: T[] }
 export type BllEventsResult =
   | { status: 'ok'; events: BllEvent[] }
@@ -38,13 +40,15 @@ export function parseBllEvents(raw: unknown, toUrl: (id: string) => string | nul
     const url = toUrl(id)
     if (!url) continue
     seen.add(id)
+    const rawName = cleanText(item.name)
     events.push({
       id,
-      name: stripSoundMarkers(cleanText(item.name)) || 'Jogo sem nome',
+      name: stripSoundMarkers(rawName) || 'Jogo sem nome',
       competition: cleanText(item.competition) || 'Outros',
       time: cleanText(item.time).slice(0, 5),
       live: item.situation === LIVE_SITUATION,
       url,
+      ...(sportOfBllName(rawName) === 'basketball' ? { basketball: true } : {}),
     })
   }
   return events

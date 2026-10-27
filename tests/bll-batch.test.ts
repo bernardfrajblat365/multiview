@@ -82,6 +82,16 @@ test('parseBllEvents remove emojis de som do nome', () => {
   assert.equal(event.name, 'Flamengo x Vasco')
 })
 
+test('parseBllEvents marca basquete pelo emoji 🏀 e o tira do nome', () => {
+  const events = parseBllEvents([
+    { id: 'b1', name: '🏀 Boston Celtics x Brooklyn Nets 🔊' },
+    { id: 'b2', name: 'Sassuolo x Lazio' },
+    { id: 'b3', name: '🎾 ATP Vienna' },
+  ], toUrl)
+  assert.equal(events[0].name, 'Boston Celtics x Brooklyn Nets')
+  assert.deepEqual(events.map((event) => event.basketball ?? false), [true, false, false])
+})
+
 test('parseBllEvents usa "Jogo sem nome" quando o nome fica vazio', () => {
   const raw = [
     { id: 'e1', name: '' },

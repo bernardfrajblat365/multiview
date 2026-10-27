@@ -36,6 +36,7 @@ import {
   orientScore,
   parseScore,
   placeMatchLabel,
+  rollColumns,
   splitMatchTeams,
   teamsReversed,
   type MatchScore,
@@ -113,8 +114,8 @@ const panelFeeds = new Map<PanelId, { home: string; away: string; timeline: Scor
 type Crests = { home: string | null; away: string | null }
 /** Team crests (data URLs, in the feed's home/away order) from 365Scores; they arrive after the names and score. */
 const panelCrests = new Map<PanelId, Crests>()
-/** Last score shown per panel, to flash the label when it changes. */
-const shownScores = new Map<PanelId, string>()
+/** Last score shown per panel, to flash the label (or roll the numbers, in basketball) when it changes. */
+const shownScores = new Map<PanelId, MatchScore>()
 const scoreFlashUntil = new Map<PanelId, number>()
 const SCORE_FLASH_MS = 6000
 let labelRefreshTimer: number | null = null
@@ -242,6 +243,39 @@ function labelSpan(className: string, text: string) {
   return span
 }
 
+/** A score number; when it just changed, the digits that moved roll up from the old value like a roulette. */
+function scoreNumber(value: number, from: number | undefined) {
+  const span = document.createElement('span')
+  span.className = 'panel__label-number'
+  if (from === undefined || from === value) {
+    span.textContent = String(value)
+    return span
+  }
+  for (const column of rollColumns(from, value)) {
+    if (column.length === 1) {
+      span.append(column[0])
+      continue
+    }
+    const roll = document.createElement('span')
+    roll.className = 'panel__label-roll'
+    const strip = document.createElement('span')
+    strip.className = 'panel__label-roll-strip'
+    strip.style.setProperty('--roll-end', `${(-(column.length - 1) / column.length) * 100}%`)
+    strip.style.setProperty('--roll-steps', String(column.length - 1))
+    for (const digit of column) strip.append(labelSpan('panel__label-roll-digit', digit || ' '))
+    roll.append(strip)
+    span.append(roll)
+  }
+  return span
+}
+
+function scoreLabel(score: MatchScore, from: MatchScore | null) {
+  const span = document.createElement('span')
+  span.className = 'panel__label-score'
+  span.append(scoreNumber(score.home, from?.home), ' – ', scoreNumber(score.away, from?.away))
+  return span
+}
+
 function ensureMatchLabelDismiss(labelElement: HTMLElement, panelId: PanelId) {
   let dismiss = labelElement.querySelector<HTMLButtonElement>('.panel__label-dismiss')
   if (dismiss) return dismiss
@@ -285,8 +319,12 @@ function updatePanelLabels() {
     }
     const scoreText = match.score ? formatScore(match.score) : ''
     const previousScore = shownScores.get(id)
-    if (scoreText && previousScore && previousScore !== scoreText) scoreFlashUntil.set(id, now + SCORE_FLASH_MS)
-    if (scoreText) shownScores.set(id, scoreText)
+    const scoreChanged = Boolean(match.score && previousScore && formatScore(previousScore) !== scoreText)
+    // Basketball scores all the time: the numbers only roll, without lighting up the label.
+    const basketball = panelLive.get(id)?.sport === 'basketball'
+    if (scoreChanged && !basketball) scoreFlashUntil.set(id, now + SCORE_FLASH_MS)
+    if (match.score) shownScores.set(id, match.score)
+    const rollFrom = scoreChanged && basketball ? previousScore ?? null : null
     const flashUntil = scoreFlashUntil.get(id) ?? 0
     if (flashUntil && flashUntil <= now) scoreFlashUntil.delete(id)
     const flashing = flashUntil > now
@@ -334,17 +372,26 @@ function updatePanelLabels() {
       if (homeCrest) chip.append(homeCrest)
       chip.append(
         labelSpan('panel__label-team', match.home),
-        labelSpan(match.score ? 'panel__label-score' : 'panel__label-vs', match.score ? scoreText : 'x'),
+        match.score ? scoreLabel(match.score, rollFrom) : labelSpan('panel__label-vs', 'x'),
         labelSpan('panel__label-team', match.away),
       )
       if (awayCrest) chip.append(awayCrest)
     } else {
-      for (const [team, goals, crest] of [[match.home, match.score?.home, homeCrest], [match.away, match.score?.away, awayCrest]] as const) {
+      const rows = [
+        [match.home, match.score?.home, rollFrom?.home, homeCrest],
+        [match.away, match.score?.away, rollFrom?.away, awayCrest],
+      ] as const
+      for (const [team, goals, goalsFrom, crest] of rows) {
         const row = document.createElement('div')
         row.className = 'panel__label-row'
         if (crest) row.append(crest)
         row.append(labelSpan('panel__label-team', team))
-        if (goals !== undefined) row.append(labelSpan('panel__label-goals', String(goals)))
+        if (goals !== undefined) {
+          const cell = document.createElement('span')
+          cell.className = 'panel__label-goals'
+          cell.append(scoreNumber(goals, goalsFrom))
+          row.append(cell)
+        }
         chip.append(row)
       }
     }
@@ -590,7 +637,7 @@ function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: Liv
     return
   }
   const own = panelDelayOverride.get(id)
-  const key = `${live.label}|${live.coverage}|${own ?? 'default'}|${globalSec}`
+  const key = `${live.label}|${live.coverage}|${live.sport}|${own ?? 'default'}|${globalSec}`
   if (button?.dataset.key === key) return
   if (!button) {
     button = document.createElement('label')
@@ -600,7 +647,7 @@ function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: Liv
   button.dataset.key = key
   const effective = own ?? globalSec ?? 0
   const defaultLabel = globalSec === null ? 'Padrão (placar oculto, alertas na hora)' : `Padrão (${liveDelayLabel(globalSec)})`
-  const coverage = live.coverage === 'score' ? ' · só placar' : ''
+  const coverage = live.sport === 'basketball' ? ' · basquete, só placar' : live.coverage === 'score' ? ' · só placar' : ''
   button.title = `Atraso do placar e dos alertas deste painel — 365Scores: ${live.label ?? ''}${coverage}`
   button.classList.toggle('is-custom', own !== undefined)
   button.innerHTML = `<svg class="panel__delay-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9" r="5.5" /><path d="M8 6.2V9l1.8 1.3M6.3 1.8h3.4" /></svg><span class="panel__delay-value" aria-hidden="true">${effective} s</span><select data-live-delay aria-label="Atraso do placar e dos alertas deste painel">
@@ -1079,7 +1126,7 @@ function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean
     ${group.events.map((event) => {
       const isOpen = open.has(event.url)
       return `<label class="bll-batch__item${isOpen ? ' is-open' : ''}"><input type="checkbox" data-url="${escapeHtml(event.url)}" data-group-item="${groupIndex}"${isOpen ? ' checked disabled' : ''}>
-        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}<span>${escapeHtml(event.name)}</span>${event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
+        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}${event.basketball ? '<span class="bll-batch__sport" title="Basquete" aria-label="Basquete">🏀</span> ' : ''}<span>${escapeHtml(event.name)}</span>${event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
     }).join('')}
   </fieldset>`).join('')
 }
@@ -1812,14 +1859,25 @@ function cancelPanelDrag() {
   app.querySelector(`[data-panel-id="${CSS.escape(sourceId)}"]`)?.classList.remove('is-drag-source')
 }
 
+// The label ignores the mouse (clicks reach the video), so the × shows by
+// geometry: only while the pointer is over the team names.
+function updateLabelHover(x: number | null, y: number | null) {
+  for (const chip of app.querySelectorAll<HTMLElement>('.panel__label-chip')) {
+    const rect = chip.getBoundingClientRect()
+    const over = x !== null && y !== null && x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
+    chip.closest('.panel__label')?.classList.toggle('is-hovered', over)
+  }
+}
+
 function updateChromeHitTarget(x: number, y: number) {
   if (dragState) return
   if (view !== 'grid') {
     setChromeInteractive(true)
     return
   }
+  updateLabelHover(x, y)
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar, .back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm')))
+  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm')))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -1926,6 +1984,7 @@ function bindToolbar() {
     revealBack(event)
     updateChromeHitTarget(event.clientX, event.clientY)
   }, { signal, passive: true })
+  document.documentElement.addEventListener('mouseleave', () => updateLabelHover(null, null), { signal, passive: true })
   document.addEventListener('pointerdown', (event) => {
     updateChromeHitTarget(event.clientX, event.clientY)
     revealToolbar()

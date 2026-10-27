@@ -104,11 +104,14 @@ test('preferências: padrões, valores salvos e dados corrompidos', () => {
   assert.deepEqual(parseAlertSettings('{oops', ALERT_SOUND_IDS), DEFAULT_ALERT_SETTINGS)
   const saved = parseAlertSettings(JSON.stringify({ soundId: 'gongo', kinds: { yellow: true, goal: false } }), ALERT_SOUND_IDS)
   assert.equal(saved.soundId, 'gongo')
+  assert.equal(saved.goalSoundId, 'gongo', 'preferência antiga (um só som) vale também para o gol')
   assert.equal(saved.kinds.yellow, true)
   assert.equal(saved.kinds.goal, false)
   assert.equal(saved.kinds.red, true)
   assert.equal(parseAlertSettings(JSON.stringify({ soundId: 'inexistente' }), ALERT_SOUND_IDS).soundId, DEFAULT_ALERT_SETTINGS.soundId)
   assert.equal(DEFAULT_ALERT_SETTINGS.kinds.yellow, false)
+  assert.ok(ALERT_SOUND_IDS.includes(DEFAULT_ALERT_SETTINGS.soundId))
+  assert.ok(ALERT_SOUND_IDS.includes(DEFAULT_ALERT_SETTINGS.goalSoundId))
 })
 
 test('mesmo id repetido no mesmo lote alerta uma única vez', () => {
@@ -184,7 +187,7 @@ test('preferências: valores não booleanos, JSON null e chaves extras', () => {
     JSON.stringify({ soundId: 'gongo', volume: 11, kinds: { goal: false, extra: true } }),
     ALERT_SOUND_IDS,
   )
-  assert.deepEqual(extra, { soundId: 'gongo', kinds: { goal: false, penalty: true, red: true, yellow: false, var: true }, autoHighlight: true, autoHighlightSec: 45, scoreDelaySec: 0, closeFinishedSec: 60 })
+  assert.deepEqual(extra, { soundId: 'gongo', goalSoundId: 'gongo', kinds: { goal: false, penalty: true, red: true, yellow: false, var: true }, autoHighlight: true, autoHighlightSec: 45, scoreDelaySec: 0, closeFinishedSec: 60 })
 })
 
 test('detectMatchEnd avisa o fim uma vez quando a partida estava ao vivo', () => {

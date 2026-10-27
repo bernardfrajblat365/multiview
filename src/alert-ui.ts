@@ -52,15 +52,25 @@ function closeFinishedLabel(value: number | null) {
   return value === 0 ? 'Na hora' : `${durationLabel(value)} depois`
 }
 
-export function alertControlsHtml(idPrefix: string): string {
-  const current = getAlertSound(settings.soundId)
-  return `<div class="alert-controls" data-alert-controls>
-    <div class="sound-picker" data-sound-picker>
-      <button type="button" class="btn btn--ghost sound-picker__button" id="${idPrefix}-sound" aria-haspopup="listbox" aria-expanded="false" aria-controls="${idPrefix}-sound-list">Som do alerta: <strong data-sound-current>${escapeText(current.label)}</strong> ▾</button>
-      <ul class="sound-picker__list" id="${idPrefix}-sound-list" role="listbox" aria-label="Som do alerta" hidden>
-        ${ALERT_SOUNDS.map((sound, index) => `<li role="option" tabindex="-1" data-sound-id="${sound.id}" aria-selected="${sound.id === settings.soundId}"><span class="sound-picker__index">${index + 1}</span>${escapeText(sound.label)}</li>`).join('')}
+type SoundSetting = 'goalSoundId' | 'soundId'
+const SOUND_PICKERS: readonly { setting: SoundSetting; label: string; slug: string }[] = [
+  { setting: 'goalSoundId', label: 'Som do gol', slug: 'goal-sound' },
+  { setting: 'soundId', label: 'Som dos outros alertas', slug: 'sound' },
+]
+
+function soundPickerHtml(idPrefix: string, picker: (typeof SOUND_PICKERS)[number]) {
+  const selected = settings[picker.setting]
+  return `<div class="sound-picker" data-sound-picker="${picker.setting}">
+      <button type="button" class="btn btn--ghost sound-picker__button" id="${idPrefix}-${picker.slug}" aria-haspopup="listbox" aria-expanded="false" aria-controls="${idPrefix}-${picker.slug}-list">${picker.label}: <strong data-sound-current>${escapeText(getAlertSound(selected).label)}</strong> ▾</button>
+      <ul class="sound-picker__list" id="${idPrefix}-${picker.slug}-list" role="listbox" aria-label="${picker.label}" hidden>
+        ${ALERT_SOUNDS.map((sound, index) => `<li role="option" tabindex="-1" data-sound-id="${sound.id}" aria-selected="${sound.id === selected}"><span class="sound-picker__index">${index + 1}</span>${escapeText(sound.label)}</li>`).join('')}
       </ul>
-    </div>
+    </div>`
+}
+
+export function alertControlsHtml(idPrefix: string): string {
+  return `<div class="alert-controls" data-alert-controls>
+    ${SOUND_PICKERS.map((picker) => soundPickerHtml(idPrefix, picker)).join('')}
     <fieldset class="alert-kinds"><legend>Alertar em</legend>
       ${(Object.keys(KIND_NAME) as AlertKind[]).map((kind) => `<label><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_NAME[kind]}</label>`).join('')}
     </fieldset>
@@ -85,48 +95,60 @@ export function alertControlsHtml(idPrefix: string): string {
 
 export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
   for (const controls of root.querySelectorAll<HTMLElement>('[data-alert-controls]')) {
-    const button = controls.querySelector<HTMLButtonElement>('.sound-picker__button')
-    const list = controls.querySelector<HTMLElement>('.sound-picker__list')
-    const label = controls.querySelector<HTMLElement>('[data-sound-current]')
-    if (!button || !list || !label) continue
-    const setOpen = (open: boolean) => {
-      list.hidden = !open
-      button.setAttribute('aria-expanded', String(open))
-      if (open) list.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
-    }
-    const choose = (id: string) => {
-      settings = { ...settings, soundId: id }
-      saveAlertSettings(settings)
-      label.textContent = getAlertSound(id).label
-      for (const option of list.querySelectorAll<HTMLElement>('[data-sound-id]')) {
-        option.setAttribute('aria-selected', String(option.dataset.soundId === id))
+    for (const picker of controls.querySelectorAll<HTMLElement>('[data-sound-picker]')) {
+      const button = picker.querySelector<HTMLButtonElement>('.sound-picker__button')
+      const list = picker.querySelector<HTMLElement>('.sound-picker__list')
+      const label = picker.querySelector<HTMLElement>('[data-sound-current]')
+      if (!button || !list || !label) continue
+      const setting = picker.dataset.soundPicker as SoundSetting
+      const setOpen = (open: boolean) => {
+        list.hidden = !open
+        button.setAttribute('aria-expanded', String(open))
+        if (open) list.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
       }
-      playAlertSound(id, { force: true })
-    }
-    button.addEventListener('click', (event) => {
-      event.stopPropagation()
-      setOpen(list.hasAttribute('hidden'))
-    }, { signal })
-    list.addEventListener('click', (event) => {
-      event.stopPropagation()
-      const option = (event.target as HTMLElement).closest<HTMLElement>('[data-sound-id]')
-      if (option?.dataset.soundId) choose(option.dataset.soundId)
-    }, { signal })
-    list.addEventListener('keydown', (event) => {
-      const options = [...list.querySelectorAll<HTMLElement>('[data-sound-id]')]
-      const index = options.indexOf(document.activeElement as HTMLElement)
-      if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
-        event.preventDefault()
-        options[Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus()
-      } else if ((event.key === 'Enter' || event.key === ' ') && index >= 0) {
-        event.preventDefault()
-        choose(options[index].dataset.soundId!)
-      } else if (event.key === 'Escape') {
-        setOpen(false)
-        button.focus()
+      const choose = (id: string) => {
+        settings = { ...settings, [setting]: id }
+        saveAlertSettings(settings)
+        label.textContent = getAlertSound(id).label
+        for (const option of list.querySelectorAll<HTMLElement>('[data-sound-id]')) {
+          option.setAttribute('aria-selected', String(option.dataset.soundId === id))
+        }
+        playAlertSound(id, { force: true })
       }
-    }, { signal })
-    document.addEventListener('click', (event) => { if (!controls.contains(event.target as Node)) setOpen(false) }, { signal })
+      button.addEventListener('click', (event) => {
+        event.stopPropagation()
+        const open = list.hasAttribute('hidden')
+        // Only one list open at a time: the other picker never sees this click.
+        if (open) {
+          for (const other of controls.querySelectorAll<HTMLElement>('[data-sound-picker]')) {
+            if (other === picker) continue
+            other.querySelector<HTMLElement>('.sound-picker__list')?.toggleAttribute('hidden', true)
+            other.querySelector('.sound-picker__button')?.setAttribute('aria-expanded', 'false')
+          }
+        }
+        setOpen(open)
+      }, { signal })
+      list.addEventListener('click', (event) => {
+        event.stopPropagation()
+        const option = (event.target as HTMLElement).closest<HTMLElement>('[data-sound-id]')
+        if (option?.dataset.soundId) choose(option.dataset.soundId)
+      }, { signal })
+      list.addEventListener('keydown', (event) => {
+        const options = [...list.querySelectorAll<HTMLElement>('[data-sound-id]')]
+        const index = options.indexOf(document.activeElement as HTMLElement)
+        if (event.key === 'ArrowDown' || event.key === 'ArrowUp') {
+          event.preventDefault()
+          options[Math.max(0, Math.min(options.length - 1, index + (event.key === 'ArrowDown' ? 1 : -1)))]?.focus()
+        } else if ((event.key === 'Enter' || event.key === ' ') && index >= 0) {
+          event.preventDefault()
+          choose(options[index].dataset.soundId!)
+        } else if (event.key === 'Escape') {
+          setOpen(false)
+          button.focus()
+        }
+      }, { signal })
+      document.addEventListener('click', (event) => { if (!picker.contains(event.target as Node)) setOpen(false) }, { signal })
+    }
     for (const box of controls.querySelectorAll<HTMLInputElement>('[data-alert-kind]')) {
       box.addEventListener('change', () => {
         settings = { ...settings, kinds: { ...settings.kinds, [box.dataset.alertKind as AlertKind]: box.checked } }
@@ -208,7 +230,7 @@ export function handleMatchEvent(payload: MatchEventPayload, root: ParentNode, p
     timer: setTimeout(() => clearAlert(payload.panelId, root), hold),
   })
   applyAlertStates(root)
-  playAlertSound(settings.soundId)
+  playAlertSound(payload.kind === 'goal' ? settings.goalSoundId : settings.soundId)
   for (const listener of listeners) listener(payload.panelId, payload)
   return true
 }

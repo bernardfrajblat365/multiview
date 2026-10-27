@@ -9,6 +9,13 @@ mock.method(childProcess, 'spawnSync', (_python, args, options) => {
   assert.equal(options.env.EVS_ANY_SKI, undefined)
   assert.equal(options.env.EVS_INTERMEDIATE, undefined)
   if (mode === 'failed') return { status: 1, stdout: '' }
+  if (mode === 'auth') {
+    return {
+      status: 1,
+      stdout: 'Signing package...\n',
+      stderr: 'ERROR: Authentication failed for dev@example.com\n{"refresh_token": "eyJhbGciOiJSUzI1NiJ9abcdefghijklmnopqrstuvwxyz0123"}\npassword=hunter2\nAuthorization: Bearer abc.def.ghi\n',
+    }
+  }
   return { status: 0, stdout: mode === 'dev' ? 'Certificate is valid for development only' : 'Signature is valid: streaming, 1391 days left' }
 })
 mock.method(fs, 'existsSync', () => mode !== 'missing')
@@ -19,5 +26,17 @@ try {
   assert.deepEqual(calls.map(args => args[3]), ['sign-pkg', 'verify-pkg'])
   assert(calls.every(args => args.includes('--streaming') && args.includes('--name-hint') && args.at(-1) === context.appOutDir))
   for (mode of ['failed', 'dev', 'missing']) assert.throws(() => hook(context), /release aborted/)
+  mode = 'auth'
+  assert.throws(() => hook(context), (error) => {
+    assert.match(error.message, /EVS sign-pkg failed \(exit 1\)/)
+    assert.match(error.message, /EVS output:\nSigning package\.\.\./)
+    assert.match(error.message, /ERROR: Authentication failed for \[email\]/)
+    for (const secret of ['dev@example.com', 'eyJhbGci', 'hunter2', 'abc.def.ghi']) {
+      assert(!error.message.includes(secret), `leaked ${secret}`)
+    }
+    return true
+  })
+  assert.equal(hook.evsDetail({ status: 1, stdout: '', stderr: '' }), '')
+  assert.equal(hook.evsDetail({ status: 1, stdout: Array.from({ length: 40 }, (_, i) => `line ${i}`).join('\n') }).split('\n').length, 25)
 } finally { mock.restoreAll() }
 console.log('EVS signing, verification and rejection checks passed.')

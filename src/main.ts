@@ -29,11 +29,11 @@ import {
   type CompetitionMode,
   type CompetitionRule,
 } from './auto-open'
-import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
+import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, onVarReviewStarted, setVarReview, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
-import type { LiveMatchStatus } from './livescore-365'
-import { AUTO_MIN_PANELS, composeHighlighted, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
+import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
+import { AUTO_MIN_PANELS, VAR_MAX_MS, composeHighlighted, endVarAuto, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
 import {
   buildLayoutTree,
   calculateLayout,
@@ -182,6 +182,7 @@ function clearPanelMatchState(id: PanelId) {
   panelLive.delete(id)
   panelDelayOverride.delete(id)
   clearPendingAlerts(id)
+  clearVarReview(id, app)
   finishedPanels.delete(id)
   keptFinishedPanels.delete(id)
   panelTitles.delete(id)
@@ -575,12 +576,15 @@ function updateAutoControls() {
       controls.className = 'panel__auto-controls'
       controls.innerHTML = '<span class="panel__auto-count" data-auto-count></span><button type="button" class="btn btn--load" data-auto-pin title="Manter este jogo em destaque">📌 Fixar</button><button type="button" class="btn btn--ghost" data-auto-back title="Voltar ao layout anterior agora">↩ Voltar</button>'
     }
-    // Inside the green goal badge (next to the score) while it shows; on its own at the top once it fades.
+    // Inside the green goal badge (next to the score) or the blue VAR badge while one shows; on its own at the top once it fades.
     const badge = panelElement.querySelector<HTMLElement>(':scope > .panel__alert > .panel__alert-badge')
+      ?? panelElement.querySelector<HTMLElement>(':scope > .panel__var > .panel__var-badge')
     const host = badge ?? panelElement
     if (controls.parentElement !== host) host.append(controls)
     const count = controls.querySelector<HTMLElement>('[data-auto-count]')
-    const text = badge ? `${secondsLeft(entry, now)} s` : `Gol! ${secondsLeft(entry, now)} s`
+    // A review in progress has no end time yet: no countdown.
+    const seconds = entry.reviewing ? '' : `${secondsLeft(entry, now)} s`
+    const text = badge ? seconds : `${entry.reason === 'var' ? 'VAR' : 'Gol!'} ${seconds}`.trim()
     if (count && count.textContent !== text) count.textContent = text
   }
 }
@@ -651,13 +655,14 @@ function tickAuto() {
   else updateAutoControls()
 }
 
-function startAutoGoal(panelId: PanelId) {
+/** `reason: 'var'`: a VAR review, highlighted until it ends (capped by `VAR_MAX_MS`). */
+function startAutoGoal(panelId: PanelId, reason?: 'var') {
   const alertSettings = getAlertSettings()
   if (view !== 'grid' || panels.length < AUTO_MIN_PANELS || !alertSettings.autoHighlight) return
   if (!autoBaseline) {
     autoBaseline = { highlighted: [...highlighted], mode: layoutMode, position: highlightPosition, variant: compositionVariant }
   }
-  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id), alertSettings.autoHighlightSec * 1000)
+  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id), reason ? VAR_MAX_MS : alertSettings.autoHighlightSec * 1000, reason)
   autoEntries = result.autos
   if (!result.highlighted) {
     if (autoEntries.length === 0) autoBaseline = null
@@ -735,6 +740,15 @@ function updateLiveControls() {
     prompt.innerHTML = `<span class="panel__live-title">Qual jogo é este? (365Scores)</span>${(live.candidates ?? []).map((candidate) =>
       `<button type="button" class="btn btn--load" data-live-choose="${candidate.id}" title="${escapeHtml(candidate.detail)}">${escapeHtml(candidate.label)}</button>`).join('')}<button type="button" class="btn btn--ghost" data-live-choose="none">Nenhum</button>`
   }
+}
+
+/** Shows or ends a VAR review now; its end leaves the highlight a few more seconds for the decision. */
+function deliverLiveVar(payload: LiveVarPayload) {
+  if (payload.review && (view !== 'grid' || panelById(payload.panelId)?.alertsOff)) return
+  if (setVarReview(payload.panelId, payload.review, app, (panelId) => Boolean(panelById(panelId)))) return
+  if (payload.review) return
+  autoEntries = endVarAuto(autoEntries, payload.panelId, Date.now())
+  updateAutoControls()
 }
 
 /** Shows an alert now; a goal the VAR cancelled also undoes that panel's goal highlight. */
@@ -1778,6 +1792,7 @@ function togglePanelAlerts(id: PanelId) {
   if (panel.alertsOff) {
     clearPendingAlerts(id)
     clearAlert(id, app)
+    clearVarReview(id, app)
     releaseAutoPanel(id)
   }
   syncAlertAudio()
@@ -2723,6 +2738,7 @@ onAlertSettingsChange(() => {
 onAlertShown((panelId, payload) => {
   if (payload.kind === 'goal' || payload.kind === 'touchdown') startAutoGoal(panelId)
 })
+onVarReviewStarted((panelId) => startAutoGoal(panelId, 'var'))
 window.quadra?.onMatchEvent((payload) => {
   if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
   // 365Scores-linked panels trail the data: hold the alert as long as the panel's score is held.
@@ -2739,6 +2755,22 @@ window.quadra?.onMatchEvent((payload) => {
   timers.add(timer)
   pendingAlerts.set(payload.panelId, timers)
 })
+window.quadra?.onLiveVar((payload) => {
+  if (!panelById(payload.panelId)) return
+  // Held as long as the panel's alerts, so the badge and the highlight show with the video, not before.
+  const delay = panelAlertDelayMs(payload.panelId)
+  if (delay <= 0) {
+    deliverLiveVar(payload)
+    return
+  }
+  const timers = pendingAlerts.get(payload.panelId) ?? new Set<number>()
+  const timer = window.setTimeout(() => {
+    timers.delete(timer)
+    deliverLiveVar(payload)
+  }, delay)
+  timers.add(timer)
+  pendingAlerts.set(payload.panelId, timers)
+})
 window.quadra?.onMatchEnded(({ panelId }) => onMatchEnded(panelId))
 window.quadra?.onLiveMatch((status) => {
   if (!panelById(status.panelId)) return
@@ -2746,6 +2778,7 @@ window.quadra?.onLiveMatch((status) => {
     panelLive.delete(status.panelId)
     panelDelayOverride.delete(status.panelId)
     clearPendingAlerts(status.panelId)
+    deliverLiveVar({ panelId: status.panelId, review: null })
   } else {
     panelLive.set(status.panelId, status)
   }

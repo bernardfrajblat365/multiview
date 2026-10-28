@@ -5,6 +5,8 @@ import {
   classifyEvent365,
   classifyPbp,
   createLiveState,
+  parseActiveVar,
+  varReviewKey,
   DETAIL_TIMEOUT_MS,
   detailTimeoutMs,
   diffDetail,
@@ -905,4 +907,40 @@ test('scorerFromDetail: gol do lado certo mais próximo do minuto, dentro de 2 m
   assert.equal(scorerFromDetail(detail, 'home', 50), null)
   assert.equal(scorerFromDetail(detail, 'away', 70), null, 'gol sem nome cadastrado')
   assert.equal(scorerFromDetail({ ...detail, events: null }, 'home', 39), null)
+})
+
+test('parseActiveVar reads the VAR review in progress from the mobile game center', () => {
+  const raw = { Games: [{ ID: 4885213, Comps: [{ ID: 45375 }, { ID: 82797 }], ActiveVarEvents: [
+    { Type: 2, Num: 1, Comp: 2, GT: 26, GTD: "26'", AddedTime: 0, Player: 'Zofia Burzan', PID: 79651633, S: '1-0', Status: 1, OriginalRefDecision: false },
+  ] }] }
+  assert.deepEqual(parseActiveVar(raw, 4885213), [{ kind: 'penalty', team: 'away', minute: 26, player: 'Zofia Burzan' }])
+})
+
+test('parseActiveVar maps the review types and the home side', () => {
+  const raw = { Games: [{ ID: 1, ActiveVarEvents: [
+    { Type: 1, Comp: 1, GT: 70, Player: 'Fulano' },
+    { Type: 3, Comp: 2, GT: 80 },
+    { Type: 9, GT: 'x' },
+    null,
+  ] }] }
+  assert.deepEqual(parseActiveVar(raw, 1), [
+    { kind: 'goal', team: 'home', minute: 70, player: 'Fulano' },
+    { kind: 'red', team: 'away', minute: 80, player: '' },
+    { kind: 'other', team: null, minute: 0, player: '' },
+  ])
+})
+
+test('parseActiveVar: no ActiveVarEvents is no review; a response without the game is a failed read', () => {
+  assert.deepEqual(parseActiveVar({ Games: [{ ID: 1, Active: true }] }, 1), [])
+  assert.deepEqual(parseActiveVar({ Games: [{ ID: 1, ActiveVarEvents: [] }] }, 1), [])
+  assert.equal(parseActiveVar({ Games: [{ ID: 2 }] }, 1), null)
+  assert.equal(parseActiveVar({}, 1), null)
+  assert.equal(parseActiveVar(null, 1), null)
+})
+
+test('varReviewKey changes only when the review does', () => {
+  const review = { kind: 'penalty' as const, team: 'away' as const, minute: 26, player: 'Zofia Burzan' }
+  assert.equal(varReviewKey([]), '')
+  assert.equal(varReviewKey([review]), varReviewKey([{ ...review }]))
+  assert.notEqual(varReviewKey([review]), varReviewKey([{ ...review, kind: 'goal' }]))
 })

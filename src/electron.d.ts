@@ -2,7 +2,7 @@ import type { BllEventsResult } from './bll-batch'
 import type { YoutubeChannelResult, YoutubeLivesResult } from './youtube-lives'
 import type { LayoutPayload } from './layout'
 import type { AlertKind } from './match-events'
-import type { LiveMatchStatus } from './livescore-365'
+import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 /** Crest data URLs in the feed's home/away order; null where there is none (both null: clear). */
@@ -37,6 +37,7 @@ type QuadraBridge = {
   onMatchCrests: (callback: (payload: MatchCrestsPayload) => void) => () => void
   onMatchEnded: (callback: (payload: { panelId: string }) => void) => () => void
   onLiveMatch: (callback: (payload: LiveMatchStatus) => void) => () => void
+  onLiveVar: (callback: (payload: LiveVarPayload) => void) => () => void
   chooseLiveMatch: (panelId: string, gameId: number | null) => void
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => () => void
   onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => () => void

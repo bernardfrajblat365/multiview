@@ -88,6 +88,7 @@ async function run() {
   const youtubeTestKey = `AIza${'T'.repeat(35)}`
   const youtubeQueries = []
   let detailRequests = 0
+  let gameCenterRequests = 0
   let finishingDetailRequests = 0
   const crestRequests = []
   let basketballListRequests = 0
@@ -219,6 +220,18 @@ async function run() {
       }, {
         id: 9002, sportId: 1, statusGroup: 3, statusText: "88'", competitionDisplayName: 'Liga Teste',
         startTime: new Date().toISOString(), homeCompetitor: { id: 3, name: 'Bahia' }, awayCompetitor: { id: 4, name: 'Vitória' },
+      }] }))
+      return
+    }
+    if (request.url?.startsWith('/Data/Games/GameCenter/')) {
+      // 365Scores mobile game center: a VAR review of a penalty runs for a few reads of Coritiba x Avaí, then the VAR decides (the entry is gone).
+      const gameId = Number(new URL(request.url, 'http://fixture').searchParams.get('games'))
+      if (gameId === 9001) gameCenterRequests += 1
+      const reviewing = gameId === 9001 && gameCenterRequests >= 2 && gameCenterRequests <= 6
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ Games: [{
+        ID: gameId, Active: true,
+        ...(reviewing ? { ActiveVarEvents: [{ Type: 2, Num: 1, Comp: 2, GT: 26, GTD: "26'", AddedTime: 0, Player: 'Zofia Burzan', PID: 1, S: '1-0', Status: 1, OriginalRefDecision: false }] } : {}),
       }] }))
       return
     }
@@ -385,6 +398,12 @@ async function run() {
       throw new Error(`${error.message}; escudos pedidos: ${JSON.stringify(crestRequests)}`)
     })
     assert.ok(crestRequests.some((url) => url.endsWith('/v3/Competitors/1')), 'O escudo usa a versão de imagem do time.')
+    // VAR review from the mobile game center: a blue badge while it runs, gone once the VAR decides.
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="1"] .panel__var-text')?.textContent === "Revisão: pênalti · 26' Zofia Burzan"`, 15000).catch((error) => {
+      throw new Error(`${error.message}; leituras do game center: ${gameCenterRequests}`)
+    })
+    await waitForExpression(target, `!document.querySelector('.panel[data-slot="1"] .panel__var')`, 20000)
 
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       const source = document.querySelector('.panel[data-slot="0"]')

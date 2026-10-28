@@ -319,6 +319,9 @@ const liveScores = createLiveScoreLinker({
     overlayWindow?.webContents.send('quadra:live-match', status)
   },
   onEnd: sendMatchEnded,
+  onVar: ({ panelIds, review }) => {
+    for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:live-var', { panelId, review })
+  },
   onList: (games) => teamCrests.prefetch(games),
 })
 /** Crests for the match label, from 365Scores; they follow the names and score, never hold them up. */

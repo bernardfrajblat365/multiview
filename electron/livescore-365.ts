@@ -11,6 +11,7 @@ import {
   mergeGameLists,
   scorerFromDetail,
   teamSimilarity,
+  parseActiveVar,
   parseGameDetail,
   parseGameList,
   parseRedCards,
@@ -20,11 +21,13 @@ import {
   parsePbpFeed,
   sourceKeyOf,
   SPORT_IDS,
+  varReviewKey,
   type AmericanFootballState,
   type Game365,
   type LiveMatchStatus,
   type LiveState,
   type Sport365,
+  type VarReview,
 } from '../src/livescore-365'
 import type { CrestTeams } from '../src/team-crests'
 import { alertLabel, type MatchIncident } from '../src/match-events'
@@ -32,6 +35,9 @@ import { logScanner } from './scanner-log'
 import type { ScannerScore } from './scoreboard-scanner'
 
 export type LiveEvent = { panelIds: string[]; incident: MatchIncident; teamName: string; score: string; label: string }
+
+/** The VAR review in progress (null once it is over), with the reviewed team's name. */
+export type LiveVar = { panelIds: string[]; review: (VarReview & { teamName: string }) | null }
 
 type PanelLink = {
   /** YouTube video id, or the player path of a BLL panel without a William Hill feed. */
@@ -64,6 +70,11 @@ type Poller = {
   /** When the current run of failures started, for the "back" line. */
   failingSince: number
   lastPbpAt: number
+  /** Last active-VAR key told to the UI, and when the current review started. */
+  varKey: string
+  varSince: number
+  varReview: LiveVar['review']
+  varInFlight: boolean
   timer?: ReturnType<typeof setTimeout>
   stopped: boolean
   /** Seen live (statusGroup 3): only then the end closes the panels; a game already over when linked doesn't. */
@@ -78,6 +89,8 @@ const FETCH_TIMEOUT_MS = 8000
 const POLL_MS = 3000
 /** The commentary is cached up to 15 s upstream; every 5 s is enough to catch a penalty or a VAR call early. */
 const PBP_POLL_MS = 5000
+/** The mobile API (app game center) is the only one with the VAR review in progress; tests point it at the same fixture server. */
+const MOBILE_BASE_URL = process.env.QUADRA_365SCORES_MOBILE_URL ?? process.env.QUADRA_365SCORES_URL ?? 'https://mobileapi.365scores.com'
 const LIST_CACHE_MS = 30_000
 /** A game missing from today's list may start later or be named differently: look again a few times. */
 const RETRY_MS = 120_000
@@ -86,6 +99,15 @@ const MAX_ATTEMPTS = 5
 function apiUrl(path: string, params: Record<string, string>) {
   const url = new URL(path, BASE_URL)
   url.search = new URLSearchParams({ ...COMMON_PARAMS, ...params }).toString()
+  return url.toString()
+}
+
+function gameCenterUrl(gameId: number) {
+  const url = new URL('/Data/Games/GameCenter/', MOBILE_BASE_URL)
+  url.search = new URLSearchParams({
+    apptype: '1', appversion: '9.9.8', games: String(gameId), lang: '9', oddsformat: '1', shownaodds: 'true', storeversion: '9.9.9',
+    theme: 'dark', topbm: '150', tz: '15', uc: '21', withexpanded: 'true', withexpandedstats: 'true', withnews: 'true', withstats: 'false',
+  }).toString()
   return url.toString()
 }
 
@@ -121,6 +143,8 @@ export function createLiveScoreLinker(options: {
   onStatus: (status: LiveMatchStatus) => void
   /** The game is over; reported once, only for a game seen being played. */
   onEnd?: (end: { panelIds: string[] }) => void
+  /** A VAR review started or ended (football only). */
+  onVar?: (update: LiveVar) => void
   /** Every freshly downloaded football games list (crests of live games are prefetched from it). */
   onList?: (games: Game365[]) => void
 }) {
@@ -189,6 +213,38 @@ export function createLiveScoreLinker(options: {
         label: alertLabel(incident.kind, teamName, incident.minute),
       })
     }
+  }
+
+  const VAR_NAMES: Record<VarReview['kind'], string> = { goal: 'gol', penalty: 'pênalti', red: 'cartão vermelho', other: 'lance' }
+
+  /** Reads the review in progress off the mobile game center; runs beside the detail poll so it never holds the score back. */
+  async function checkVar(poller: Poller) {
+    if (poller.varInFlight) return
+    poller.varInFlight = true
+    let reviews: VarReview[] | null = null
+    try {
+      reviews = parseActiveVar(await fetchJson(gameCenterUrl(poller.gameId), DETAIL_TIMEOUT_MS), poller.gameId)
+    } catch {
+      // A failed read keeps the last state until the next round.
+    } finally {
+      poller.varInFlight = false
+    }
+    if (poller.stopped || !reviews) return
+    const key = varReviewKey(reviews)
+    if (key === poller.varKey) return
+    const previous = poller.varKey
+    poller.varKey = key
+    const review = reviews[0]
+    if (!review) {
+      logScanner(`[${poller.label}] VAR encerrado (${Math.round((Date.now() - poller.varSince) / 1000)} s)`, '365')
+      poller.varReview = null
+    } else {
+      if (!previous) poller.varSince = Date.now()
+      const teamName = review.team === 'home' ? poller.home : review.team === 'away' ? poller.away : ''
+      poller.varReview = { ...review, teamName }
+      logScanner(`[${poller.label}] VAR ATIVO: revisão de ${VAR_NAMES[review.kind]}${review.minute ? ` ${review.minute}'` : ''}${teamName ? ` ${teamName}` : ''}${review.player ? ` — ${review.player}` : ''}`, '365')
+    }
+    options.onVar?.({ panelIds: [...poller.panelIds], review: poller.varReview })
   }
 
   function fail(poller: Poller, reason: string, kind: 'stall' | 'http') {
@@ -270,6 +326,8 @@ export function createLiveScoreLinker(options: {
       logScanner(`[${poller.label}] 365Scores ${coverage === 'events' ? 'com lances (gols, cartões, VAR)' : 'sem lances por enquanto (gols pelo placar, vermelhos pela contagem)'}`, '365')
     }
     emit(poller, diffDetail(poller.state, detail, Date.now()))
+    // A VAR review lasts about a minute: the game center is read every detail round (3 s) while the game is live.
+    if (detail.statusGroup === 3) void checkVar(poller)
     if (detail.pbpUrl && Date.now() - poller.lastPbpAt >= PBP_POLL_MS) {
       poller.lastPbpAt = Date.now()
       try {
@@ -283,6 +341,7 @@ export function createLiveScoreLinker(options: {
     if (detail.statusGroup === 4) {
       logScanner(`[${poller.label}] jogo encerrado (${poller.score}); 365Scores parou de consultar`, '365')
       poller.stopped = true
+      if (poller.varReview) options.onVar?.({ panelIds: [...poller.panelIds], review: null })
       if (poller.sawLive) options.onEnd?.({ panelIds: [...poller.panelIds] })
       return
     }
@@ -316,13 +375,14 @@ export function createLiveScoreLinker(options: {
     const label = `${game.home} x ${game.away}`
     let poller = pollers.get(game.id)
     if (!poller) {
-      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false, sawLive: false }
+      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, varKey: '', varSince: 0, varReview: null, varInFlight: false, stopped: false, sawLive: false }
       pollers.set(game.id, poller)
       schedulePoll(poller, 0)
     }
     poller.panelIds.add(panelId)
     sendStatus(panelId, { status: 'linked', label, coverage: poller.coverage, sport: poller.sport })
     publishScore(poller, [panelId], true)
+    if (poller.varReview) options.onVar?.({ panelIds: [panelId], review: poller.varReview })
     logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id}${poller.sport === 'basketball' ? ', basquete: só placar' : poller.sport === 'american-football' ? ', futebol americano: touchdowns e field goals' : ''})`, '365')
   }
 

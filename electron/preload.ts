@@ -3,7 +3,7 @@ import type { BllEventsResult } from '../src/bll-batch'
 import type { YoutubeChannelResult, YoutubeLivesResult } from '../src/youtube-lives'
 import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
-import type { LiveMatchStatus } from '../src/livescore-365'
+import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
@@ -78,6 +78,11 @@ const quadra = {
     const listener = (_event: Electron.IpcRendererEvent, payload: LiveMatchStatus) => callback(payload)
     ipcRenderer.on('quadra:live-match', listener)
     return () => ipcRenderer.removeListener('quadra:live-match', listener)
+  },
+  onLiveVar: (callback: (payload: LiveVarPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: LiveVarPayload) => callback(payload)
+    ipcRenderer.on('quadra:live-var', listener)
+    return () => ipcRenderer.removeListener('quadra:live-var', listener)
   },
   chooseLiveMatch: (panelId: string, gameId: number | null) => ipcRenderer.send('quadra:choose-live-match', panelId, gameId),
   onMatchScore: (callback: (payload: MatchScorePayload) => void) => {

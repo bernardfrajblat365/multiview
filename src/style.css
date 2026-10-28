@@ -631,6 +631,24 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 @keyframes alert-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .panel__alert { animation: none; } }
 
+.panel__var { --var-color: #5fb4ff; position: absolute; inset: 0; z-index: 24; pointer-events: none; border: 3px dashed var(--var-color); }
+.panel__var-badge { position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0.4rem; max-width: calc(100% - 1rem); padding: 0.28rem 0.8rem; border-radius: 999px; background: var(--var-color); color: #04223f; font-weight: 800; font-size: clamp(0.7rem, 2.3cqw, 1rem); white-space: nowrap; box-shadow: 0 2px 10px rgba(0,0,0,0.55); }
+.panel--alert .panel__var-badge { top: 2.8rem; }
+.panel__var-tag { flex: 0 0 auto; padding: 0 0.35rem; border-radius: 0.3rem; background: #04223f; color: var(--var-color); letter-spacing: 0.06em; animation: var-blink 1.2s ease-in-out infinite; }
+.panel__var-icon { flex: 0 0 auto; }
+.panel__var-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.panel__var-badge .panel__auto-controls { position: static; transform: none; flex: 0 0 auto; padding: 0; border: 0; background: transparent; gap: 0.3rem; font-size: inherit; }
+.panel__var-badge .panel__auto-count { color: inherit; padding: 0 0.1rem; }
+.panel__var-badge .panel__auto-count:empty { display: none; }
+.panel__var-badge .panel__auto-controls .btn { padding: 0.1rem 0.5rem; background: #04223f; border-color: #04223f; color: var(--var-color); font-weight: 700; }
+@keyframes var-blink { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .panel__var-tag { animation: none; } }
+@container (max-width: 300px), (max-height: 180px) {
+  .panel__var-badge { padding: 0.2rem 0.4rem; }
+  .panel__var-text { display: none; }
+}
+
+
 .alert-auto { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; }
 .alert-auto label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
 .alert-score-delay, .alert-close-finished { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; }

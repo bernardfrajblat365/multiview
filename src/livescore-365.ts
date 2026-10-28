@@ -714,6 +714,47 @@ export function parseRedCards(raw: unknown, gameId: number): { home: number; awa
   return { home: reds(row.homeCompetitor), away: reds(row.awayCompetitor) }
 }
 
+/** What the VAR is checking. */
+export type VarReviewKind = 'goal' | 'penalty' | 'red' | 'other'
+
+/** A VAR review in progress (`ActiveVarEvents` of the mobile API's game center). */
+export type VarReview = { kind: VarReviewKind; team: 'home' | 'away' | null; minute: number; player: string }
+
+/** `Type` of an active VAR event (seen in October 2026). */
+const VAR_REVIEW_KINDS: Record<number, VarReviewKind> = { 1: 'goal', 2: 'penalty', 3: 'red' }
+
+/**
+ * Reviews in progress of one game from `mobileapi.365scores.com/Data/Games/GameCenter/?games=<id>`.
+ * The game only carries `ActiveVarEvents` while the VAR is checking; once it decides the entry is gone,
+ * so an empty list means "no review now". Null when the response doesn't have the game (a failed read).
+ */
+export function parseActiveVar(raw: unknown, gameId: number): VarReview[] | null {
+  const games = raw && typeof raw === 'object' ? (raw as { Games?: unknown }).Games : null
+  if (!Array.isArray(games)) return null
+  const game = games.find((entry) => entry && typeof entry === 'object' && Number((entry as { ID?: unknown }).ID) === gameId) as Record<string, unknown> | undefined
+  if (!game) return null
+  const events = Array.isArray(game.ActiveVarEvents) ? game.ActiveVarEvents : []
+  return events.slice(0, 5).flatMap((entry): VarReview[] => {
+    if (!entry || typeof entry !== 'object') return []
+    const event = entry as Record<string, unknown>
+    const comp = finiteNumber(event.Comp)
+    return [{
+      kind: VAR_REVIEW_KINDS[finiteNumber(event.Type)] ?? 'other',
+      team: comp === 1 ? 'home' : comp === 2 ? 'away' : null,
+      minute: Math.max(0, finiteNumber(event.GT)),
+      player: typeof event.Player === 'string' ? event.Player.trim().slice(0, MAX_NAME) : '',
+    }]
+  })
+}
+
+/** Sent to the UI as `quadra:live-var`: the review in progress on a panel's game, null once the VAR decided. */
+export type LiveVarPayload = { panelId: string; review: (VarReview & { teamName: string }) | null }
+
+/** Same reviews, same key: the poller tells the UI only when this changes. */
+export function varReviewKey(reviews: readonly VarReview[]): string {
+  return reviews.map((review) => `${review.kind}:${review.team}:${review.minute}:${review.player}`).join('|')
+}
+
 /** American football event types and touchdown subtypes (observed in the NFL, October 2026). */
 const TYPE_TOUCHDOWN = 16
 const TYPE_FIELD_GOAL = 17

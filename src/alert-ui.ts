@@ -1,6 +1,7 @@
 import { ALERT_SOUNDS, ALERT_SOUND_IDS, getAlertSound, playAlertSound } from './alert-sounds'
 import { AUTO_HIGHLIGHT_OPTIONS, CLOSE_FINISHED_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
 import { ALERT_KINDS, type AlertKind } from './match-events'
+import type { LiveVarPayload, VarReviewKind } from './livescore-365'
 
 export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
 
@@ -9,10 +10,16 @@ const OTHER_HOLD_MS = 12_000
 const KIND_ICON: Record<AlertKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', yellow: '🟨', var: '📺', touchdown: '🏈', 'field-goal': '🥅' }
 const KIND_NAME: Record<AlertKind, string> = { goal: 'Gol', penalty: 'Pênalti', red: 'Cartão vermelho', yellow: 'Cartão amarelo', var: 'VAR', touchdown: 'Touchdown', 'field-goal': 'Field goal' }
 
+export type VarReviewState = NonNullable<LiveVarPayload['review']>
+const VAR_REVIEW_ICON: Record<VarReviewKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', other: '📺' }
+const VAR_REVIEW_NAME: Record<VarReviewKind, string> = { goal: 'gol', penalty: 'pênalti', red: 'cartão vermelho', other: 'lance' }
+
 type ActiveAlert = { kind: AlertKind; text: string; scorer: 'home' | 'away' | null; timer: ReturnType<typeof setTimeout> }
 
 let settings: AlertSettings = loadAlertSettings(ALERT_SOUND_IDS)
 const active = new Map<string, ActiveAlert>()
+/** VAR reviews in progress per panel: shown until the 365Scores feed drops them. */
+const varReviews = new Map<string, VarReviewState>()
 const listeners = new Set<(panelId: string, payload: MatchEventPayload) => void>()
 const settingsListeners = new Set<(settings: AlertSettings) => void>()
 
@@ -68,7 +75,7 @@ export function alertControlsHtml(idPrefix: string): string {
     <fieldset class="alert-kinds"><legend>Alertar em · som</legend>
       ${ALERT_KINDS.map((kind) => `<div class="alert-kind"><label><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_NAME[kind]}</label>${soundPickerHtml(idPrefix, kind)}</div>`).join('')}
     </fieldset>
-    <div class="alert-auto"><label><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol ou touchdown (3+ telas) por</label>
+    <div class="alert-auto"><label><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol, touchdown ou VAR (3+ telas) por</label>
       <select data-auto-highlight-sec aria-label="Tempo do destaque do gol"${settings.autoHighlight ? '' : ' disabled'}>
         ${AUTO_HIGHLIGHT_OPTIONS.map((value) => `<option value="${value}"${settings.autoHighlightSec === value ? ' selected' : ''}>${durationLabel(value)}</option>`).join('')}
       </select>
@@ -199,9 +206,75 @@ function renderAlertText(label: HTMLElement, alert: ActiveAlert) {
   label.replaceChildren(before, number(home, alert.scorer === 'home'), separator, number(away, alert.scorer === 'away'))
 }
 
+export function varReviewText(review: VarReviewState) {
+  const who = review.player || review.teamName
+  return `Revisão: ${VAR_REVIEW_NAME[review.kind]}${review.minute ? ` · ${review.minute}'` : ''}${who ? ` ${who}` : ''}`
+}
+
+export function hasVarReview(panelId: string) {
+  return varReviews.has(panelId)
+}
+
+/**
+ * Starts, updates or (with null) ends a panel's VAR review. Returns true when a review starts, which plays
+ * the VAR sound once; the VAR alert type being off hides the review altogether.
+ */
+export function setVarReview(panelId: string, review: VarReviewState | null, root: ParentNode, panelExists: (panelId: string) => boolean): boolean {
+  if (!review || !settings.kinds.var || !panelExists(panelId)) {
+    clearVarReview(panelId, root)
+    return false
+  }
+  const started = !varReviews.has(panelId)
+  varReviews.set(panelId, review)
+  applyAlertStates(root)
+  if (started) {
+    playAlertSound(settings.sounds.var)
+    for (const listener of varListeners) listener(panelId)
+  }
+  return started
+}
+
+export function clearVarReview(panelId: string, root: ParentNode) {
+  if (!varReviews.delete(panelId)) return
+  applyAlertStates(root)
+}
+
+const varListeners = new Set<(panelId: string) => void>()
+
+/** Lets the layout code react to a VAR review starting (highlighting its game). */
+export function onVarReviewStarted(listener: (panelId: string) => void) {
+  varListeners.add(listener)
+  return () => varListeners.delete(listener)
+}
+
+/** The blue dashed ring and "VAR" badge of a review in progress. */
+function applyVarState(panelElement: HTMLElement) {
+  const review = varReviews.get(panelElement.dataset.panelId ?? '')
+  let overlay = panelElement.querySelector<HTMLElement>(':scope > .panel__var')
+  panelElement.classList.toggle('panel--var', Boolean(review))
+  if (!review) {
+    overlay?.remove()
+    return
+  }
+  if (!overlay) {
+    overlay = document.createElement('div')
+    overlay.className = 'panel__var'
+    overlay.innerHTML = '<span class="panel__var-badge" role="status"><span class="panel__var-tag">VAR</span><span class="panel__var-icon" aria-hidden="true"></span><span class="panel__var-text"></span></span>'
+    panelElement.append(overlay)
+  }
+  const text = varReviewText(review)
+  const label = overlay.querySelector<HTMLElement>('.panel__var-text')!
+  if (label.textContent !== text) {
+    label.textContent = text
+    overlay.querySelector<HTMLElement>('.panel__var-icon')!.textContent = VAR_REVIEW_ICON[review.kind]
+    overlay.querySelector<HTMLElement>('.panel__var-badge')!.title = `VAR em andamento — ${text}`
+  }
+}
+
 /** Idempotent: re-applies the ring/badge to panels, also after the grid re-renders. */
 export function applyAlertStates(root: ParentNode) {
   for (const panelElement of root.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
+    applyVarState(panelElement)
     const alert = active.get(panelElement.dataset.panelId ?? '')
     let overlay = panelElement.querySelector<HTMLElement>(':scope > .panel__alert')
     for (const kind of Object.keys(KIND_NAME)) panelElement.classList.toggle(`panel--alert-${kind}`, alert?.kind === kind)
@@ -229,6 +302,7 @@ export function applyAlertStates(root: ParentNode) {
 export function clearAllAlerts(root: ParentNode) {
   for (const alert of active.values()) clearTimeout(alert.timer)
   active.clear()
+  varReviews.clear()
   applyAlertStates(root)
 }
 

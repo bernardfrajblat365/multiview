@@ -7,7 +7,16 @@ export const AUTO_MIN_PANELS = 3
 /** A second highlight is added when it makes the goal's video at least this much bigger. */
 export const COMPANION_MIN_GAIN = 1.25
 
-export type AutoEntry = { id: PanelId; expiresAt: number }
+/** A VAR review keeps its game highlighted this long after the VAR decides, so the decision shows. */
+export const VAR_AFTER_MS = 15_000
+/** Safety cap of a VAR highlight whose end never arrives (feed lost). */
+export const VAR_MAX_MS = 5 * 60_000
+
+/**
+ * `reason: 'var'`: highlighted for a VAR review; while `reviewing` it lasts until the review ends instead of a fixed time.
+ * `holdUntil`: a goal on the same panel, which keeps the highlight at least that long after the review.
+ */
+export type AutoEntry = { id: PanelId; expiresAt: number; reason?: 'var'; reviewing?: boolean; holdUntil?: number }
 
 export function highlightCapacity(panelCount: number): number {
   if (panelCount < 1) return 0
@@ -79,13 +88,33 @@ export function registerGoal(
   userHighlighted: readonly PanelId[],
   panelOrder: readonly PanelId[] = [],
   durationMs = AUTO_HIGHLIGHT_MS,
+  reason?: 'var',
 ): GoalResult {
   const capacity = highlightCapacity(panelCount)
   if (panelCount < AUTO_MIN_PANELS || capacity === 0) return { autos: [...autos], highlighted: null }
-  const isAuto = autos.some((entry) => entry.id === panelId)
-  if (userHighlighted.includes(panelId) && !isAuto) return { autos: [...autos], highlighted: null }
-  const next = [...autos.filter((entry) => entry.id !== panelId), { id: panelId, expiresAt: now + durationMs }].slice(-capacity)
+  const current = autos.find((entry) => entry.id === panelId)
+  if (userHighlighted.includes(panelId) && !current) return { autos: [...autos], highlighted: null }
+  let entry: AutoEntry = { id: panelId, expiresAt: now + durationMs }
+  if (reason === 'var') {
+    // A review right after a goal: the goal's time still counts once the VAR decides.
+    const holdUntil = current?.reason ? current.holdUntil : current?.expiresAt
+    entry = { id: panelId, expiresAt: Math.max(entry.expiresAt, current?.expiresAt ?? 0), reason, reviewing: true, ...(holdUntil ? { holdUntil } : {}) }
+  } else if (current?.reviewing) {
+    // A goal during a review: the review still decides when the highlight ends, but not before the goal's time.
+    entry = { ...current, holdUntil: Math.max(entry.expiresAt, current.holdUntil ?? 0) }
+  }
+  const next = [...autos.filter((item) => item.id !== panelId), entry].slice(-capacity)
   return { autos: next, highlighted: composeHighlighted(next, userHighlighted, panelCount, panelOrder) }
+}
+
+/** The VAR decided: its highlight stays `VAR_AFTER_MS` more, or until a goal's time on that panel runs out. */
+export function endVarAuto(autos: readonly AutoEntry[], panelId: PanelId, now: number): AutoEntry[] {
+  return autos.map((entry) => {
+    if (entry.id !== panelId || !entry.reviewing) return entry
+    const after = Math.min(entry.expiresAt, now + VAR_AFTER_MS)
+    // Once a goal's time outlasts the review's, the highlight is the goal's again.
+    return (entry.holdUntil ?? 0) > after ? { id: entry.id, expiresAt: entry.holdUntil! } : { id: entry.id, expiresAt: after, reason: 'var' }
+  })
 }
 
 export function expireAutos(autos: readonly AutoEntry[], now: number): { autos: AutoEntry[]; changed: boolean } {

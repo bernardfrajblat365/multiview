@@ -1,6 +1,7 @@
 import { net } from 'electron'
 import {
   candidateOf,
+  clockFrom365,
   createAmericanFootballState,
   createLiveState,
   diffAmericanFootball,
@@ -32,7 +33,8 @@ import {
 import type { CrestTeams } from '../src/team-crests'
 import { alertLabel, type MatchIncident } from '../src/match-events'
 import { logScanner } from './scanner-log'
-import type { ScannerScore } from './scoreboard-scanner'
+import type { ScannerClock, ScannerScore } from './scoreboard-scanner'
+import { sameClock, type MatchClock } from '../src/match-clock'
 
 export type LiveEvent = { panelIds: string[]; incident: MatchIncident; teamName: string; score: string; label: string }
 
@@ -66,6 +68,9 @@ type Poller = {
   away: string
   score: string
   teams?: CrestTeams
+  /** Football clock for the label, and the last one sent (a running clock that only drifted isn't sent again). */
+  clock: MatchClock | null
+  sentClock: MatchClock | null
   failures: number
   /** When the current run of failures started, for the "back" line. */
   failingSince: number
@@ -87,6 +92,8 @@ const COMMON_PARAMS = { appTypeId: '5', langId: '31', timezoneName: 'America/Sao
 const FETCH_TIMEOUT_MS = 8000
 /** The API's CDN caches live responses for 3 s; polling faster only returns the same body. */
 const POLL_MS = 3000
+/** Seconds a fresh 365Scores clock may differ from the one shown before it is sent again. */
+const CLOCK_TOLERANCE_S = 4
 /** The commentary is cached up to 15 s upstream; every 5 s is enough to catch a penalty or a VAR call early. */
 const PBP_POLL_MS = 5000
 /** The mobile API (app game center) is the only one with the VAR review in progress; tests point it at the same fixture server. */
@@ -140,6 +147,7 @@ const LATE_NIGHT_HOUR = 4
 export function createLiveScoreLinker(options: {
   onEvent: (event: LiveEvent) => void
   onScore: (score: ScannerScore) => void
+  onClock?: (clock: ScannerClock) => void
   onStatus: (status: LiveMatchStatus) => void
   /** The game is over; reported once, only for a game seen being played. */
   onEnd?: (end: { panelIds: string[] }) => void
@@ -193,6 +201,16 @@ export function createLiveScoreLinker(options: {
     if (!force && key === poller.sentKey) return
     poller.sentKey = key
     options.onScore({ panelIds, home: poller.home, away: poller.away, score: poller.score, teams: poller.teams })
+  }
+
+  function publishClock(poller: Poller, panelIds: string[] = [...poller.panelIds], force = false) {
+    if (panelIds.length === 0) return
+    if (!force) {
+      // The API's CDN caches 3 s: readings jitter a little, so only a clear jump is sent.
+      if (poller.clock ? sameClock(poller.sentClock, poller.clock, CLOCK_TOLERANCE_S) : !poller.sentClock) return
+      poller.sentClock = poller.clock
+    }
+    options.onClock?.({ panelIds, clock: poller.clock })
   }
 
   function schedulePoll(poller: Poller, delay: number) {
@@ -319,6 +337,8 @@ export function createLiveScoreLinker(options: {
       if (poller.stopped) return
     }
     setScore(poller, detail)
+    poller.clock = clockFrom365(detail, poller.clock, Date.now())
+    publishClock(poller)
     const coverage = detail.events ? 'events' : 'score'
     if (coverage !== poller.coverage) {
       poller.coverage = coverage
@@ -375,13 +395,14 @@ export function createLiveScoreLinker(options: {
     const label = `${game.home} x ${game.away}`
     let poller = pollers.get(game.id)
     if (!poller) {
-      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, varKey: '', varSince: 0, varReview: null, varInFlight: false, stopped: false, sawLive: false }
+      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', clock: null, sentClock: null, failures: 0, failingSince: 0, lastPbpAt: 0, varKey: '', varSince: 0, varReview: null, varInFlight: false, stopped: false, sawLive: false }
       pollers.set(game.id, poller)
       schedulePoll(poller, 0)
     }
     poller.panelIds.add(panelId)
     sendStatus(panelId, { status: 'linked', label, coverage: poller.coverage, sport: poller.sport })
     publishScore(poller, [panelId], true)
+    publishClock(poller, [panelId], true)
     if (poller.varReview) options.onVar?.({ panelIds: [panelId], review: poller.varReview })
     logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id}${poller.sport === 'basketball' ? ', basquete: só placar' : poller.sport === 'american-football' ? ', futebol americano: touchdowns e field goals' : ''})`, '365')
   }

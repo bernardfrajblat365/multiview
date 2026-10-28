@@ -10,6 +10,7 @@ import {
   type ScannerState,
 } from '../src/match-events'
 import { logScanner } from './scanner-log'
+import { clockElapsedAt, HALF_TIME_INCIDENTS, isRunningPeriod, normalizeElapsed, sameClock, whClockPeriod, type MatchClock } from '../src/match-clock'
 import type { CrestTeams } from '../src/team-crests'
 
 export type ScannerEvent = {
@@ -28,6 +29,14 @@ export type ScannerEnd = {
   score: string
 }
 
+export type ScannerScorer = {
+  eventId: string
+  panelIds: string[]
+  /** Id of the goal incident the name belongs to (`ScannerEvent.incident.id`). */
+  incidentId: string
+  player: string
+}
+
 export type ScannerScore = {
   panelIds: string[]
   home: string
@@ -36,6 +45,9 @@ export type ScannerScore = {
   /** 365Scores teams, for their crests; William Hill scores leave them out. */
   teams?: CrestTeams
 }
+
+/** Match clock for the label; null when there's none to show (not started, over). */
+export type ScannerClock = { panelIds: string[]; clock: MatchClock | null }
 
 type Scanner = {
   eventId: string
@@ -48,10 +60,9 @@ type Scanner = {
   score: string
   /** Last home|away|score sent to the UI, so unchanged polls stay silent. */
   sentKey: string
-  /** Score the board showed the last time it was in step with the goal alerts. */
-  goalBaseline: string
-  /** Score of the last goal alert while the board hasn't caught up with it yet, else null. */
-  predictedScore: string | null
+  clock: MatchClock | null
+  /** Last clock sent to the UI; small drifts of a running clock aren't sent again. */
+  sentClock: MatchClock | null
   hooked: boolean
   connected: boolean
   loadedAt: number
@@ -86,6 +97,8 @@ const SCORER_FALLBACK_AFTER_MS = 5000
 const SCORER_FALLBACK_EVERY_MS = 5000
 /** …and the search for the scorer's name ends here. */
 const SCORER_GIVE_UP_MS = 60_000
+/** The page's clock ticks every second while the match time runs; no tick for this long means it stopped. */
+const CLOCK_TICK_GRACE_MS = 3000
 const ALLOWED_HOST = /(^|\.)(kwddw\.com|whcdn\.net|staticcache\.org)$/i
 
 /**
@@ -103,6 +116,7 @@ const hookScript = `(() => {
   window.__quadraQueue = window.__quadraQueue || []
   window.__quadraSeen = window.__quadraSeen || new Set()
   window.__quadraShirts = window.__quadraShirts || {}
+  const halfTime = new Set(${JSON.stringify(HALF_TIME_INCIDENTS)})
   for (const name of names) {
     const mod = S[name]
     if (!mod || typeof mod.acceptIncident !== 'function' || mod.__quadraWrapped) continue
@@ -113,6 +127,10 @@ const hookScript = `(() => {
         if (Array.isArray(incidents)) {
           for (const item of incidents) {
             if (item && item.type === ${JSON.stringify(END_INCIDENT_TYPE)} && !window.__quadraEndAt) window.__quadraEndAt = Date.parse(item.timestamp) || Date.now()
+            // Match time of the newest item (the clock's fallback) and the half-time whistle (the break countdown).
+            const at = item && Date.parse(item.timestamp)
+            if (at && item.time && typeof item.time.duration === 'number' && (!window.__quadraLastTime || at >= window.__quadraLastTime.at)) window.__quadraLastTime = { duration: item.time.duration, at }
+            if (at && (halfTime.has(item.type) || (item.time && item.time.period === 'HALF_TIME')) && (!window.__quadraBreakAt || at < window.__quadraBreakAt)) window.__quadraBreakAt = at
             // The shirt number may only show up on a later replay of the same goal.
             if (item && item.type === 'GOAL' && item.data && item.data.PLAYER) window.__quadraShirts[item.id] = item.data.PLAYER
             if (!item || !types.has(item.type) || window.__quadraSeen.has(item.id)) continue
@@ -128,6 +146,19 @@ const hookScript = `(() => {
     }
     mod.__quadraWrapped = true
     wrapped += 1
+  }
+  // The board's clock: set on every update and on every tick (each second) while the match time runs.
+  const scores = S.scores
+  if (scores && typeof scores.setClock === 'function' && !scores.__quadraWrapped) {
+    const original = scores.setClock
+    scores.setClock = function (data) {
+      try {
+        const time = data && data.currentTime
+        if (time && typeof time.duration === 'number') window.__quadraClock = { duration: time.duration, at: Date.now() }
+      } catch (e) {}
+      return original.apply(this, arguments)
+    }
+    scores.__quadraWrapped = true
   }
   // Goal lists of the line-up carry the scorer's name, sometimes after the goal itself.
   const lineups = S.lineups
@@ -183,12 +214,22 @@ const drainScript = `(() => {
     updates: window.__quadraUpdates || 0,
     period: /^[A-Z_]{1,40}$/.test(period) ? period : '',
     endAt: Number(window.__quadraEndAt) || 0,
+    clock: window.__quadraClock || null,
+    lastTime: window.__quadraLastTime || null,
+    breakAt: Number(window.__quadraBreakAt) || 0,
+    now: Date.now(),
     queue,
     home: scoreIndex > 0 ? lines[scoreIndex - 1].slice(0, 80) : '',
     away: scoreIndex >= 0 && lines[scoreIndex + 1] ? lines[scoreIndex + 1].slice(0, 80) : '',
     score: scoreIndex >= 0 ? lines[scoreIndex].replace(/\\s+/g, ' ') : '',
   }
 })()`
+
+function timeReading(value: unknown): { duration: number; at: number } | null {
+  if (!value || typeof value !== 'object') return null
+  const { duration, at } = value as { duration?: unknown; at?: unknown }
+  return typeof duration === 'number' && Number.isFinite(duration) && duration >= 0 && typeof at === 'number' && at > 0 ? { duration, at } : null
+}
 
 function scoreboardUrl(eventId: string) {
   const base = process.env.QUADRA_SCOREBOARD_URL ?? 'https://score.kwddw.com/scoreboards/app/football/index.html'
@@ -212,9 +253,12 @@ function isAllowedScoreboardUrl(value: string) {
 export function createScoreboardScanners(options: {
   onEvent: (event: ScannerEvent) => void
   onScore?: (score: ScannerScore) => void
+  onClock?: (clock: ScannerClock) => void
   /** The feed says the match is over; reported once per match. */
   onEnd?: (end: ScannerEnd) => void
   /** Fallback for goals the line-up gives no name for (365Scores). Null when it can't tell. */
+  /** A goal's scorer became known after its alert went out. */
+  onScorer?: (scorer: ScannerScorer) => void
   findScorer?: (query: { home: string; away: string; team: 'home' | 'away'; minute: number }) => Promise<string | null>
 }) {
   const scanners = new Map<string, Scanner>()
@@ -246,6 +290,49 @@ export function createScoreboardScanners(options: {
     options.onScore?.({ panelIds, home: scanner.home, away: scanner.away, score: scanner.score })
   }
 
+  function publishClock(scanner: Scanner, panelIds: string[] = [...scanner.panelIds], force = false) {
+    if (panelIds.length === 0) return
+    if (!force) {
+      if (scanner.clock ? sameClock(scanner.sentClock, scanner.clock) : !scanner.sentClock) return
+      scanner.sentClock = scanner.clock
+    }
+    options.onClock?.({ panelIds, clock: scanner.clock })
+  }
+
+  /**
+   * Clock from the board: the period, and the time of its last tick (each second while it runs)
+   * or, before any tick, of the newest feed item. STOP_GAME holds the last period, stopped.
+   */
+  function readClock(scanner: Scanner, result: { period?: string; clock?: unknown; lastTime?: unknown; breakAt?: number; now?: number }): MatchClock | null {
+    const raw = typeof result.period === 'string' ? result.period : ''
+    const pageNow = Number(result.now) || Date.now()
+    // Page and main share the machine's clock; the offset only matters for the feed's server timestamps.
+    const toMain = (at: number) => Date.now() - (pageNow - at)
+    if (raw === 'STOP_GAME') {
+      const last = scanner.clock
+      if (!last || !last.running) return last
+      return { ...last, elapsed: clockElapsedAt(last, Date.now()), at: Date.now(), running: false }
+    }
+    const period = whClockPeriod(raw)
+    if (!period) return null
+    const tick = timeReading(result.clock)
+    const item = timeReading(result.lastTime)
+    let elapsed: number | null = null
+    let at = Date.now()
+    let running = isRunningPeriod(period)
+    if (tick) {
+      elapsed = tick.duration
+      at = toMain(tick.at)
+      running = running && pageNow - tick.at < CLOCK_TICK_GRACE_MS
+    } else if (item) {
+      elapsed = item.duration
+      at = Math.min(Date.now(), toMain(item.at))
+    }
+    if (elapsed !== null) elapsed = normalizeElapsed(period, elapsed)
+    const breakAt = Number(result.breakAt) || 0
+    return { period, elapsed, running, at, breakStartedAt: period === 'half-time' && breakAt > 0 ? Math.min(Date.now(), toMain(breakAt)) : null }
+  }
+
   async function drain(scanner: Scanner) {
     if (scanner.destroyed || scanner.window.isDestroyed() || scanner.window.webContents.isLoading()) return
     const contents = scanner.window.webContents
@@ -262,6 +349,10 @@ export function createScoreboardScanners(options: {
       updates?: number
       period?: string
       endAt?: number
+      clock?: unknown
+      lastTime?: unknown
+      breakAt?: number
+      now?: number
       queue?: RawIncident[]
       home?: string
       away?: string
@@ -273,6 +364,8 @@ export function createScoreboardScanners(options: {
     if (result.away) scanner.away = result.away
     if (result.score) scanner.score = result.score
     publishScore(scanner)
+    scanner.clock = readClock(scanner, result)
+    publishClock(scanner)
     // Any feed update counts as alive, not only alert types, so quiet spells don't force reloads.
     const updates = Number(result.updates) || 0
     if (updates !== scanner.updates) {
@@ -281,7 +374,6 @@ export function createScoreboardScanners(options: {
     }
     const queue = Array.isArray(result.queue) ? result.queue : []
     if (queue.length > 0) emitIncidents(scanner, queue)
-    syncGoalBaseline(scanner)
     await resolveScorers(scanner)
     const period = typeof result.period === 'string' ? result.period : ''
     if (detectMatchEnd(scanner.state, period, Number(result.endAt) || 0)) {
@@ -293,7 +385,7 @@ export function createScoreboardScanners(options: {
   function emitIncidents(scanner: Scanner, queue: RawIncident[]) {
     const { fresh, ignored } = filterNew(scanner.state, queue)
     if (ignored > 0) logScanner(`[${scanner.label}] ${ignored} lance(s) do histórico ignorado(s)`, 'wh')
-    for (const incident of fresh) sendIncident(scanner, incident, goalScore(scanner, incident))
+    for (const incident of fresh) sendIncident(scanner, incident, scanner.score)
   }
 
   /**
@@ -311,6 +403,7 @@ export function createScoreboardScanners(options: {
       if (typeof name === 'string' && name) {
         scanner.scorers.delete(id)
         logScanner(`[${scanner.label}] nome do gol ${pending.incident.minute}' ${teamOf(scanner, pending.incident)}: ${name} (escalação WH, ${waited} s depois do alerta)`, 'wh')
+        options.onScorer?.({ eventId: scanner.eventId, panelIds: [...scanner.panelIds], incidentId: id, player: name })
       } else if (now - pending.at >= SCORER_GIVE_UP_MS) {
         scanner.scorers.delete(id)
         const shirt = pending.incident.shirt ? `camisa ${pending.incident.shirt}` : 'sem camisa no feed'
@@ -332,6 +425,7 @@ export function createScoreboardScanners(options: {
       if (name && scanner.scorers.delete(id)) {
         const waited = ((Date.now() - pending.at) / 1000).toFixed(1)
         logScanner(`[${scanner.label}] nome do gol ${pending.incident.minute}' ${teamOf(scanner, pending.incident)}: ${name} (365Scores, ${waited} s depois do alerta)`, 'wh')
+        options.onScorer?.({ eventId: scanner.eventId, panelIds: [...scanner.panelIds], incidentId: id, player: name })
       }
     } catch {
       // 365Scores down or slow: the next round tries again until the time is up.
@@ -342,28 +436,6 @@ export function createScoreboardScanners(options: {
 
   function teamOf(scanner: Scanner, incident: MatchIncident) {
     return incident.team === 'home' ? scanner.home : incident.team === 'away' ? scanner.away : ''
-  }
-
-  /**
-   * The feed can announce a goal before the board's text shows it. If the board hasn't moved,
-   * the alert goes out at once with the last score plus this goal instead of waiting.
-   */
-  function goalScore(scanner: Scanner, incident: MatchIncident) {
-    if (incident.kind !== 'goal') return scanner.score
-    if (scanner.score !== scanner.goalBaseline) return scanner.score
-    const base = /^(\d+)\s*-\s*(\d+)$/.exec(scanner.predictedScore ?? scanner.score)
-    if (!base || incident.ownGoal || incident.team === 'match') return scanner.score
-    const home = Number(base[1]) + (incident.team === 'home' ? 1 : 0)
-    const away = Number(base[2]) + (incident.team === 'away' ? 1 : 0)
-    scanner.predictedScore = `${home} - ${away}`
-    return scanner.predictedScore
-  }
-
-  /** Once the board moves, it has caught up: later goals are predicted from it again. */
-  function syncGoalBaseline(scanner: Scanner) {
-    if (scanner.score === scanner.goalBaseline) return
-    scanner.goalBaseline = scanner.score
-    scanner.predictedScore = null
   }
 
   function sendIncident(scanner: Scanner, incident: MatchIncident, score: string) {
@@ -429,8 +501,8 @@ export function createScoreboardScanners(options: {
       away: '',
       score: '',
       sentKey: '',
-      goalBaseline: '',
-      predictedScore: null,
+      clock: null,
+      sentClock: null,
       hooked: false,
       connected: false,
       loadedAt: Date.now(),
@@ -486,6 +558,7 @@ export function createScoreboardScanners(options: {
     panelToEvent.set(panelId, eventId)
     // A panel joining a running scanner gets the current score right away.
     publishScore(scanner, [panelId], true)
+    publishClock(scanner, [panelId], true)
     logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (WH ${eventId})`, 'wh')
   }
 

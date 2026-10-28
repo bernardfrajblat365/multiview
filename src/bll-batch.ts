@@ -95,6 +95,36 @@ export function groupByLeague<T extends BllEvent>(events: T[]): BllEventGroup<T>
     }))
 }
 
+/** All games in one group, by start time (games without a time last; ties keep the catalog order). */
+export function groupByTime<T extends BllEvent>(events: T[]): BllEventGroup<T>[] {
+  if (events.length === 0) return []
+  return [{ competition: 'Todos os jogos', events: [...events].sort((a, b) => (a.time || '99:99').localeCompare(b.time || '99:99')) }]
+}
+
+/** How the BLL batch list is ordered: grouped by league or a single list by start time. */
+export type BllBatchOrder = 'league' | 'time'
+const ORDER_STORAGE_KEY = 'quadra:bll-batch-order'
+
+export function parseBllBatchOrder(raw: unknown): BllBatchOrder {
+  return raw === 'time' ? 'time' : 'league'
+}
+
+export function loadBllBatchOrder(): BllBatchOrder {
+  try {
+    return parseBllBatchOrder(localStorage.getItem(ORDER_STORAGE_KEY))
+  } catch {
+    return 'league'
+  }
+}
+
+export function saveBllBatchOrder(order: BllBatchOrder) {
+  try {
+    localStorage.setItem(ORDER_STORAGE_KEY, order)
+  } catch {
+    /* storage unavailable: the choice lasts only while the dialog is open */
+  }
+}
+
 /** Fills empty panels first, then asks for new panels up to `maxPanels`; games already open are skipped. */
 export function planBatchOpen(panels: PanelSlot[], urls: string[], maxPanels: number): BatchPlan {
   const open = new Set(panels.map((panel) => panel.url).filter(Boolean))

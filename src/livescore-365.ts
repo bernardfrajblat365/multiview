@@ -1,6 +1,7 @@
 import type { MatchIncident } from './match-events.ts'
 import { extractMatchLabel, splitMatchTeams } from './match-label.ts'
 import { detectCompetition } from './youtube-lives.ts'
+import { clockElapsedAt, clockPeriod365, isRunningPeriod, normalizeElapsed, type MatchClock } from './match-clock.ts'
 
 /** One game from the 365Scores web API (`/web/games/current`, `/web/games/allscores`). */
 export type Game365 = {
@@ -69,7 +70,12 @@ export type Detail365 = {
   pbpUrl: string | null
   /** Player id → name (`members`), for the scorer of an event. Absent in older fixtures. */
   players?: ReadonlyMap<number, string>
+  /** Period and clock (`statusId`, `statusText`, `preciseGameTime`). Absent in older fixtures. */
+  status?: Status365
 }
+
+/** `precise`: match time to the second and whether it is running; null when the game only has the minute. */
+export type Status365 = { id: number; text: string; precise: { seconds: number; running: boolean } | null }
 
 /** One line of the 365Scores live commentary (`pbpgenerator.365scores.com`). */
 export type PbpMessage = { id: number; type: number; minute: number; competitorNum: number; comment: string }
@@ -442,7 +448,39 @@ export function parseGameDetail(raw: unknown): Detail365 | null {
   // Counting goals per side follows the list order, so keep it chronological whatever the API sends.
   events?.sort((a, b) => a.order - b.order)
   const pbp = row.playByPlay && typeof row.playByPlay === 'object' ? (row.playByPlay as Record<string, unknown>).feedURL : null
-  return { id, statusGroup: finiteNumber(row.statusGroup), gameTime: Math.max(0, Math.floor(finiteNumber(row.gameTime))), home, away, events, pbpUrl: pbpFeedUrl(pbp), players: parsePlayers(row.members) }
+  return { id, statusGroup: finiteNumber(row.statusGroup), gameTime: Math.max(0, Math.floor(finiteNumber(row.gameTime))), home, away, events, pbpUrl: pbpFeedUrl(pbp), players: parsePlayers(row.members), status: parseStatus(row) }
+}
+
+function parseStatus(row: Record<string, unknown>): Status365 {
+  const raw = row.preciseGameTime && typeof row.preciseGameTime === 'object' ? row.preciseGameTime as Record<string, unknown> : null
+  const minutes = raw ? Number(raw.minutes) : NaN
+  const seconds = raw ? Number(raw.seconds) : NaN
+  const precise = Number.isFinite(minutes) && Number.isFinite(seconds) && minutes >= 0 && seconds >= 0
+    ? { seconds: Math.floor(minutes) * 60 + Math.floor(seconds), running: raw?.autoProgress === true }
+    : null
+  return { id: finiteNumber(row.statusId, -1), text: cleanText(row.statusText, 40), precise }
+}
+
+/**
+ * The football clock of a game detail, for the label. Without seconds the minute (shown as "42'",
+ * i.e. 41:xx) starts the count, and a running clock still inside that minute is kept as is.
+ * The half-time break starts when the game is seen leaving the first half; linked during the break, it's unknown.
+ */
+export function clockFrom365(detail: Detail365, previous: MatchClock | null, now: number): MatchClock | null {
+  if (detail.statusGroup !== 3 || !detail.status) return null
+  const period = clockPeriod365(detail.status.id, detail.status.text)
+  if (!period) return null
+  const breakStartedAt = period !== 'half-time'
+    ? null
+    : previous?.period === 'half-time' ? previous.breakStartedAt : previous?.period === 'first' ? now : null
+  if (!isRunningPeriod(period)) return { period, elapsed: null, running: false, at: now, breakStartedAt }
+  const precise = detail.status.precise
+  if (precise) return { period, elapsed: normalizeElapsed(period, precise.seconds), running: precise.running, at: now, breakStartedAt: null }
+  if (detail.gameTime <= 0) return { period, elapsed: null, running: false, at: now, breakStartedAt: null }
+  const minuteStart = normalizeElapsed(period, (detail.gameTime - 1) * 60)
+  const counted = previous && previous.period === period && previous.running ? clockElapsedAt(previous, now) : null
+  if (counted !== null && counted >= minuteStart && counted < minuteStart + 60) return previous
+  return { period, elapsed: minuteStart, running: true, at: now, breakStartedAt: null }
 }
 
 const MAX_PLAYERS = 120

@@ -251,23 +251,43 @@ async function run() {
       if (detailRequests === 1) return
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ game: {
-        id: 9001, statusGroup: 3, gameTime: 30, events: [],
+        id: 9001, statusGroup: 3, gameTime: 30, events: [], statusId: 6, statusText: 'Primeiro Tempo',
+        preciseGameTime: { minutes: 29, seconds: 10, autoProgress: true, clockDirection: 1 },
         homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0, imageVersion: 3 }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0, imageVersion: 1 },
       } }))
       return
     }
     if (request.url?.startsWith('/scoreboard/')) {
-      // William Hill scoreboard: second half for a few seconds after loading, then the match is over.
+      // William Hill scoreboard: second half for a few seconds after loading (the clock ticks each second), then the match is over.
+      // Event 7201 ends its first half and comes back for the second one; 7202 keeps playing its second half.
+      const eventId = new URL(request.url, 'http://fixture').searchParams.get('eventId')
+      const timeline = eventId === '7201'
+        ? `let period = 'FIRST_HALF'
+          let duration = 44 * 60
+          setTimeout(() => { period = 'HALF_TIME' }, 12000)
+          setTimeout(() => { period = 'SECOND_HALF'; duration = 45 * 60 }, 26000)`
+        : eventId === '7202' || eventId === '7301'
+          ? `let period = 'SECOND_HALF'
+          let duration = 75 * 60`
+          : `let period = 'SECOND_HALF'
+          let duration = 67 * 60 + 10
+          setTimeout(() => { period = 'GAME_FINISHED' }, 8000)`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(`<!doctype html><title>Scoreboard fixture</title><div>Time W</div><div>1 - 0</div><div>Time Z</div>
         <script>
-          let period = 'SECOND_HALF'
-          setTimeout(() => { period = 'GAME_FINISHED' }, 4000)
+          ${timeline}
           window.WH = { scoreboard: {
             diffusion: { isConnected: true },
             commentaries: { acceptIncident: () => true },
             statistics: { getPeriod: () => period, acceptIncident: () => true },
+            scores: { setClock: () => {} },
+            // Event 7301: a goal with only the shirt number (9) at 3 s; the line-up tells the name 3 s later.
+            lineups: { addEvents: () => {}, getPlayerName: (team, number) => ${eventId === '7301' ? "lineupKnown && team === 'HOME' && number === 9 ? 'Silva, Gabriel' : ''" : "''"} },
           } }
+          let lineupKnown = false
+          ${eventId === '7301' ? `setTimeout(() => window.WH.scoreboard.commentaries.acceptIncident([{ id: 'OB_EV7301#goal1', type: 'GOAL', teamType: 'HOME', timestamp: new Date().toISOString(), time: { duration: 3000 }, data: { PLAYER: '9' } }]), 3000)
+          setTimeout(() => { lineupKnown = true }, 7000)` : ''}
+          setInterval(() => { if (period === 'SECOND_HALF' || period === 'FIRST_HALF') window.WH.scoreboard.scores.setClock({ currentTime: { duration: duration++ } }) }, 1000)
         </script>`)
       return
     }
@@ -398,6 +418,15 @@ async function run() {
       throw new Error(`${error.message}; escudos pedidos: ${JSON.stringify(crestRequests)}`)
     })
     assert.ok(crestRequests.some((url) => url.endsWith('/v3/Competitors/1')), 'O escudo usa a versão de imagem do time.')
+    // Match clock from 365Scores (preciseGameTime): a box after the names, ticking every second.
+    await waitForExpression(target, `/^1T (29|30):\\d\\d$/.test(document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.clock ?? '')`, 9000).catch(async (error) => {
+      const label = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ ...document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset })`)
+      throw new Error(`${error.message}; rótulo: ${label}`)
+    })
+    const clockBefore = await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__label-clock-time').textContent`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__label-clock-time')?.textContent !== ${JSON.stringify(clockBefore)}`, 3000)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `[...document.querySelector('.panel[data-slot="1"] .panel__label-chip').children].slice(-2, -1)[0].className`),
+      'panel__label-clock', 'O relógio vem depois do 2º time, antes do ×.')
     // VAR review from the mobile game center: a blue badge while it runs, gone once the VAR decides.
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__var-text')?.textContent === "Revisão: pênalti · 26' Zofia Burzan"`, 15000).catch((error) => {
@@ -507,6 +536,27 @@ async function run() {
       { title: 'Brasil, Outra Liga (1)', items: ['18:30 🏀 Time I x Time J'] },
     ], 'O lote deve listar só jogos ao vivo, agrupados por liga (fase ao lado do jogo), sem marcadores de som e com 🏀 nos jogos de basquete.')
     assert.equal(batchList.ok, 'Abrir 2 jogos')
+    const byTime = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.bll-batch [data-order="time"]').click()
+      const result = {
+        pressed: document.querySelector('.bll-batch [data-order="time"]').getAttribute('aria-pressed'),
+        groups: document.querySelectorAll('.bll-batch__group').length,
+        items: [...document.querySelectorAll('.bll-batch__item')].map((item) => item.textContent.replace(/\\s+/g, ' ').trim()),
+        ok: document.querySelector('.bll-batch [data-ok]').textContent,
+        saved: localStorage.getItem('quadra:bll-batch-order'),
+      }
+      document.querySelector('.bll-batch [data-order="league"]').click()
+      return { ...result, back: document.querySelectorAll('.bll-batch__group').length, okBack: document.querySelector('.bll-batch [data-ok]').textContent }
+    })()`)
+    assert.deepEqual(byTime, {
+      pressed: 'true',
+      groups: 1,
+      items: ['17:00 Time E x Time F Brasil, Liga Teste, Grupo A', '17:00 Time G x Time H Brasil, Liga Teste, Grupo A', '18:30 🏀 Time I x Time J Brasil, Outra Liga'],
+      ok: 'Abrir 2 jogos',
+      saved: 'time',
+      back: 2,
+      okBack: 'Abrir 2 jogos',
+    }, 'Por horário deve mostrar uma lista só, com a competição ao lado, mantendo os jogos marcados.')
     const playerIdsBeforeBatch = (await fetchJson(`http://127.0.0.1:${port}/json`))
       .filter((candidate) => candidate.url.includes('/view/game-b')).map((candidate) => candidate.id).sort()
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-ok]').click()`)
@@ -814,6 +864,11 @@ async function run() {
       input.form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
     })()`)
     await openFinishingMatch(0, 30, `wh-7001?evento=${encodeURIComponent('Time W x Time Z')}&wh=7001`)
+    // William Hill clock: the board's tick (each second) in the second half; it goes away with the end of the match.
+    await waitForExpression(target, `/^2T 67:\\d\\d$/.test(document.querySelector('.panel[data-slot="0"] .panel__label')?.dataset.clock ?? '')`, 8000).catch(async (error) => {
+      const label = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ ...document.querySelector('.panel[data-slot="0"] .panel__label')?.dataset })`)
+      throw new Error(`${error.message}; rótulo: ${label}`)
+    })
     await waitForExpression(target, `/^Fim de jogo · fecha em \\d+ s$/.test(document.querySelector('.panel[data-slot="0"] [data-finished-count]')?.textContent ?? '')`, 30000)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-finished-keep]').click()`)
     assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `({ notice: Boolean(document.querySelector('.panel__finished')), panels: document.querySelectorAll('.panel').length })`),
@@ -878,7 +933,48 @@ async function run() {
     assert.ok(bllEndListLoads >= 2, 'A lista da BLL precisa ter mostrado o jogo ao vivo e depois encerrado.')
     assert.ok(!(await evaluate(target.webSocketDebuggerUrl,
       `[...document.querySelectorAll('.panel input[name="url"]')].some((input) => input.value.includes('game-bllend'))`)), 'Só o painel do jogo encerrado na BLL deve fechar.')
-    process.stdout.write(JSON.stringify({ chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    // Half-time: the user's highlight goes to its break and swaps places with the game being played (not the 🏈 one, which has no clock), then comes back.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-add-panel').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 3`)
+    await openFinishingMatch(2, 300, `wh-7202?evento=${encodeURIComponent('Time J x Time K')}&wh=7202`)
+    await openFinishingMatch(0, 300, `wh-7201?evento=${encodeURIComponent('Time H x Time I')}&wh=7201`)
+    await waitForExpression(target, `/^1T 44:\\d\\d$/.test(document.querySelector('.panel[data-slot="0"] .panel__label')?.dataset.clock ?? '')`, 12000)
+    // In "auto" mode the layout may already have made this panel big: the first ★ then turns highlights off, the next one sets it.
+    const highlightSlotZero = `(() => {
+      const panel = document.querySelector('.panel[data-slot="0"]')
+      if (!panel.classList.contains('is-highlighted') || document.querySelector('.layout-stage')?.dataset.layoutMode !== 'highlights') panel.querySelector('[data-highlight]').click()
+      return document.querySelector('.panel[data-slot="0"]').classList.contains('is-highlighted') && document.querySelector('.layout-stage').dataset.layoutMode === 'highlights'
+    })()`
+    if (!(await evaluate(target.webSocketDebuggerUrl, highlightSlotZero))) await evaluate(target.webSocketDebuggerUrl, highlightSlotZero)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"]')?.classList.contains('is-highlighted')`)
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="2"]')?.classList.contains('is-highlighted') && !document.querySelector('.panel[data-slot="0"]').classList.contains('is-highlighted')`, 20000).catch(async (error) => {
+      const state = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify([...document.querySelectorAll('.panel')].map((panel) => ({ slot: panel.dataset.slot, highlighted: panel.classList.contains('is-highlighted'), clock: panel.querySelector('.panel__label')?.dataset.clock })))`)
+      throw new Error(`${error.message}; painéis: ${state}`)
+    })
+    const halftimeBadge = JSON.parse(await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({
+      text: document.querySelector('.panel[data-slot="2"] .panel__halftime-text')?.textContent,
+      label: document.querySelector('.panel[data-slot="0"] .panel__label')?.dataset.label,
+    })`))
+    assert.equal(halftimeBadge.text, `Intervalo em ${halftimeBadge.label}`, 'O jogo que entrou no destaque diz de qual intervalo veio.')
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"]').classList.contains('is-highlighted')`), false,
+      'Jogo sem relógio (🏈) não entra no destaque do intervalo.')
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="0"]')?.classList.contains('is-highlighted') && !document.querySelector('.panel[data-slot="2"]').classList.contains('is-highlighted') && !document.querySelector('.panel__halftime')`, 25000).catch(async (error) => {
+      const state = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify([...document.querySelectorAll('.panel')].map((panel) => ({ slot: panel.dataset.slot, highlighted: panel.classList.contains('is-highlighted'), clock: panel.querySelector('.panel__label')?.dataset.clock })))`)
+      throw new Error(`${error.message}; painéis: ${state}`)
+    })
+    // A William Hill goal alerts at once with the shirt number only; the scorer's name joins the same alert when the line-up gives it.
+    await openFinishingMatch(1, 300, `wh-7301?evento=${encodeURIComponent('Time W x Time Z')}&wh=7301`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"]')?.classList.contains('panel--alert-goal')`, 20000)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__alert-player')?.textContent ?? ''`), '',
+      'O alerta do gol sai na hora, sem esperar o nome.')
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__alert-player')?.textContent === ' · Gabriel Silva'`, 15000).catch(async (error) => {
+      const alert = await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__alert')?.textContent ?? null`)
+      throw new Error(`${error.message}; alerta: ${JSON.stringify(alert)}`)
+    })
+    assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__alert')?.textContent ?? ''`), /GOL · Time W · 51' · 1 - 0 · Gabriel Silva/)
+    process.stdout.write(JSON.stringify({ scorerName: true, chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

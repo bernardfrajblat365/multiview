@@ -2,12 +2,16 @@ import type { BllEventsResult } from './bll-batch'
 import type { YoutubeChannelResult, YoutubeLivesResult } from './youtube-lives'
 import type { LayoutPayload } from './layout'
 import type { AlertKind } from './match-events'
+import type { MatchClock } from './match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 /** Crest data URLs in the feed's home/away order; null where there is none (both null: clear). */
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
-type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
+/** Match clock for the label; null: no clock (not started, over). */
+type MatchClockPayload = { panelId: string; clock: MatchClock | null }
+type MatchScorerPayload = { panelId: string; eventId: string; player: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string }
 
 type QuadraBridge = {
   checkForUpdate: () => Promise<UpdateCheckResult>
@@ -33,8 +37,10 @@ type QuadraBridge = {
   onBllsportError: (callback: (payload: { message: string; panelId?: string; url?: string }) => void) => () => void
   openMonitor: () => void
   onMatchEvent: (callback: (payload: MatchEventPayload) => void) => () => void
+  onMatchScorer: (callback: (payload: MatchScorerPayload) => void) => () => void
   onMatchScore: (callback: (payload: MatchScorePayload) => void) => () => void
   onMatchCrests: (callback: (payload: MatchCrestsPayload) => void) => () => void
+  onMatchClock: (callback: (payload: MatchClockPayload) => void) => () => void
   onMatchEnded: (callback: (payload: { panelId: string }) => void) => () => void
   onLiveMatch: (callback: (payload: LiveMatchStatus) => void) => () => void
   onLiveVar: (callback: (payload: LiveVarPayload) => void) => () => void

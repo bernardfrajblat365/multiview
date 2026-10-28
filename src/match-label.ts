@@ -183,22 +183,27 @@ function containRect(panelWidth: number, panelHeight: number, contentAspect: num
   return { x: 0, y: (1 - height) / 2, width, height }
 }
 
-function inlineWidthEm(home: string, away: string, hasScore: boolean, hasCrests: boolean) {
-  // Names + score pill ("2 – 1" with padding) or "x", plus the gaps between them, and a crest beside each name.
-  return CHAR_EM * (home.length + away.length) + (hasScore ? 4.2 : 1.2) + 1 + CHROME_EM + (hasCrests ? 2 * CREST_EM : 0)
+/** The match clock box ("2T 67:12") after the names: smaller text, padding and the gap before it. */
+function clockWidthEm(clockChars: number) {
+  return clockChars > 0 ? CHAR_EM * 0.82 * clockChars + 1.35 : 0
 }
 
-function stackedWidthEm(home: string, away: string, hasScore: boolean, hasCrests: boolean) {
-  return CHAR_EM * Math.max(home.length, away.length) + (hasScore ? 1.8 : 0) + CHROME_EM + (hasCrests ? CREST_EM : 0)
+function inlineWidthEm(home: string, away: string, hasScore: boolean, hasCrests: boolean, clockChars = 0) {
+  // Names + score pill ("2 – 1" with padding) or "x", plus the gaps between them, and a crest beside each name.
+  return CHAR_EM * (home.length + away.length) + (hasScore ? 4.2 : 1.2) + 1 + CHROME_EM + (hasCrests ? 2 * CREST_EM : 0) + clockWidthEm(clockChars)
+}
+
+function stackedWidthEm(home: string, away: string, hasScore: boolean, hasCrests: boolean, clockChars = 0) {
+  return CHAR_EM * Math.max(home.length, away.length) + (hasScore ? 1.8 : 0) + CHROME_EM + (hasCrests ? CREST_EM : 0) + clockWidthEm(clockChars)
 }
 
 type Fit = { layout: MatchLabelLayout; fontPx: number }
 
 /** Largest font (≤ preferred) that fits the full names in a horizontal box: one line first, then two rows. */
-function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean, hasCrests: boolean): Fit | null {
-  const inline = Math.min(preferredPx, heightPx / LINE_EM, widthPx / inlineWidthEm(home, away, hasScore, hasCrests))
+function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean, hasCrests: boolean, clockChars: number): Fit | null {
+  const inline = Math.min(preferredPx, heightPx / LINE_EM, widthPx / inlineWidthEm(home, away, hasScore, hasCrests, clockChars))
   if (inline >= MIN_FIT_FONT_PX) return { layout: 'inline', fontPx: inline }
-  const stacked = Math.min(preferredPx, heightPx / STACKED_HEIGHT_EM, widthPx / stackedWidthEm(home, away, hasScore, hasCrests))
+  const stacked = Math.min(preferredPx, heightPx / STACKED_HEIGHT_EM, widthPx / stackedWidthEm(home, away, hasScore, hasCrests, clockChars))
   if (stacked >= MIN_FIT_FONT_PX) return { layout: 'stacked', fontPx: stacked }
   return null
 }
@@ -223,12 +228,15 @@ export function placeMatchLabel(options: {
   score?: MatchScore | null
   /** Room for a team crest beside each name. */
   crests?: boolean
+  /** Characters of the match clock box after the names ("2T 67:12"); 0 or absent when there is none. */
+  clockChars?: number
 }): MatchLabelPlacement {
   const panelWidth = Math.max(1, options.panelWidth)
   const panelHeight = Math.max(1, options.panelHeight)
   const { home, away } = options
   const hasScore = Boolean(options.score)
   const hasCrests = Boolean(options.crests)
+  const clockChars = Math.max(0, options.clockChars ?? 0)
   const preferredPx = clamp(panelHeight * 0.05, MIN_FONT_PX, MAX_FONT_PX)
   const videoRect = options.videoRect ?? containRect(panelWidth, panelHeight, REFERENCE_ASPECT)
   const videoBottom = videoRect.y + videoRect.height
@@ -236,8 +244,8 @@ export function placeMatchLabel(options: {
   const topBarPx = videoRect.y * panelHeight
   const bottomBarPx = (1 - videoBottom) * panelHeight
 
-  const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore, hasCrests) : null
-  const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore, hasCrests) : null
+  const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore, hasCrests, clockChars) : null
+  const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore, hasCrests, clockChars) : null
   // A single line beats two rows of the same size; ties go to the bottom bar.
   const rank = (fit: Fit | null) => (fit ? fit.fontPx + (fit.layout === 'inline' ? 0.5 : 0) : -1)
   if (bottom && rank(bottom) >= rank(top)) {
@@ -262,11 +270,11 @@ export function placeMatchLabel(options: {
   const maxWidthPx = Math.max(1, videoRect.width * panelWidth)
   const overlayPreferred = clamp(panelHeight * 0.06, MIN_FIT_FONT_PX, MAX_OVERLAY_FONT_PX)
   let layout: MatchLabelLayout = 'inline'
-  let fontPx = Math.min(overlayPreferred, maxWidthPx / inlineWidthEm(home, away, hasScore, hasCrests))
+  let fontPx = Math.min(overlayPreferred, maxWidthPx / inlineWidthEm(home, away, hasScore, hasCrests, clockChars))
   if (fontPx < Math.min(overlayPreferred, 12)) {
     layout = 'stacked'
     // Never below the minimum: very long names wrap inside their row instead of being cut.
-    fontPx = Math.max(MIN_FIT_FONT_PX, Math.min(overlayPreferred, maxWidthPx / stackedWidthEm(home, away, hasScore, hasCrests)))
+    fontPx = Math.max(MIN_FIT_FONT_PX, Math.min(overlayPreferred, maxWidthPx / stackedWidthEm(home, away, hasScore, hasCrests, clockChars)))
   }
   // Extra height above the text is the gradient's fade-in.
   const heightPx = (layout === 'inline' ? LINE_EM + OVERLAY_FADE_EM : STACKED_HEIGHT_EM + OVERLAY_FADE_EM) * fontPx

@@ -3,11 +3,16 @@ import type { BllEventsResult } from '../src/bll-batch'
 import type { YoutubeChannelResult, YoutubeLivesResult } from '../src/youtube-lives'
 import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
+import type { MatchClock } from '../src/match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
-type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
+/** Match clock for the label; null: no clock (not started, over). */
+type MatchClockPayload = { panelId: string; clock: MatchClock | null }
+/** A goal's scorer, known after its alert went out. */
+type MatchScorerPayload = { panelId: string; eventId: string; player: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string }
 
 const quadra = {
   ready: () => ipcRenderer.send('quadra:ready'),
@@ -69,6 +74,11 @@ const quadra = {
     ipcRenderer.on('quadra:match-event', listener)
     return () => ipcRenderer.removeListener('quadra:match-event', listener)
   },
+  onMatchScorer: (callback: (payload: MatchScorerPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: MatchScorerPayload) => callback(payload)
+    ipcRenderer.on('quadra:match-scorer', listener)
+    return () => ipcRenderer.removeListener('quadra:match-scorer', listener)
+  },
   onMatchEnded: (callback: (payload: { panelId: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string }) => callback(payload)
     ipcRenderer.on('quadra:match-ended', listener)
@@ -94,6 +104,11 @@ const quadra = {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchCrestsPayload) => callback(payload)
     ipcRenderer.on('quadra:match-crests', listener)
     return () => ipcRenderer.removeListener('quadra:match-crests', listener)
+  },
+  onMatchClock: (callback: (payload: MatchClockPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: MatchClockPayload) => callback(payload)
+    ipcRenderer.on('quadra:match-clock', listener)
+    return () => ipcRenderer.removeListener('quadra:match-clock', listener)
   },
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; title: string }) => callback(payload)

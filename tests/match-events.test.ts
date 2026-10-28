@@ -6,6 +6,7 @@ import {
   createScannerState,
   detectMatchEnd,
   extractWilliamHillId,
+  formatPlayerName,
   filterNew,
   HISTORY_GRACE_MS,
   type RawIncident,
@@ -186,7 +187,7 @@ test('preferências: valores não booleanos, JSON null e chaves extras', () => {
     JSON.stringify({ soundId: 'gongo', volume: 11, kinds: { goal: false, extra: true } }),
     ALERT_SOUND_IDS,
   )
-  assert.deepEqual(extra, { sounds: { ...DEFAULT_ALERT_SETTINGS.sounds, goal: 'gongo', penalty: 'gongo', red: 'gongo', yellow: 'gongo', var: 'gongo' }, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds, goal: false }, autoHighlight: true, autoHighlightSec: 45, scoreDelaySec: 0, closeFinishedSec: 60 })
+  assert.deepEqual(extra, { sounds: { ...DEFAULT_ALERT_SETTINGS.sounds, goal: 'gongo', penalty: 'gongo', red: 'gongo', yellow: 'gongo', var: 'gongo' }, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds, goal: false }, autoHighlight: true, autoHighlightSec: 45, halftimeSwap: true, scoreDelaySec: 0, closeFinishedSec: 60 })
 })
 
 test('detectMatchEnd avisa o fim uma vez quando a partida estava ao vivo', () => {
@@ -285,4 +286,19 @@ test('classifyIncident guarda a camisa e o nome do jogador quando o feed os traz
   assert.equal('shirt' in (without ?? {}), false)
   assert.equal('player' in (without ?? {}), false)
   assert.equal(classifyIncident({ ...incident('s3', 'GOAL'), shirt: 0 })?.shirt, undefined)
+})
+
+test('troca do destaque no intervalo vem ligada e respeita o salvo', () => {
+  assert.equal(DEFAULT_ALERT_SETTINGS.halftimeSwap, true)
+  assert.equal(parseAlertSettings(JSON.stringify({ halftimeSwap: false }), ALERT_SOUND_IDS).halftimeSwap, false)
+  assert.equal(parseAlertSettings(JSON.stringify({ halftimeSwap: 'sim' }), ALERT_SOUND_IDS).halftimeSwap, true)
+})
+
+test('formatPlayerName vira "Nome Sobrenome" e usa inicial com ponto', () => {
+  assert.equal(formatPlayerName('Saliakas, Manolis'), 'Manolis Saliakas')
+  assert.equal(formatPlayerName('Frandsen, M'), 'M. Frandsen')
+  assert.equal(formatPlayerName('Frandsen, M.'), 'M. Frandsen')
+  assert.equal(formatPlayerName('Jun Ichimori'), 'Jun Ichimori')
+  assert.equal(formatPlayerName('  Silva,   '), 'Silva')
+  assert.equal(formatPlayerName(',X'), ',X')
 })

@@ -1,26 +1,40 @@
 import { ALERT_SOUNDS, ALERT_SOUND_IDS, getAlertSound, playAlertSound } from './alert-sounds'
 import { AUTO_HIGHLIGHT_OPTIONS, CLOSE_FINISHED_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
-import { ALERT_KINDS, type AlertKind } from './match-events'
+import { ALERT_KINDS, formatPlayerName, type AlertKind } from './match-events'
 import type { LiveVarPayload, VarReviewKind } from './livescore-365'
 
-export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
+export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string }
 
 const GOAL_HOLD_MS = 45_000
 const OTHER_HOLD_MS = 12_000
 const KIND_ICON: Record<AlertKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', yellow: '🟨', var: '📺', touchdown: '🏈', 'field-goal': '🥅' }
 const KIND_NAME: Record<AlertKind, string> = { goal: 'Gol', penalty: 'Pênalti', red: 'Cartão vermelho', yellow: 'Cartão amarelo', var: 'VAR', touchdown: 'Touchdown', 'field-goal': 'Field goal' }
+// Checkbox labels: the 🟥/🟨 icon already says it's a card, so the seven kinds fit in one row.
+const KIND_SHORT: Record<AlertKind, string> = { ...KIND_NAME, red: 'Vermelho', yellow: 'Amarelo' }
 
 export type VarReviewState = NonNullable<LiveVarPayload['review']>
 const VAR_REVIEW_ICON: Record<VarReviewKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', other: '📺' }
 const VAR_REVIEW_NAME: Record<VarReviewKind, string> = { goal: 'gol', penalty: 'pênalti', red: 'cartão vermelho', other: 'lance' }
 
-type ActiveAlert = { kind: AlertKind; text: string; scorer: 'home' | 'away' | null; timer: ReturnType<typeof setTimeout> }
+type ActiveAlert = {
+  kind: AlertKind
+  text: string
+  scorer: 'home' | 'away' | null
+  /** Id of the feed incident, to match a scorer name that arrives later. */
+  eventId: string
+  /** Who scored, once known: filled in when the name arrives; it never extends the alert. */
+  player: string
+  timer: ReturnType<typeof setTimeout>
+}
 
 let settings: AlertSettings = loadAlertSettings(ALERT_SOUND_IDS)
 const active = new Map<string, ActiveAlert>()
 /** VAR reviews in progress per panel: shown until the 365Scores feed drops them. */
 const varReviews = new Map<string, VarReviewState>()
 const listeners = new Set<(panelId: string, payload: MatchEventPayload) => void>()
+/** Scorer names that arrived, by incident id: an alert held back by the panel delay picks its name up when it shows. */
+const scorerNames = new Map<string, string>()
+const MAX_SCORER_NAMES = 200
 const settingsListeners = new Set<(settings: AlertSettings) => void>()
 
 function escapeText(value: string) {
@@ -73,13 +87,14 @@ function soundPickerHtml(idPrefix: string, kind: AlertKind) {
 export function alertControlsHtml(idPrefix: string): string {
   return `<div class="alert-controls" data-alert-controls>
     <fieldset class="alert-kinds"><legend>Alertar em · som</legend>
-      ${ALERT_KINDS.map((kind) => `<div class="alert-kind"><label><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_NAME[kind]}</label>${soundPickerHtml(idPrefix, kind)}</div>`).join('')}
+      ${ALERT_KINDS.map((kind) => `<div class="alert-kind"><label title="${KIND_NAME[kind]}"><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_SHORT[kind]}</label>${soundPickerHtml(idPrefix, kind)}</div>`).join('')}
     </fieldset>
     <div class="alert-auto"><label><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol, touchdown ou VAR (3+ telas) por</label>
       <select data-auto-highlight-sec aria-label="Tempo do destaque do gol"${settings.autoHighlight ? '' : ' disabled'}>
         ${AUTO_HIGHLIGHT_OPTIONS.map((value) => `<option value="${value}"${settings.autoHighlightSec === value ? ' selected' : ''}>${durationLabel(value)}</option>`).join('')}
       </select>
     </div>
+    <div class="alert-auto"><label title="Quando um jogo seu em destaque vai para o intervalo, ele troca de lugar com o jogo rolando mais interessante e volta quando o 2º tempo começa (3+ telas)"><input type="checkbox" data-halftime-swap${settings.halftimeSwap ? ' checked' : ''} /> Trocar o destaque no intervalo</label></div>
     <label class="alert-score-delay" title="O feed costuma chegar antes do vídeo; o atraso evita ver o gol no placar antes de vê-lo na tela. Nas lives do YouTube vale também para alertas e destaque, e cada painel pode ter o seu">Placar no painel
       <select data-score-delay>
         ${[null, ...SCORE_DELAY_OPTIONS].map((value) => `<option value="${value ?? 'off'}"${settings.scoreDelaySec === value ? ' selected' : ''}>${scoreDelayLabel(value)}</option>`).join('')}
@@ -163,6 +178,11 @@ export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
       saveAlertSettings(settings)
       if (autoSec) autoSec.disabled = !settings.autoHighlight
     }, { signal })
+    controls.querySelector<HTMLInputElement>('[data-halftime-swap]')?.addEventListener('change', (event) => {
+      settings = { ...settings, halftimeSwap: (event.target as HTMLInputElement).checked }
+      saveAlertSettings(settings)
+      for (const listener of settingsListeners) listener(settings)
+    }, { signal })
     autoSec?.addEventListener('change', () => {
       settings = { ...settings, autoHighlightSec: Number(autoSec.value) }
       saveAlertSettings(settings)
@@ -204,6 +224,15 @@ function renderAlertText(label: HTMLElement, alert: ActiveAlert) {
     return span
   }
   label.replaceChildren(before, number(home, alert.scorer === 'home'), separator, number(away, alert.scorer === 'away'))
+}
+
+/** " · M. Frandsen" after the alert text, as its own span so it can be styled and updated alone. */
+function appendPlayer(label: HTMLElement, player: string) {
+  if (!player) return
+  const span = document.createElement('span')
+  span.className = 'panel__alert-player'
+  span.textContent = ` · ${formatPlayerName(player)}`
+  label.append(span)
 }
 
 export function varReviewText(review: VarReviewState) {
@@ -291,10 +320,11 @@ export function applyAlertStates(root: ParentNode) {
     }
     // The goal's Fixar/Voltar controls live inside the badge, so only the text span is rewritten.
     const label = overlay.querySelector<HTMLElement>('.panel__alert-text')!
-    const key = `${alert.scorer ?? ''}|${alert.text}`
+    const key = `${alert.scorer ?? ''}|${alert.text}|${alert.player}`
     if (label.dataset.key !== key) {
       label.dataset.key = key
       renderAlertText(label, alert)
+      appendPlayer(label, alert.player)
     }
   }
 }
@@ -306,18 +336,38 @@ export function clearAllAlerts(root: ParentNode) {
   applyAlertStates(root)
 }
 
-/** Returns true when the event was shown (type enabled and panel present). */
-export function handleMatchEvent(payload: MatchEventPayload, root: ParentNode, panelExists: (panelId: string) => boolean): boolean {
+/**
+ * A goal's scorer arrived after its alert. It joins the alert on screen (the timer keeps running, so name,
+ * alert and highlight all leave together), or waits for an alert that is still held back by the panel delay.
+ */
+export function handleScorerName(panelId: string, eventId: string, player: string, root: ParentNode) {
+  if (!eventId || !player.trim()) return
+  if (scorerNames.size >= MAX_SCORER_NAMES) scorerNames.delete(scorerNames.keys().next().value!)
+  scorerNames.set(eventId, player.trim().slice(0, 80))
+  const alert = active.get(panelId)
+  if (!alert || alert.eventId !== eventId || alert.player) return
+  alert.player = scorerNames.get(eventId)!
+  applyAlertStates(root)
+}
+
+/**
+ * Returns true when the event was shown (type enabled and panel present). `goalHoldMs` replaces the usual
+ * time of a goal alert, so the alert can leave together with the goal highlight.
+ */
+export function handleMatchEvent(payload: MatchEventPayload, root: ParentNode, panelExists: (panelId: string) => boolean, goalHoldMs?: number): boolean {
   if (!settings.kinds[payload.kind] || !panelExists(payload.panelId)) return false
   const score = payload.score ? ` · ${payload.score}` : ''
   const note = payload.note ? ` (${payload.note})` : payload.ownGoal ? ' (contra)' : ''
   const text = `${KIND_ICON[payload.kind]} ${payload.label}${note}${payload.kind === 'yellow' || payload.kind === 'red' || payload.kind === 'penalty' ? '' : score}`
   const previous = active.get(payload.panelId)
   if (previous) clearTimeout(previous.timer)
-  const hold = payload.kind === 'goal' || payload.kind === 'touchdown' ? GOAL_HOLD_MS : OTHER_HOLD_MS
+  const hold = payload.kind === 'goal' || payload.kind === 'touchdown' ? goalHoldMs ?? GOAL_HOLD_MS : OTHER_HOLD_MS
+  const scorerKnown = payload.kind === 'goal' || payload.kind === 'touchdown' || payload.kind === 'field-goal'
   active.set(payload.panelId, {
     kind: payload.kind,
     text,
+    eventId: payload.eventId ?? '',
+    player: scorerKnown ? payload.player?.trim() || (payload.eventId ? scorerNames.get(payload.eventId) : '') || '' : '',
     scorer: (payload.kind === 'goal' || payload.kind === 'touchdown' || payload.kind === 'field-goal') && !payload.ownGoal && (payload.team === 'home' || payload.team === 'away') ? payload.team : null,
     timer: setTimeout(() => clearAlert(payload.panelId, root), hold),
   })

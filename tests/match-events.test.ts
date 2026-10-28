@@ -276,3 +276,13 @@ test('rótulo do alerta sem time, com time e com minuto 0', () => {
   assert.equal(alertLabel('penalty', 'Flamengo', 0), 'PÊNALTI · Flamengo')
   assert.equal(alertLabel('goal', '', 45), "GOL · 45'")
 })
+
+test('classifyIncident guarda a camisa e o nome do jogador quando o feed os traz', () => {
+  const withShirt = classifyIncident({ ...incident('s1', 'GOAL'), shirt: '10', playerName: '  Frandsen, M ' })
+  assert.equal(withShirt?.shirt, 10)
+  assert.equal(withShirt?.player, 'Frandsen, M')
+  const without = classifyIncident({ ...incident('s2', 'GOAL'), shirt: 'abc', playerName: '' })
+  assert.equal('shirt' in (without ?? {}), false)
+  assert.equal('player' in (without ?? {}), false)
+  assert.equal(classifyIncident({ ...incident('s3', 'GOAL'), shirt: 0 })?.shirt, undefined)
+})

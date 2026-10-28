@@ -9,6 +9,8 @@ import {
   dropRepeatedVar,
   matchGame,
   mergeGameLists,
+  scorerFromDetail,
+  teamSimilarity,
   parseGameDetail,
   parseGameList,
   parseRedCards,
@@ -178,7 +180,7 @@ export function createLiveScoreLinker(options: {
   function emit(poller: Poller, incidents: MatchIncident[], fromCommentary = false) {
     for (const incident of dropRepeatedVar(poller.state, incidents)) {
       const teamName = incident.team === 'home' ? poller.home : incident.team === 'away' ? poller.away : ''
-      logScanner(`[${poller.label}] ${incident.kind.toUpperCase()} ${incident.team}${incident.minute ? ` ${incident.minute}'` : ''} ${teamName}${incident.note ? ` (${incident.note})` : ''}${fromCommentary ? ' · narração' : ''}`, '365')
+      logScanner(`[${poller.label}] ${incident.kind.toUpperCase()} ${incident.team}${incident.minute ? ` ${incident.minute}'` : ''} ${teamName}${incident.note ? ` (${incident.note})` : ''}${incident.player && (incident.kind === 'goal' || incident.kind === 'red') ? ` — ${incident.player}` : ''}${fromCommentary ? ' · narração' : ''}`, '365')
       options.onEvent({
         panelIds: [...poller.panelIds],
         incident,
@@ -398,7 +400,24 @@ export function createLiveScoreLinker(options: {
     for (const poller of [...pollers.values()]) stopPoller(poller)
   }
 
-  return { consider, choose, detach, destroyAll, listGames, size: () => pollers.size }
+  /**
+   * Fallback for William Hill goals whose line-up gave no name: finds the same game in 365Scores by the
+   * two team names and reads who scored near that minute. Null when the game, the goal or the name isn't there (yet).
+   */
+  async function findScorer(query: { home: string; away: string; team: 'home' | 'away'; minute: number }): Promise<string | null> {
+    const found = matchGame(`${query.home} x ${query.away}`, await listGames(), Date.now())
+    if (found.status !== 'matched') return null
+    const detail = parseGameDetail(await fetchJson(apiUrl('/web/game/', { gameId: String(found.game.id) }), DETAIL_TIMEOUT_MS))
+    if (!detail) return null
+    // The two feeds may list the teams in opposite order: follow the names.
+    const straight = Math.min(teamSimilarity(query.home, detail.home.name), teamSimilarity(query.away, detail.away.name))
+    const reversed = Math.min(teamSimilarity(query.home, detail.away.name), teamSimilarity(query.away, detail.home.name))
+    const flip = reversed > straight
+    const side = flip ? (query.team === 'home' ? 'away' : 'home') : query.team
+    return scorerFromDetail(detail, side, query.minute)
+  }
+
+  return { consider, choose, detach, destroyAll, listGames, findScorer, size: () => pollers.size }
 }
 
 /** Cheap pre-check so pages without "A x B" in the title never hit the API. */

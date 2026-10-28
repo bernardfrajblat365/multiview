@@ -17,8 +17,10 @@ import {
   parsePbpFeed,
   parseRedCards,
   pbpFeedUrl,
+  playerOf,
   QUICK_RETRIES,
   retryDelayMs,
+  scorerFromDetail,
   SLOW_DETAIL_TIMEOUT_MS,
   sourceKeyOf,
   teamQualifiers,
@@ -844,4 +846,63 @@ test('parseGameDetail guarda imageVersion em cada lado do jogo', () => {
   assert.ok(detail)
   assert.equal(detail.home.imageVersion, 4)
   assert.equal(detail.away.imageVersion, 0)
+})
+
+// Scorer of a goal -----------------------------------------------------------
+
+function scorerRaw() {
+  return {
+    game: {
+      id: 7,
+      statusGroup: 3,
+      homeCompetitor: { id: 10, name: 'Casa', score: 2 },
+      awayCompetitor: { id: 20, name: 'Fora', score: 0 },
+      members: [
+        { id: 111, name: 'Jun Ichimori', shortName: 'J. Ichimori', competitorId: 10 },
+        { id: 222, name: '', shortName: 'Hayakawa', competitorId: 10 },
+        { id: 333, shortName: 'Sem Nome' },
+        { id: 'x', name: 'Inválido' },
+      ],
+      events: [
+        { order: 1, gameTime: 39, competitorId: 10, playerId: 111, eventType: { id: 1, subTypeId: 1 } },
+        { order: 2, gameTime: 66, competitorId: 10, playerId: 222, eventType: { id: 1, subTypeId: 1 } },
+        { order: 3, gameTime: 70, competitorId: 20, playerId: 999, eventType: { id: 1, subTypeId: 1 } },
+        { order: 4, gameTime: 71, competitorId: 20, eventType: { id: 2, subTypeId: -1 } },
+      ],
+    },
+  }
+}
+
+test('parseGameDetail lê os jogadores (nome ou nome curto) e o playerId dos eventos', () => {
+  const detail = parseGameDetail(scorerRaw())
+  assert.ok(detail)
+  assert.equal(detail.players?.get(111), 'Jun Ichimori')
+  assert.equal(detail.players?.get(222), 'Hayakawa')
+  assert.equal(detail.players?.get(333), 'Sem Nome')
+  assert.equal(detail.players?.size, 3)
+  assert.equal(detail.events?.[0].playerId, 111)
+  assert.equal(detail.events?.[3].playerId, undefined)
+})
+
+test('playerOf: nome do jogador do evento, ou null sem id ou sem cadastro', () => {
+  const detail = parseGameDetail(scorerRaw())!
+  assert.equal(playerOf(detail.events![0], detail), 'Jun Ichimori')
+  assert.equal(playerOf(detail.events![2], detail), null)
+  assert.equal(playerOf(detail.events![3], detail), null)
+})
+
+test('classifyEvent365 leva o nome do jogador no lance', () => {
+  const detail = parseGameDetail(scorerRaw())!
+  assert.equal(classifyEvent365(detail.events![0], detail)?.player, 'Jun Ichimori')
+  assert.equal(classifyEvent365(detail.events![2], detail)?.player, undefined)
+})
+
+test('scorerFromDetail: gol do lado certo mais próximo do minuto, dentro de 2 min', () => {
+  const detail = parseGameDetail(scorerRaw())!
+  assert.equal(scorerFromDetail(detail, 'home', 39), 'Jun Ichimori')
+  assert.equal(scorerFromDetail(detail, 'home', 40), 'Jun Ichimori')
+  assert.equal(scorerFromDetail(detail, 'home', 65), 'Hayakawa')
+  assert.equal(scorerFromDetail(detail, 'home', 50), null)
+  assert.equal(scorerFromDetail(detail, 'away', 70), null, 'gol sem nome cadastrado')
+  assert.equal(scorerFromDetail({ ...detail, events: null }, 'home', 39), null)
 })

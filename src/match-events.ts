@@ -9,6 +9,10 @@ export type RawIncident = {
   teamType?: unknown
   timestamp?: unknown
   time?: { duration?: unknown } | null
+  /** Shirt number the William Hill feed puts in `data.PLAYER`; the name comes from the line-up. */
+  shirt?: unknown
+  /** Player name when the feed already carries one (`scorer` / `player`). */
+  playerName?: unknown
 }
 
 export type MatchIncident = {
@@ -20,6 +24,10 @@ export type MatchIncident = {
   timestamp: number
   /** Extra detail shown in parentheses ("pênalti", "perdido", "gol anulado"); empty when none. */
   note: string
+  /** Shirt number from the William Hill feed, when it gave one. */
+  shirt?: number
+  /** Name of the player behind the incident (goal scorer, carded player), once known. */
+  player?: string
 }
 
 export type ScannerState = {
@@ -53,6 +61,8 @@ export function classifyIncident(raw: RawIncident): MatchIncident | null {
   const team = raw.teamType === 'HOME' ? 'home' : raw.teamType === 'AWAY' ? 'away' : 'match'
   const duration = Number(raw.time?.duration)
   const timestamp = typeof raw.timestamp === 'string' ? Date.parse(raw.timestamp) : Number.NaN
+  const shirt = Number(raw.shirt)
+  const playerName = typeof raw.playerName === 'string' ? raw.playerName.trim().slice(0, 80) : ''
   return {
     id: raw.id,
     kind,
@@ -61,6 +71,8 @@ export function classifyIncident(raw: RawIncident): MatchIncident | null {
     ownGoal: typeof raw.subType === 'string' && /OWN/i.test(raw.subType),
     timestamp: Number.isFinite(timestamp) ? timestamp : 0,
     note: '',
+    ...(Number.isSafeInteger(shirt) && shirt > 0 && shirt < 1000 ? { shirt } : {}),
+    ...(playerName ? { player: playerName } : {}),
   }
 }
 

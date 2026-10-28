@@ -7,7 +7,7 @@ import type { LiveMatchStatus } from './livescore-365'
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 /** Crest data URLs in the feed's home/away order; null where there is none (both null: clear). */
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
-type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
 
 type QuadraBridge = {
   checkForUpdate: () => Promise<UpdateCheckResult>

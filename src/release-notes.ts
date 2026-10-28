@@ -6,6 +6,14 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.7',
+    label: '1.1.7',
+    notes: [
+      { title: 'Um som para cada alerta', body: 'Em "Alertar em", escolha o som do gol, do pênalti, de cada cartão e do VAR.' },
+      { title: 'NFL com placar e alertas', body: 'Jogos 🏈 da BLL mostram times, escudos e placar, e avisam touchdown e field goal.' },
+    ],
+  },
+  {
     version: '1.1.6',
     label: '1.1.6',
     notes: [

@@ -1,9 +1,8 @@
 import { ALERT_KINDS, type AlertKind } from './match-events.ts'
 
 export type AlertSettings = {
-  /** Sound of every alert except goals. */
-  soundId: string
-  goalSoundId: string
+  /** Sound played for each kind of alert. */
+  sounds: Record<AlertKind, string>
   kinds: Record<AlertKind, boolean>
   /** Promote the panel with a goal to a highlight for `autoHighlightSec` (3+ panels). */
   autoHighlight: boolean
@@ -21,12 +20,15 @@ export const SCORE_DELAY_OPTIONS: readonly number[] = [0, 10, 20, 30, 45, 60]
 /** Per-panel delay for YouTube lives, which run 20 s to 2 min behind the 365Scores data. */
 export const LIVE_DELAY_OPTIONS: readonly number[] = [0, 10, 20, 30, 45, 60, 90, 120]
 
+type LegacySounds = { soundId?: unknown; goalSoundId?: unknown }
+/** Kinds that existed when `soundId` was the one sound; newer kinds (American football) start from their defaults. */
+const LEGACY_KINDS: readonly AlertKind[] = ['goal', 'penalty', 'red', 'yellow', 'var']
+
 const STORAGE_KEY = 'quadra:alert-settings'
 
 export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
-  soundId: 'apito-arbitro',
-  goalSoundId: 'gol-torcida',
-  kinds: { goal: true, penalty: true, red: true, yellow: false, var: true },
+  sounds: { goal: 'gol-torcida', penalty: 'apito-arbitro', red: 'apito-arbitro', yellow: 'apito-arbitro', var: 'apito-arbitro', touchdown: 'gol-torcida', 'field-goal': 'apito-arbitro' },
+  kinds: { goal: true, penalty: true, red: true, yellow: false, var: true, touchdown: true, 'field-goal': true },
   autoHighlight: true,
   autoHighlightSec: 45,
   scoreDelaySec: 0,
@@ -34,14 +36,21 @@ export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
 }
 
 export function parseAlertSettings(raw: string | null, validSoundIds: readonly string[]): AlertSettings {
-  const next: AlertSettings = { soundId: DEFAULT_ALERT_SETTINGS.soundId, goalSoundId: DEFAULT_ALERT_SETTINGS.goalSoundId, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds }, autoHighlight: DEFAULT_ALERT_SETTINGS.autoHighlight, autoHighlightSec: DEFAULT_ALERT_SETTINGS.autoHighlightSec, scoreDelaySec: DEFAULT_ALERT_SETTINGS.scoreDelaySec, closeFinishedSec: DEFAULT_ALERT_SETTINGS.closeFinishedSec }
+  const next: AlertSettings = { sounds: { ...DEFAULT_ALERT_SETTINGS.sounds }, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds }, autoHighlight: DEFAULT_ALERT_SETTINGS.autoHighlight, autoHighlightSec: DEFAULT_ALERT_SETTINGS.autoHighlightSec, scoreDelaySec: DEFAULT_ALERT_SETTINGS.scoreDelaySec, closeFinishedSec: DEFAULT_ALERT_SETTINGS.closeFinishedSec }
   if (!raw) return next
   try {
-    const parsed = JSON.parse(raw) as Partial<AlertSettings> | null
-    if (parsed && typeof parsed.soundId === 'string' && validSoundIds.includes(parsed.soundId)) next.soundId = parsed.soundId
-    // Settings saved before the goal had its own sound keep playing the one sound the user picked.
-    if (parsed && typeof parsed.goalSoundId === 'string' && validSoundIds.includes(parsed.goalSoundId)) next.goalSoundId = parsed.goalSoundId
-    else if (parsed && parsed.goalSoundId === undefined && typeof parsed.soundId === 'string' && validSoundIds.includes(parsed.soundId)) next.goalSoundId = parsed.soundId
+    const parsed = JSON.parse(raw) as (Partial<AlertSettings> & LegacySounds) | null
+    const valid = (id: unknown): id is string => typeof id === 'string' && validSoundIds.includes(id)
+    // Older settings had one sound for every alert (`soundId`), then a separate goal sound (`goalSoundId`).
+    if (parsed && !parsed.sounds && valid(parsed.soundId)) {
+      for (const kind of LEGACY_KINDS) next.sounds[kind] = parsed.soundId
+      if (parsed.goalSoundId !== undefined) next.sounds.goal = DEFAULT_ALERT_SETTINGS.sounds.goal
+    }
+    if (parsed && !parsed.sounds && valid(parsed.goalSoundId)) next.sounds.goal = parsed.goalSoundId
+    for (const kind of ALERT_KINDS) {
+      const saved = parsed?.sounds?.[kind]
+      if (valid(saved)) next.sounds[kind] = saved
+    }
     if (typeof parsed?.autoHighlight === 'boolean') next.autoHighlight = parsed.autoHighlight
     if (typeof parsed?.autoHighlightSec === 'number' && AUTO_HIGHLIGHT_OPTIONS.includes(parsed.autoHighlightSec)) next.autoHighlightSec = parsed.autoHighlightSec
     if (parsed?.scoreDelaySec === null) next.scoreDelaySec = null

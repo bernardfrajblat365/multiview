@@ -2,8 +2,8 @@ import { BLL_ENDED_SITUATION, BLL_LIVE_SITUATION } from './bll-end.ts'
 import { sportOfBllName } from './livescore-365.ts'
 import { stripSoundMarkers } from './match-label.ts'
 
-/** `basketball`: the BLL name started with 🏀 (the emoji itself is stripped from `name`). */
-export type BllEvent = { id: string; name: string; competition: string; time: string; live: boolean; url: string; basketball?: boolean }
+/** `basketball` / `americanFootball`: the BLL name started with 🏀 / 🏈 (the emoji itself is stripped from `name`). */
+export type BllEvent = { id: string; name: string; competition: string; time: string; live: boolean; url: string; basketball?: boolean; americanFootball?: boolean }
 export type BllEventGroup<T extends BllEvent = BllEvent> = { competition: string; events: T[] }
 export type BllEventsResult =
   | { status: 'ok'; events: BllEvent[] }
@@ -50,6 +50,7 @@ export function parseBllEvents(raw: unknown, toUrl: (id: string) => string | nul
       live: item.situation === BLL_LIVE_SITUATION,
       url,
       ...(sportOfBllName(rawName) === 'basketball' ? { basketball: true } : {}),
+      ...(sportOfBllName(rawName) === 'american-football' ? { americanFootball: true } : {}),
     })
   }
   return events

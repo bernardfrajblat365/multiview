@@ -1,5 +1,6 @@
-export type AlertKind = 'goal' | 'penalty' | 'red' | 'yellow' | 'var'
-export const ALERT_KINDS: readonly AlertKind[] = ['goal', 'penalty', 'red', 'yellow', 'var']
+/** `touchdown` and `field-goal`: American football (NFL), from 365Scores. */
+export type AlertKind = 'goal' | 'penalty' | 'red' | 'yellow' | 'var' | 'touchdown' | 'field-goal'
+export const ALERT_KINDS: readonly AlertKind[] = ['goal', 'penalty', 'red', 'yellow', 'var', 'touchdown', 'field-goal']
 
 export type RawIncident = {
   id?: unknown
@@ -127,6 +128,8 @@ const KIND_LABELS: Record<AlertKind, string> = {
   red: 'CARTÃO VERMELHO',
   yellow: 'CARTÃO AMARELO',
   var: 'VAR',
+  touchdown: 'TOUCHDOWN',
+  'field-goal': 'FIELD GOAL',
 }
 
 export function alertLabel(kind: AlertKind, teamName: string, minute: number): string {

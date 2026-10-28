@@ -652,7 +652,7 @@ function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: Liv
   button.dataset.key = key
   const effective = own ?? globalSec ?? 0
   const defaultLabel = globalSec === null ? 'Padrão (placar oculto, alertas na hora)' : `Padrão (${liveDelayLabel(globalSec)})`
-  const coverage = live.sport === 'basketball' ? ' · basquete, só placar' : live.coverage === 'score' ? ' · só placar' : ''
+  const coverage = live.sport === 'basketball' ? ' · basquete, só placar' : live.sport === 'american-football' ? ' · futebol americano, touchdowns e field goals' : live.coverage === 'score' ? ' · só placar' : ''
   button.title = `Atraso do placar e dos alertas deste painel — 365Scores: ${live.label ?? ''}${coverage}`
   button.classList.toggle('is-custom', own !== undefined)
   button.innerHTML = `<svg class="panel__delay-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9" r="5.5" /><path d="M8 6.2V9l1.8 1.3M6.3 1.8h3.4" /></svg><span class="panel__delay-value" aria-hidden="true">${effective} s</span><select data-live-delay aria-label="Atraso do placar e dos alertas deste painel">
@@ -1131,7 +1131,7 @@ function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean
     ${group.events.map((event) => {
       const isOpen = open.has(event.url)
       return `<label class="bll-batch__item${isOpen ? ' is-open' : ''}"><input type="checkbox" data-url="${escapeHtml(event.url)}" data-group-item="${groupIndex}"${isOpen ? ' checked disabled' : ''}>
-        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}${event.basketball ? '<span class="bll-batch__sport" title="Basquete" aria-label="Basquete">🏀</span> ' : ''}<span>${escapeHtml(event.name)}</span>${event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
+        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}${event.basketball ? '<span class="bll-batch__sport" title="Basquete" aria-label="Basquete">🏀</span> ' : ''}${event.americanFootball ? '<span class="bll-batch__sport" title="Futebol americano" aria-label="Futebol americano">🏈</span> ' : ''}<span>${escapeHtml(event.name)}</span>${event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
     }).join('')}
   </fieldset>`).join('')
 }
@@ -2366,7 +2366,7 @@ onAlertSettingsChange(() => {
   updatePanelLabels()
 })
 onAlertShown((panelId, payload) => {
-  if (payload.kind === 'goal') startAutoGoal(panelId)
+  if (payload.kind === 'goal' || payload.kind === 'touchdown') startAutoGoal(panelId)
 })
 window.quadra?.onMatchEvent((payload) => {
   if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return

@@ -25,15 +25,17 @@ export type TeamRef365 = { id: number; imageVersion: number }
 
 export type Candidate365 = { id: number; label: string; detail: string }
 
-/** Sports looked up in 365Scores: football (YouTube and BLL) and basketball (BLL, score only). */
-export type Sport365 = 'football' | 'basketball'
+/** Sports looked up in 365Scores: football (YouTube and BLL), basketball (BLL, score only) and American football (BLL: NFL, college). */
+export type Sport365 = 'football' | 'basketball' | 'american-football'
 
 /** The API's `sports` / `sportId` value. */
-export const SPORT_IDS: Record<Sport365, number> = { football: 1, basketball: 2 }
+export const SPORT_IDS: Record<Sport365, number> = { football: 1, basketball: 2, 'american-football': 6 }
 
-/** The BLL marks the sport with an emoji in front of the match name ("🏀 Boston Celtics x Brooklyn Nets", "🎾 ATP Vienna"); football has none. */
+/** The BLL marks the sport with an emoji in front of the match name ("🏀 Boston Celtics x Brooklyn Nets", "🏈 Packers x Panthers"); football has none. */
 export function sportOfBllName(name: string): Sport365 {
-  return name.includes('\u{1F3C0}') ? 'basketball' : 'football'
+  if (name.includes('\u{1F3C0}')) return 'basketball'
+  if (name.includes('\u{1F3C8}')) return 'american-football'
+  return 'football'
 }
 
 /** Sent to the UI as `quadra:live-match` for each YouTube panel. */
@@ -44,7 +46,7 @@ export type LiveMatchStatus = {
   /** `events`: cards and VAR too; `score`: the league has no incident data, so only goals (from the score) and red-card counts. */
   coverage?: 'events' | 'score' | null
   candidates?: Candidate365[]
-  /** Basketball games show names, crests and score only (no alerts yet). */
+  /** Basketball games show names, crests and score only (no alerts yet); American football alerts touchdowns and field goals. */
   sport?: Sport365
 }
 
@@ -70,7 +72,8 @@ export type Detail365 = {
 /** One line of the 365Scores live commentary (`pbpgenerator.365scores.com`). */
 export type PbpMessage = { id: number; type: number; minute: number; competitorNum: number; comment: string }
 
-export type Event365 = { order: number; typeId: number; subTypeId: number; competitorId: number; gameTime: number }
+/** `stageId`: the period (American football: 64-67 the quarters, 68 overtime). */
+export type Event365 = { order: number; typeId: number; subTypeId: number; competitorId: number; gameTime: number; stageId: number }
 
 export type LiveState = {
   seeded: boolean
@@ -429,6 +432,7 @@ export function parseGameDetail(raw: unknown): Detail365 | null {
         subTypeId: finiteNumber(type.subTypeId, -1),
         competitorId: finiteNumber(event.competitorId, -1),
         gameTime: Math.max(0, Math.floor(finiteNumber(event.gameTime))),
+        stageId: finiteNumber(event.stageId, -1),
       })
     }
   }
@@ -668,4 +672,98 @@ export function parseRedCards(raw: unknown, gameId: number): { home: number; awa
   if (!row) return null
   const reds = (side: unknown) => side && typeof side === 'object' ? Math.max(0, finiteNumber((side as { redCards?: unknown }).redCards)) : 0
   return { home: reds(row.homeCompetitor), away: reds(row.awayCompetitor) }
+}
+
+/** American football event types and touchdown subtypes (observed in the NFL, October 2026). */
+const TYPE_TOUCHDOWN = 16
+const TYPE_FIELD_GOAL = 17
+const TOUCHDOWN_NOTES: Record<number, string> = { 26: 'passe', 27: 'corrida' }
+const QUARTER_NOTES: Record<number, string> = { 64: '1º quarto', 65: '2º quarto', 66: '3º quarto', 67: '4º quarto', 68: 'prorrogação' }
+/** A score jump of 6+ points is a touchdown (7 or 8 with the try), 3+ a field goal. */
+const TOUCHDOWN_POINTS = 6
+const FIELD_GOAL_POINTS = 3
+
+export type ScoringKind = 'touchdown' | 'field-goal'
+const SCORING_KINDS: readonly ScoringKind[] = ['touchdown', 'field-goal']
+type PerSide = { home: number; away: number }
+
+/** Scoring plays per side: already alerted, and counted from score jumps between polls. */
+export type AmericanFootballState = {
+  seeded: boolean
+  seen: Set<string>
+  home: number
+  away: number
+  alerted: Record<ScoringKind, PerSide>
+  fromScore: Record<ScoringKind, PerSide>
+  scoreAheadSince: Record<ScoringKind, PerSide>
+}
+
+function perKind(): Record<ScoringKind, PerSide> {
+  return { touchdown: { home: 0, away: 0 }, 'field-goal': { home: 0, away: 0 } }
+}
+
+export function createAmericanFootballState(): AmericanFootballState {
+  return { seeded: false, seen: new Set(), home: 0, away: 0, alerted: perKind(), fromScore: perKind(), scoreAheadSince: perKind() }
+}
+
+/** Touchdowns and field goals. The clock counts down in American football, so the alert names the quarter instead of a minute. */
+export function classifyAmericanFootballEvent(event: Event365, detail: Detail365): MatchIncident | null {
+  const kind = event.typeId === TYPE_TOUCHDOWN ? 'touchdown' : event.typeId === TYPE_FIELD_GOAL ? 'field-goal' : null
+  if (!kind) return null
+  const note = [kind === 'touchdown' ? TOUCHDOWN_NOTES[event.subTypeId] : undefined, QUARTER_NOTES[event.stageId]].filter(Boolean).join(' · ')
+  return { id: `365:${detail.id}:${event.order}:${event.typeId}`, kind, team: sideOf(detail, event.competitorId), minute: 0, ownGoal: false, timestamp: 0, note }
+}
+
+/** What a score jump between two polls was; the extra point, a two-point try or a safety never alert. */
+export function scoringPlayOf(points: number): ScoringKind | null {
+  if (points >= TOUCHDOWN_POINTS) return 'touchdown'
+  if (points >= FIELD_GOAL_POINTS) return 'field-goal'
+  return null
+}
+
+/**
+ * `diffDetail` for American football. Events name the play (passing or rushing touchdown,
+ * quarter); a score jump the events have not shown within `GOAL_EVENT_GRACE_MS` (at once
+ * in a game without events) alerts from the score, and an event for a play already alerted
+ * that way stays quiet. The first poll only records the game as it is.
+ */
+export function diffAmericanFootball(state: AmericanFootballState, detail: Detail365, now = Date.now()): MatchIncident[] {
+  const fresh: MatchIncident[] = []
+  const sides = ['home', 'away'] as const
+  const ordinal = perKind()
+  for (const event of detail.events ?? []) {
+    const incident = classifyAmericanFootballEvent(event, detail)
+    if (!incident || incident.team === 'match') continue
+    const kind = incident.kind as ScoringKind
+    const n = (ordinal[kind][incident.team] += 1)
+    if (state.seen.has(incident.id)) continue
+    state.seen.add(incident.id)
+    if (!state.seeded || n <= state.alerted[kind][incident.team]) continue
+    state.alerted[kind][incident.team] = n
+    fresh.push(incident)
+  }
+  for (const team of sides) {
+    if (!state.seeded) {
+      for (const kind of SCORING_KINDS) state.alerted[kind][team] = state.fromScore[kind][team] = ordinal[kind][team]
+      continue
+    }
+    const play = scoringPlayOf(detail[team].score - state[team])
+    if (play) state.fromScore[play][team] += 1
+    for (const kind of SCORING_KINDS) {
+      const counted = state.fromScore[kind][team]
+      if (counted <= state.alerted[kind][team]) {
+        state.scoreAheadSince[kind][team] = 0
+        continue
+      }
+      if (!state.scoreAheadSince[kind][team]) state.scoreAheadSince[kind][team] = now
+      if (detail.events && now - state.scoreAheadSince[kind][team] < GOAL_EVENT_GRACE_MS) continue
+      fresh.push({ id: `365:${detail.id}:score:${kind}:${team}:${counted}`, kind, team, minute: 0, ownGoal: false, timestamp: 0, note: '' })
+      state.alerted[kind][team] = counted
+      state.scoreAheadSince[kind][team] = 0
+    }
+  }
+  state.seeded = true
+  state.home = detail.home.score
+  state.away = detail.away.score
+  return fresh
 }

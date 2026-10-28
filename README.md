@@ -24,7 +24,7 @@ npm run dist:release # instalador NSIS em release/
 ### BLL
 
 - Botão **BLL** no painel: login uma vez (sessão persistente `persist:quadra`) e escolha o jogo; os próximos vão para a próxima tela vazia.
-- **Abrir vários jogos da BLL** (tela inicial ou menu **⋯**): lista os jogos ao vivo lidos da home da BLL numa página oculta (só leitura, mesmo login), agrupados por liga (país + liga em ordem alfabética, jogos por horário, fase ao lado). Jogos de basquete aparecem com 🏀. Na tela inicial cria uma tela por jogo; com a grade aberta, preenche as vazias e cria as que faltarem (até 18). Jogos já abertos são pulados; previstos só aparecem quando começam. **Desfazer** volta.
+- **Abrir vários jogos da BLL** (tela inicial ou menu **⋯**): lista os jogos ao vivo lidos da home da BLL numa página oculta (só leitura, mesmo login), agrupados por liga (país + liga em ordem alfabética, jogos por horário, fase ao lado). Jogos de basquete aparecem com 🏀 e de futebol americano com 🏈. Na tela inicial cria uma tela por jogo; com a grade aberta, preenche as vazias e cria as que faltarem (até 18). Jogos já abertos são pulados; previstos só aparecem quando começam. **Desfazer** volta.
 
 ### YouTube
 
@@ -41,7 +41,7 @@ npm run dist:release # instalador NSIS em release/
 ### Alertas de lances
 
 - **Fontes:** jogos BLL usam o feed William Hill numa janela oculta, sem a sessão BLL. Lives do YouTube e jogos BLL sem William Hill usam o 365Scores (abaixo).
-- **Gol, Pênalti, Cartão vermelho, Cartão amarelo** (desligado por padrão) e **VAR** (só 365Scores) tocam som e mostram borda com selo (gol 45 s, demais 12 s). **Som do gol** e **Som dos outros alertas** têm 33 opções cada; clicar já toca. O 🔔 desliga os alertas de um painel. Com todas as telas mudas, o app mantém a saída de áudio acordada para o alerta tocar.
+- **Gol, Pênalti, Cartão vermelho, Cartão amarelo** (desligado por padrão) e **VAR** (só 365Scores) tocam som e mostram borda com selo (gol 45 s, demais 12 s). Cada tipo tem o seu som, escolhido ao lado dele em **Alertar em** (33 opções; clicar já toca). O 🔔 desliga os alertas de um painel. Com todas as telas mudas, o app mantém a saída de áudio acordada para o alerta tocar.
 - **Destaque automático:** com 3+ telas o jogo do gol vira destaque (15 s a 3 min, padrão 45 s). Gols acumulam até o limite da composição (sai o mais antigo); quando dois destaques ficam bem maiores que um, um painel companheiro cresce junto. **Fixar** mantém, **Voltar** desfaz; mudança manual de layout cancela o modo.
 - **Placar:** o rótulo mostra o placar do feed; **Placar no painel** atrasa cada mudança 10–60 s ou esconde (padrão: na hora; o placar inicial aparece sem atraso). No futebol os números piscam; no basquete só rolam.
 - **Escudos:** do CDN público do 365Scores (`imagecache.365scores.com`; override `QUADRA_365SCORES_IMAGE_URL`), nunca atrasam o rótulo; sem escudo, fica só o nome. Nos jogos William Hill os nomes são procurados na lista do 365Scores. Cache só em memória (500).
@@ -57,6 +57,7 @@ npm run dist:release # instalador NSIS em release/
 - **Contra spoiler:** nos painéis 365Scores o atraso vale também para alertas e destaque; botão **⏱ N s** por painel (padrão / na hora / 10–120 s, só em memória). BLL com William Hill segue na hora.
 - **BLL sem William Hill:** sem `williamHillId`, busca pelo `evento.nome` (ou pelo título da página após 60 s); se o id aparecer depois, o William Hill assume.
 - **Basquete BLL:** a BLL marca o esporte com emoji no nome (🏀; futebol sem emoji) e o basquete vem sem `williamHillId`. A busca usa `sports=2`, e uma palavra distintiva (4+ letras) em comum basta por time (os nomes trazem patrocinador). Só nomes, escudos e placar: sem alertas; fecha no fim só pelo "Encerrado" da BLL.
+- **Futebol americano BLL (NFL, universitário):** jogo com 🏈 no nome vai sempre para o 365Scores (`sports=6`), mesmo se a BLL der um `williamHillId` (o scanner William Hill só entende futebol; o Monitor registra se o id veio). Nomes, escudos, placar e alertas **Touchdown** (com passe/corrida e quarto) e **Field goal** (tipos 16 e 17 do 365Scores). Placar como reserva: salto de 6+ pontos é touchdown e de 3+ field goal, depois de 9 s sem o evento (na hora em liga sem eventos); ponto extra, conversão de 2 e safety não alertam. Touchdown destaca o painel como o gol. Fecha no fim só pelo "Encerrado" da BLL.
 - Limites: API não oficial pode mudar ou bloquear; pênalti/VAR dependem da narração (nem todo jogo tem); ainda não validado ao vivo no app.
 
 ### Sessão e dados

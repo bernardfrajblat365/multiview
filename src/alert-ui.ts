@@ -1,13 +1,13 @@
 import { ALERT_SOUNDS, ALERT_SOUND_IDS, getAlertSound, playAlertSound } from './alert-sounds'
 import { AUTO_HIGHLIGHT_OPTIONS, CLOSE_FINISHED_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
-import type { AlertKind } from './match-events'
+import { ALERT_KINDS, type AlertKind } from './match-events'
 
 export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
 
 const GOAL_HOLD_MS = 45_000
 const OTHER_HOLD_MS = 12_000
-const KIND_ICON: Record<AlertKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', yellow: '🟨', var: '📺' }
-const KIND_NAME: Record<AlertKind, string> = { goal: 'Gol', penalty: 'Pênalti', red: 'Cartão vermelho', yellow: 'Cartão amarelo', var: 'VAR' }
+const KIND_ICON: Record<AlertKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', yellow: '🟨', var: '📺', touchdown: '🏈', 'field-goal': '🥅' }
+const KIND_NAME: Record<AlertKind, string> = { goal: 'Gol', penalty: 'Pênalti', red: 'Cartão vermelho', yellow: 'Cartão amarelo', var: 'VAR', touchdown: 'Touchdown', 'field-goal': 'Field goal' }
 
 type ActiveAlert = { kind: AlertKind; text: string; timer: ReturnType<typeof setTimeout> }
 
@@ -52,17 +52,12 @@ function closeFinishedLabel(value: number | null) {
   return value === 0 ? 'Na hora' : `${durationLabel(value)} depois`
 }
 
-type SoundSetting = 'goalSoundId' | 'soundId'
-const SOUND_PICKERS: readonly { setting: SoundSetting; label: string; slug: string }[] = [
-  { setting: 'goalSoundId', label: 'Som do gol', slug: 'goal-sound' },
-  { setting: 'soundId', label: 'Som dos outros alertas', slug: 'sound' },
-]
-
-function soundPickerHtml(idPrefix: string, picker: (typeof SOUND_PICKERS)[number]) {
-  const selected = settings[picker.setting]
-  return `<div class="sound-picker" data-sound-picker="${picker.setting}">
-      <button type="button" class="btn btn--ghost sound-picker__button" id="${idPrefix}-${picker.slug}" aria-haspopup="listbox" aria-expanded="false" aria-controls="${idPrefix}-${picker.slug}-list">${picker.label}: <strong data-sound-current>${escapeText(getAlertSound(selected).label)}</strong> ▾</button>
-      <ul class="sound-picker__list" id="${idPrefix}-${picker.slug}-list" role="listbox" aria-label="${picker.label}" hidden>
+function soundPickerHtml(idPrefix: string, kind: AlertKind) {
+  const selected = settings.sounds[kind]
+  const name = `Som do alerta de ${KIND_NAME[kind]}`
+  return `<div class="sound-picker" data-sound-picker="${kind}">
+      <button type="button" class="btn btn--ghost sound-picker__button" id="${idPrefix}-sound-${kind}" aria-haspopup="listbox" aria-expanded="false" aria-controls="${idPrefix}-sound-${kind}-list" aria-label="${name}: ${escapeText(getAlertSound(selected).label)}" title="${name}"><strong data-sound-current>${escapeText(getAlertSound(selected).label)}</strong> ▾</button>
+      <ul class="sound-picker__list" id="${idPrefix}-sound-${kind}-list" role="listbox" aria-label="${name}" hidden>
         ${ALERT_SOUNDS.map((sound, index) => `<li role="option" tabindex="-1" data-sound-id="${sound.id}" aria-selected="${sound.id === selected}"><span class="sound-picker__index">${index + 1}</span>${escapeText(sound.label)}</li>`).join('')}
       </ul>
     </div>`
@@ -70,11 +65,10 @@ function soundPickerHtml(idPrefix: string, picker: (typeof SOUND_PICKERS)[number
 
 export function alertControlsHtml(idPrefix: string): string {
   return `<div class="alert-controls" data-alert-controls>
-    ${SOUND_PICKERS.map((picker) => soundPickerHtml(idPrefix, picker)).join('')}
-    <fieldset class="alert-kinds"><legend>Alertar em</legend>
-      ${(Object.keys(KIND_NAME) as AlertKind[]).map((kind) => `<label><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_NAME[kind]}</label>`).join('')}
+    <fieldset class="alert-kinds"><legend>Alertar em · som</legend>
+      ${ALERT_KINDS.map((kind) => `<div class="alert-kind"><label><input type="checkbox" data-alert-kind="${kind}"${settings.kinds[kind] ? ' checked' : ''} /> ${KIND_ICON[kind]} ${KIND_NAME[kind]}</label>${soundPickerHtml(idPrefix, kind)}</div>`).join('')}
     </fieldset>
-    <div class="alert-auto"><label><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol (3+ telas) por</label>
+    <div class="alert-auto"><label><input type="checkbox" data-auto-highlight${settings.autoHighlight ? ' checked' : ''} /> Destacar o jogo do gol ou touchdown (3+ telas) por</label>
       <select data-auto-highlight-sec aria-label="Tempo do destaque do gol"${settings.autoHighlight ? '' : ' disabled'}>
         ${AUTO_HIGHLIGHT_OPTIONS.map((value) => `<option value="${value}"${settings.autoHighlightSec === value ? ' selected' : ''}>${durationLabel(value)}</option>`).join('')}
       </select>
@@ -100,16 +94,17 @@ export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
       const list = picker.querySelector<HTMLElement>('.sound-picker__list')
       const label = picker.querySelector<HTMLElement>('[data-sound-current]')
       if (!button || !list || !label) continue
-      const setting = picker.dataset.soundPicker as SoundSetting
+      const kind = picker.dataset.soundPicker as AlertKind
       const setOpen = (open: boolean) => {
         list.hidden = !open
         button.setAttribute('aria-expanded', String(open))
         if (open) list.querySelector<HTMLElement>('[aria-selected="true"]')?.scrollIntoView({ block: 'nearest' })
       }
       const choose = (id: string) => {
-        settings = { ...settings, [setting]: id }
+        settings = { ...settings, sounds: { ...settings.sounds, [kind]: id } }
         saveAlertSettings(settings)
         label.textContent = getAlertSound(id).label
+        button.setAttribute('aria-label', `Som do alerta de ${KIND_NAME[kind]}: ${getAlertSound(id).label}`)
         for (const option of list.querySelectorAll<HTMLElement>('[data-sound-id]')) {
           option.setAttribute('aria-selected', String(option.dataset.soundId === id))
         }
@@ -118,7 +113,7 @@ export function bindAlertControls(root: ParentNode, signal?: AbortSignal) {
       button.addEventListener('click', (event) => {
         event.stopPropagation()
         const open = list.hasAttribute('hidden')
-        // Only one list open at a time: the other picker never sees this click.
+        // Only one list open at a time: the other pickers never see this click.
         if (open) {
           for (const other of controls.querySelectorAll<HTMLElement>('[data-sound-picker]')) {
             if (other === picker) continue
@@ -220,17 +215,17 @@ export function handleMatchEvent(payload: MatchEventPayload, root: ParentNode, p
   if (!settings.kinds[payload.kind] || !panelExists(payload.panelId)) return false
   const score = payload.score ? ` · ${payload.score}` : ''
   const note = payload.note ? ` (${payload.note})` : payload.ownGoal ? ' (contra)' : ''
-  const text = `${KIND_ICON[payload.kind]} ${payload.label}${note}${payload.kind === 'goal' || payload.kind === 'var' ? score : ''}`
+  const text = `${KIND_ICON[payload.kind]} ${payload.label}${note}${payload.kind === 'yellow' || payload.kind === 'red' || payload.kind === 'penalty' ? '' : score}`
   const previous = active.get(payload.panelId)
   if (previous) clearTimeout(previous.timer)
-  const hold = payload.kind === 'goal' ? GOAL_HOLD_MS : OTHER_HOLD_MS
+  const hold = payload.kind === 'goal' || payload.kind === 'touchdown' ? GOAL_HOLD_MS : OTHER_HOLD_MS
   active.set(payload.panelId, {
     kind: payload.kind,
     text,
     timer: setTimeout(() => clearAlert(payload.panelId, root), hold),
   })
   applyAlertStates(root)
-  playAlertSound(payload.kind === 'goal' ? settings.goalSoundId : settings.soundId)
+  playAlertSound(settings.sounds[payload.kind])
   for (const listener of listeners) listener(payload.panelId, payload)
   return true
 }

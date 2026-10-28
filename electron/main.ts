@@ -788,7 +788,8 @@ function startMatchDetection(contents: Electron.WebContents, panelId: string) {
     fallback = true
     // Basketball games ("🏀 …") never have a William Hill feed; 365Scores gives them names, crests and score.
     const sport = sportOfBllName(name)
-    logScanner(`[${panelId}] ${sport === 'basketball' ? 'jogo de basquete' : 'jogo sem feed de lances (williamHillId ausente)'}; buscando no 365Scores: ${name || contents.getURL()}`, '365')
+    const reason = sport === 'basketball' ? 'jogo de basquete' : sport === 'american-football' ? 'jogo de futebol americano' : 'jogo sem feed de lances (williamHillId ausente)'
+    logScanner(`[${panelId}] ${reason}; buscando no 365Scores: ${name || contents.getURL()}`, '365')
     liveScores.consider(panelId, contents.getURL(), name, sport)
   }
   const timer = setInterval(() => {
@@ -803,6 +804,14 @@ function startMatchDetection(contents: Electron.WebContents, panelId: string) {
       if (!found || !matchDetections.has(panelId)) return
       const name = sanitizePanelTitle(found.nome ?? '')
       const eventId = extractWilliamHillId(found.id)
+      if (found.nome && sportOfBllName(name) === 'american-football') {
+        // The scanner reads football incidents only: American football goes to 365Scores even with a feed id.
+        clearInterval(timer)
+        matchDetections.delete(panelId)
+        logScanner(`[${panelId}] futebol americano ${eventId ? `com feed William Hill (${eventId}), não usado` : 'sem feed William Hill'}`, 'wh')
+        startFallback(name)
+        return
+      }
       if (!eventId) {
         // The player loaded its match and it has no feed id: no point waiting a minute for one.
         if (found.nome) startFallback(name)

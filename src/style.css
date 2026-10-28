@@ -595,8 +595,13 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .alert-kinds { display: flex; flex-wrap: wrap; gap: 0.2rem 0.9rem; margin: 0; padding: 0.25rem 0.7rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; font-size: 0.82rem; }
 .alert-kinds legend { padding: 0 0.3rem; color: var(--ink-muted); font-size: 0.72rem; }
 .alert-kinds label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; white-space: nowrap; }
+.alert-kind { display: inline-flex; align-items: center; gap: 0.35rem; }
+.alert-kind .sound-picker__button { padding: 0.15rem 0.5rem; font-size: 0.75rem; }
 .toolbar__menu .alert-controls { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 0.6rem; margin: 0; padding-left: 0.7rem; border-left: 1px solid rgba(200,245,96,0.2); }
-.toolbar__menu .alert-kinds { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem 1rem; padding: 0.6rem 0.8rem 0.7rem; }
+.toolbar__menu .alert-kinds { display: grid; grid-template-columns: 1fr; gap: 0.35rem; padding: 0.6rem 0.8rem 0.7rem; }
+.toolbar__menu .alert-kind { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 0 0.75rem; }
+.toolbar__menu .alert-kind .sound-picker { display: contents; }
+.toolbar__menu .alert-kind .sound-picker__list { grid-column: 1 / -1; }
 .toolbar__menu .alert-auto, .toolbar__menu .alert-score-delay, .toolbar__menu .alert-close-finished { display: flex; align-items: center; justify-content: space-between; gap: 0.75rem; padding: 0.55rem 0.8rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; }
 .toolbar__menu .alert-auto { justify-content: flex-start; }
 .toolbar__menu .alert-auto select { margin-left: auto; }

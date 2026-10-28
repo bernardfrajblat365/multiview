@@ -7,7 +7,7 @@ import type { LiveMatchStatus } from '../src/livescore-365'
 
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
-type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
 
 const quadra = {
   ready: () => ipcRenderer.send('quadra:ready'),

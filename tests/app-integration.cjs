@@ -286,7 +286,7 @@ async function run() {
     env: {
       ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl, QUADRA_365SCORES_IMAGE_URL: baseUrl,
       QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
-      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`, QUADRA_BLL_END_POLL_MS: '1500',
+      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`, QUADRA_BLL_END_POLL_MS: '1500', QUADRA_AUTO_OPEN_POLL_MS: '1500',
     },
   })
   try {
@@ -737,6 +737,33 @@ async function run() {
     const catalogClosedDeadline = Date.now() + 10000
     while (Date.now() < catalogClosedDeadline &&
       (await fetchJson(`http://127.0.0.1:${port}/json`)).some((candidate) => candidate.id === bllCatalog.id)) await wait(100)
+    // Auto mode from the start screen: games live in a listed competition open on their own; a game the user closes stays closed.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-auto-open').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-add-competition]'))`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const form = document.querySelector('.auto-open [data-add-competition]')
+      form.querySelector('input').value = 'Brasil, Liga Teste'
+      form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
+      document.querySelector('.auto-open [data-auto-open-toggle]').click()
+    })()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.grid--2'))`, 20000)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => new URL(input.value).pathname)`),
+    ['/view/game-c', '/view/game-d'], 'O modo Auto abre só os jogos ao vivo da competição da lista (sem o previsto nem o de basquete).')
+    assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-status]').textContent`), /^Ligado · lista lida às \d\d:\d\d · 2 jogos abertos pelo modo Auto/)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-cancel]').click()`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').classList.contains('is-auto-open')`), true)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] [data-remove]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 1`)
+    await wait(4000)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelectorAll('.panel').length`), 1, 'Um jogo fechado pelo usuário não volta no modo Auto.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)
+    await waitForExpression(target, `document.querySelector('.auto-open [data-auto-open-toggle]')?.textContent === 'Desligar modo Auto'`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-toggle]').click(); document.querySelector('.auto-open [data-cancel]').click()`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').classList.contains('is-auto-open')`), false)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-layout').click(); document.querySelector('.confirm [data-ok]').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.chooser'))`)
+
     // With the visible catalog closed, the list still loads on its own (hidden BLL page) as soon as the dialog opens.
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-bll-batch').click()`)
     await waitForExpression(target, `document.querySelectorAll('.bll-batch__group').length === 2`, 20000)

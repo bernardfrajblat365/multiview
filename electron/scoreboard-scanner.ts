@@ -48,6 +48,10 @@ type Scanner = {
   score: string
   /** Last home|away|score sent to the UI, so unchanged polls stay silent. */
   sentKey: string
+  /** Score the board showed the last time it was in step with the goal alerts. */
+  goalBaseline: string
+  /** Score of the last goal alert while the board hasn't caught up with it yet, else null. */
+  predictedScore: string | null
   hooked: boolean
   connected: boolean
   loadedAt: number
@@ -58,7 +62,17 @@ type Scanner = {
   drainTimer: ReturnType<typeof setInterval>
   watchdogTimer: ReturnType<typeof setInterval>
   retryTimer?: ReturnType<typeof setTimeout>
+  /** Goals whose scorer isn't known yet, by incident id. */
+  scorers: Map<string, PendingScorer>
   destroyed: boolean
+}
+
+type PendingScorer = {
+  incident: MatchIncident
+  /** When the goal alert went out; the delays in the log count from here. */
+  at: number
+  lastFallbackAt: number
+  fallbackBusy: boolean
 }
 
 const PARTITION = 'quadra-scoreboard'
@@ -67,6 +81,11 @@ const WATCHDOG_MS = 15_000
 const HOOK_GRACE_MS = 30_000
 const SILENCE_RELOAD_MS = 10 * 60_000
 const MAX_BACKOFF_MS = 60_000
+/** A goal without a name from the line-up asks 365Scores after this, then again at this pace… */
+const SCORER_FALLBACK_AFTER_MS = 5000
+const SCORER_FALLBACK_EVERY_MS = 5000
+/** …and the search for the scorer's name ends here. */
+const SCORER_GIVE_UP_MS = 60_000
 const ALLOWED_HOST = /(^|\.)(kwddw\.com|whcdn\.net|staticcache\.org)$/i
 
 /**
@@ -83,6 +102,7 @@ const hookScript = `(() => {
   let wrapped = 0
   window.__quadraQueue = window.__quadraQueue || []
   window.__quadraSeen = window.__quadraSeen || new Set()
+  window.__quadraShirts = window.__quadraShirts || {}
   for (const name of names) {
     const mod = S[name]
     if (!mod || typeof mod.acceptIncident !== 'function' || mod.__quadraWrapped) continue
@@ -93,10 +113,13 @@ const hookScript = `(() => {
         if (Array.isArray(incidents)) {
           for (const item of incidents) {
             if (item && item.type === ${JSON.stringify(END_INCIDENT_TYPE)} && !window.__quadraEndAt) window.__quadraEndAt = Date.parse(item.timestamp) || Date.now()
+            // The shirt number may only show up on a later replay of the same goal.
+            if (item && item.type === 'GOAL' && item.data && item.data.PLAYER) window.__quadraShirts[item.id] = item.data.PLAYER
             if (!item || !types.has(item.type) || window.__quadraSeen.has(item.id)) continue
             window.__quadraSeen.add(item.id)
             if (window.__quadraQueue.length < 400) {
-              window.__quadraQueue.push({ id: item.id, type: item.type, subType: item.subType, teamType: item.teamType, timestamp: item.timestamp, time: { duration: item.time && item.time.duration } })
+              const named = (item.scorer && item.scorer.name) || (item.player && item.player.name) || ''
+              window.__quadraQueue.push({ id: item.id, type: item.type, subType: item.subType, teamType: item.teamType, timestamp: item.timestamp, time: { duration: item.time && item.time.duration }, shirt: item.data && item.data.PLAYER, playerName: String(named).slice(0, 80) })
             }
           }
         }
@@ -106,9 +129,44 @@ const hookScript = `(() => {
     mod.__quadraWrapped = true
     wrapped += 1
   }
+  // Goal lists of the line-up carry the scorer's name, sometimes after the goal itself.
+  const lineups = S.lineups
+  if (lineups && typeof lineups.addEvents === 'function' && !lineups.__quadraWrapped) {
+    const original = lineups.addEvents
+    window.__quadraScorers = window.__quadraScorers || {}
+    lineups.addEvents = function (type, events) {
+      try {
+        if (type === 'goals' && Array.isArray(events)) {
+          for (const event of events) {
+            const who = event && ((event.scorer && event.scorer.name) || (event.player && event.player.name))
+            if (who && event.incidentId) window.__quadraScorers[event.incidentId] = String(who).slice(0, 80)
+          }
+        }
+      } catch (e) {}
+      return original.apply(this, arguments)
+    }
+    lineups.__quadraWrapped = true
+  }
   if (wrapped > 0) window.__quadraHooked = true
   return wrapped > 0
 })()`
+
+/** Names for pending goals: the line-up goal list first, then the shirt number looked up in the line-up. */
+const scorerScript = (items: Array<{ id: string; team: string; shirt: number }>) => `((items) => {
+  const out = {}
+  const lineups = window.WH && window.WH.scoreboard && window.WH.scoreboard.lineups
+  const listed = window.__quadraScorers || {}
+  const shirts = window.__quadraShirts || {}
+  for (const item of items) {
+    let name = listed[item.id] || ''
+    const shirt = Number(item.shirt || shirts[item.id]) || 0
+    if (!name && shirt && lineups && typeof lineups.getPlayerName === 'function') {
+      try { name = lineups.getPlayerName(item.team, shirt) || '' } catch (e) {}
+    }
+    if (name) out[item.id] = String(name).slice(0, 80)
+  }
+  return out
+})(${JSON.stringify(items)})`
 
 const drainScript = `(() => {
   const queue = window.__quadraQueue || []
@@ -156,6 +214,8 @@ export function createScoreboardScanners(options: {
   onScore?: (score: ScannerScore) => void
   /** The feed says the match is over; reported once per match. */
   onEnd?: (end: ScannerEnd) => void
+  /** Fallback for goals the line-up gives no name for (365Scores). Null when it can't tell. */
+  findScorer?: (query: { home: string; away: string; team: 'home' | 'away'; minute: number }) => Promise<string | null>
 }) {
   const scanners = new Map<string, Scanner>()
   const panelToEvent = new Map<string, string>()
@@ -221,6 +281,8 @@ export function createScoreboardScanners(options: {
     }
     const queue = Array.isArray(result.queue) ? result.queue : []
     if (queue.length > 0) emitIncidents(scanner, queue)
+    syncGoalBaseline(scanner)
+    await resolveScorers(scanner)
     const period = typeof result.period === 'string' ? result.period : ''
     if (detectMatchEnd(scanner.state, period, Number(result.endAt) || 0)) {
       logScanner(`[${scanner.label}] fim de jogo${period ? ` (${period})` : ''} ${scanner.score}`.trim(), 'wh')
@@ -231,19 +293,95 @@ export function createScoreboardScanners(options: {
   function emitIncidents(scanner: Scanner, queue: RawIncident[]) {
     const { fresh, ignored } = filterNew(scanner.state, queue)
     if (ignored > 0) logScanner(`[${scanner.label}] ${ignored} lance(s) do histórico ignorado(s)`, 'wh')
-    for (const incident of fresh) {
-      const teamName = incident.team === 'home' ? scanner.home : incident.team === 'away' ? scanner.away : ''
-      // Feed timestamp vs. now: includes the feed's own delay and any clock skew, so treat it as approximate.
-      const lag = incident.timestamp > 0 ? ` (feed→app ~${Math.max(0, (Date.now() - incident.timestamp) / 1000).toFixed(1)} s)` : ''
-      logScanner(`[${scanner.label}] ${incident.kind.toUpperCase()} ${incident.team} ${incident.minute}' ${teamName}${lag}`.trim(), 'wh')
-      options.onEvent({
-        eventId: scanner.eventId,
-        panelIds: [...scanner.panelIds],
-        incident,
-        teamName,
-        score: scanner.score,
-      })
+    for (const incident of fresh) sendIncident(scanner, incident, goalScore(scanner, incident))
+  }
+
+  /**
+   * Looks for the name of every goal still without one: the line-up of the feed first (checked on each
+   * pass), 365Scores if that hasn't answered after a few seconds. Only logs for now: the alerts don't wait for it.
+   */
+  async function resolveScorers(scanner: Scanner) {
+    if (scanner.scorers.size === 0 || scanner.destroyed || scanner.window.isDestroyed()) return
+    const now = Date.now()
+    const items = [...scanner.scorers.entries()].map(([id, pending]) => ({ id, team: pending.incident.team.toUpperCase(), shirt: pending.incident.shirt ?? 0 }))
+    const names = await scanner.window.webContents.executeJavaScript(scorerScript(items)).catch(() => null) as Record<string, string> | null
+    for (const [id, pending] of [...scanner.scorers]) {
+      const name = names?.[id]
+      const waited = ((Date.now() - pending.at) / 1000).toFixed(1)
+      if (typeof name === 'string' && name) {
+        scanner.scorers.delete(id)
+        logScanner(`[${scanner.label}] nome do gol ${pending.incident.minute}' ${teamOf(scanner, pending.incident)}: ${name} (escalação WH, ${waited} s depois do alerta)`, 'wh')
+      } else if (now - pending.at >= SCORER_GIVE_UP_MS) {
+        scanner.scorers.delete(id)
+        const shirt = pending.incident.shirt ? `camisa ${pending.incident.shirt}` : 'sem camisa no feed'
+        logScanner(`[${scanner.label}] sem nome para o gol ${pending.incident.minute}' ${teamOf(scanner, pending.incident)} (${shirt}; WH sem escalação; 365Scores não achou)`, 'wh')
+      } else if (!pending.fallbackBusy && now - pending.at >= SCORER_FALLBACK_AFTER_MS && now - pending.lastFallbackAt >= SCORER_FALLBACK_EVERY_MS) {
+        void askFallback(scanner, id, pending)
+      }
     }
+  }
+
+  async function askFallback(scanner: Scanner, id: string, pending: PendingScorer) {
+    const side = pending.incident.team
+    if (!options.findScorer || side === 'match' || !scanner.home || !scanner.away) return
+    pending.fallbackBusy = true
+    pending.lastFallbackAt = Date.now()
+    try {
+      const name = await options.findScorer({ home: scanner.home, away: scanner.away, team: side, minute: pending.incident.minute })
+      // The line-up may have answered while 365Scores was thinking: then it is already logged and gone.
+      if (name && scanner.scorers.delete(id)) {
+        const waited = ((Date.now() - pending.at) / 1000).toFixed(1)
+        logScanner(`[${scanner.label}] nome do gol ${pending.incident.minute}' ${teamOf(scanner, pending.incident)}: ${name} (365Scores, ${waited} s depois do alerta)`, 'wh')
+      }
+    } catch {
+      // 365Scores down or slow: the next round tries again until the time is up.
+    } finally {
+      pending.fallbackBusy = false
+    }
+  }
+
+  function teamOf(scanner: Scanner, incident: MatchIncident) {
+    return incident.team === 'home' ? scanner.home : incident.team === 'away' ? scanner.away : ''
+  }
+
+  /**
+   * The feed can announce a goal before the board's text shows it. If the board hasn't moved,
+   * the alert goes out at once with the last score plus this goal instead of waiting.
+   */
+  function goalScore(scanner: Scanner, incident: MatchIncident) {
+    if (incident.kind !== 'goal') return scanner.score
+    if (scanner.score !== scanner.goalBaseline) return scanner.score
+    const base = /^(\d+)\s*-\s*(\d+)$/.exec(scanner.predictedScore ?? scanner.score)
+    if (!base || incident.ownGoal || incident.team === 'match') return scanner.score
+    const home = Number(base[1]) + (incident.team === 'home' ? 1 : 0)
+    const away = Number(base[2]) + (incident.team === 'away' ? 1 : 0)
+    scanner.predictedScore = `${home} - ${away}`
+    return scanner.predictedScore
+  }
+
+  /** Once the board moves, it has caught up: later goals are predicted from it again. */
+  function syncGoalBaseline(scanner: Scanner) {
+    if (scanner.score === scanner.goalBaseline) return
+    scanner.goalBaseline = scanner.score
+    scanner.predictedScore = null
+  }
+
+  function sendIncident(scanner: Scanner, incident: MatchIncident, score: string) {
+    const teamName = incident.team === 'home' ? scanner.home : incident.team === 'away' ? scanner.away : ''
+    // Feed timestamp vs. now: includes the feed's own delay and any clock skew, so treat it as approximate.
+    const lag = incident.timestamp > 0 ? ` (feed→app ~${Math.max(0, (Date.now() - incident.timestamp) / 1000).toFixed(1)} s)` : ''
+    const who = incident.kind === 'goal' ? (incident.player ? ` — ${incident.player}` : incident.shirt ? ` — camisa ${incident.shirt}` : '') : ''
+    logScanner(`[${scanner.label}] ${incident.kind.toUpperCase()} ${incident.team} ${incident.minute}' ${teamName}${who}${lag}`.trim(), 'wh')
+    if (incident.kind === 'goal' && !incident.player && incident.team !== 'match') {
+      scanner.scorers.set(incident.id, { incident, at: Date.now(), lastFallbackAt: 0, fallbackBusy: false })
+    }
+    options.onEvent({
+      eventId: scanner.eventId,
+      panelIds: [...scanner.panelIds],
+      incident,
+      teamName,
+      score,
+    })
   }
 
   function watchdog(scanner: Scanner) {
@@ -291,12 +429,15 @@ export function createScoreboardScanners(options: {
       away: '',
       score: '',
       sentKey: '',
+      goalBaseline: '',
+      predictedScore: null,
       hooked: false,
       connected: false,
       loadedAt: Date.now(),
       lastMessageAt: 0,
       updates: 0,
       retries: 0,
+      scorers: new Map(),
       drainTimer: setInterval(() => void drain(scanner), DRAIN_MS),
       watchdogTimer: setInterval(() => watchdog(scanner), WATCHDOG_MS),
       destroyed: false,

@@ -2,14 +2,14 @@ import { ALERT_SOUNDS, ALERT_SOUND_IDS, getAlertSound, playAlertSound } from './
 import { AUTO_HIGHLIGHT_OPTIONS, CLOSE_FINISHED_OPTIONS, SCORE_DELAY_OPTIONS, loadAlertSettings, saveAlertSettings, type AlertSettings } from './alert-settings'
 import { ALERT_KINDS, type AlertKind } from './match-events'
 
-export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; note?: string; label: string }
+export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string }
 
 const GOAL_HOLD_MS = 45_000
 const OTHER_HOLD_MS = 12_000
 const KIND_ICON: Record<AlertKind, string> = { goal: '⚽', penalty: '🎯', red: '🟥', yellow: '🟨', var: '📺', touchdown: '🏈', 'field-goal': '🥅' }
 const KIND_NAME: Record<AlertKind, string> = { goal: 'Gol', penalty: 'Pênalti', red: 'Cartão vermelho', yellow: 'Cartão amarelo', var: 'VAR', touchdown: 'Touchdown', 'field-goal': 'Field goal' }
 
-type ActiveAlert = { kind: AlertKind; text: string; timer: ReturnType<typeof setTimeout> }
+type ActiveAlert = { kind: AlertKind; text: string; scorer: 'home' | 'away' | null; timer: ReturnType<typeof setTimeout> }
 
 let settings: AlertSettings = loadAlertSettings(ALERT_SOUND_IDS)
 const active = new Map<string, ActiveAlert>()
@@ -182,6 +182,23 @@ export function clearAlert(panelId: string, root: ParentNode) {
   applyAlertStates(root)
 }
 
+/** The goal's score, with the number of the team that scored boxed (own goals get no box: the side isn't certain). */
+function renderAlertText(label: HTMLElement, alert: ActiveAlert) {
+  const match = alert.scorer ? /^(.*?)(\d+)(\s*[-–x]\s*)(\d+)$/.exec(alert.text) : null
+  if (!match || !alert.scorer) {
+    label.textContent = alert.text
+    return
+  }
+  const [, before, home, separator, away] = match
+  const number = (value: string, scored: boolean) => {
+    const span = document.createElement('span')
+    span.className = scored ? 'panel__alert-score panel__alert-score--scored' : 'panel__alert-score'
+    span.textContent = value
+    return span
+  }
+  label.replaceChildren(before, number(home, alert.scorer === 'home'), separator, number(away, alert.scorer === 'away'))
+}
+
 /** Idempotent: re-applies the ring/badge to panels, also after the grid re-renders. */
 export function applyAlertStates(root: ParentNode) {
   for (const panelElement of root.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
@@ -196,11 +213,16 @@ export function applyAlertStates(root: ParentNode) {
     if (!overlay) {
       overlay = document.createElement('div')
       overlay.className = 'panel__alert'
-      overlay.innerHTML = '<span class="panel__alert-badge" role="status"></span>'
+      overlay.innerHTML = '<span class="panel__alert-badge" role="status"><span class="panel__alert-text"></span></span>'
       panelElement.append(overlay)
     }
-    const badge = overlay.querySelector<HTMLElement>('.panel__alert-badge')!
-    if (badge.textContent !== alert.text) badge.textContent = alert.text
+    // The goal's Fixar/Voltar controls live inside the badge, so only the text span is rewritten.
+    const label = overlay.querySelector<HTMLElement>('.panel__alert-text')!
+    const key = `${alert.scorer ?? ''}|${alert.text}`
+    if (label.dataset.key !== key) {
+      label.dataset.key = key
+      renderAlertText(label, alert)
+    }
   }
 }
 
@@ -222,6 +244,7 @@ export function handleMatchEvent(payload: MatchEventPayload, root: ParentNode, p
   active.set(payload.panelId, {
     kind: payload.kind,
     text,
+    scorer: (payload.kind === 'goal' || payload.kind === 'touchdown' || payload.kind === 'field-goal') && !payload.ownGoal && (payload.team === 'home' || payload.team === 'away') ? payload.team : null,
     timer: setTimeout(() => clearAlert(payload.panelId, root), hold),
   })
   applyAlertStates(root)

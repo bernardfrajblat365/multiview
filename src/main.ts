@@ -12,6 +12,23 @@ import {
   type YoutubeLivesResult,
 } from './youtube-lives'
 import { setAlertAudioAwake } from './alert-sounds'
+import {
+  autoOpenDecision,
+  COMPETITION_MODE_LABEL,
+  COMPETITIONS,
+  defaultAutoOpenSettings,
+  loadAutoOpenSettings,
+  mainTeamOf,
+  MAX_CUSTOM_COMPETITIONS,
+  MAX_TEAMS,
+  planAutoOpen,
+  saveAutoOpenSettings,
+  teamDisplayName,
+  type AutoOpenCandidate,
+  type AutoOpenSettings,
+  type CompetitionMode,
+  type CompetitionRule,
+} from './auto-open'
 import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
@@ -117,6 +134,8 @@ const panelCrests = new Map<PanelId, Crests>()
 /** Last score shown per panel, to flash the label (or roll the numbers, in basketball) when it changes. */
 const shownScores = new Map<PanelId, MatchScore>()
 const scoreFlashUntil = new Map<PanelId, number>()
+/** Which numbers of the score lit up with the last change (the team(s) that scored). */
+const scoreFlashSides = new Map<PanelId, { home: boolean; away: boolean }>()
 const SCORE_FLASH_MS = 6000
 let labelRefreshTimer: number | null = null
 /** 365Scores link of each YouTube panel (and BLL panel without a William Hill feed), as reported by the main process. */
@@ -131,6 +150,26 @@ const finishedPanels = new Map<PanelId, { showAt: number; closeAt: number }>()
 /** "Manter aberto" holds for the rest of the match: a later end notice from another source doesn't count down again. */
 const keptFinishedPanels = new Set<PanelId>()
 let finishedTimer: number | null = null
+
+/** Auto mode: re-reads the BLL list and opens the games that start in the chosen competitions; on/off lasts only for this session. */
+const AUTO_OPEN_POLL_MS = Number(new URLSearchParams(location.search).get('auto-open-poll-ms')) || 60_000
+/** While the user organizes, drags, answers a dialog or a goal is highlighted, new games wait this long to try again. */
+const AUTO_OPEN_RETRY_MS = 5000
+let autoOpenOn = false
+let autoOpenSettings = loadAutoOpenSettings()
+/** Panels Auto mode opened, in the order it opened them; a main-team game may take the oldest one without a main team. */
+const autoOpenPanels = new Map<PanelId, { url: string; mainTeam: boolean }>()
+/** Games the user closed or swapped in a panel Auto mode opened: they don't come back. */
+const autoOpenDismissed = new Set<string>()
+/** Games Auto mode already opened since it was turned on. */
+const autoOpenSeen = new Set<string>()
+let autoOpenEvents: BllEvent[] = []
+let autoOpenTimer: number | null = null
+let autoOpenRetryTimer: number | null = null
+let autoOpenReading = false
+let autoOpenReadAt = 0
+let autoOpenError = ''
+let autoOpenSkipped = 0
 /** A panel can't close while the user is organizing, dragging or answering a dialog; it tries again after this. */
 const FINISHED_RETRY_MS = 5000
 
@@ -152,6 +191,7 @@ function clearPanelMatchState(id: PanelId) {
   panelCrests.delete(id)
   shownScores.delete(id)
   scoreFlashUntil.delete(id)
+  scoreFlashSides.delete(id)
 }
 
 function clearAllPanelMatchState() {
@@ -167,6 +207,7 @@ function clearAllPanelMatchState() {
   panelCrests.clear()
   shownScores.clear()
   scoreFlashUntil.clear()
+  scoreFlashSides.clear()
 }
 
 function scoreDelayMs() {
@@ -248,9 +289,9 @@ function labelSpan(className: string, text: string) {
 }
 
 /** A score number; when it just changed, the digits that moved roll up from the old value like a roulette. */
-function scoreNumber(value: number, from: number | undefined) {
+function scoreNumber(value: number, from: number | undefined, lit = false) {
   const span = document.createElement('span')
-  span.className = 'panel__label-number'
+  span.className = lit ? 'panel__label-number panel__label-number--lit' : 'panel__label-number'
   if (from === undefined || from === value) {
     span.textContent = String(value)
     return span
@@ -273,10 +314,10 @@ function scoreNumber(value: number, from: number | undefined) {
   return span
 }
 
-function scoreLabel(score: MatchScore, from: MatchScore | null) {
+function scoreLabel(score: MatchScore, from: MatchScore | null, lit: { home: boolean; away: boolean }) {
   const span = document.createElement('span')
   span.className = 'panel__label-score'
-  span.append(scoreNumber(score.home, from?.home), ' – ', scoreNumber(score.away, from?.away))
+  span.append(scoreNumber(score.home, from?.home, lit.home), ' – ', scoreNumber(score.away, from?.away, lit.away))
   return span
 }
 
@@ -326,12 +367,19 @@ function updatePanelLabels() {
     const scoreChanged = Boolean(match.score && previousScore && formatScore(previousScore) !== scoreText)
     // Basketball scores all the time: the numbers only roll, without lighting up the label.
     const basketball = panelLive.get(id)?.sport === 'basketball'
-    if (scoreChanged && !basketball) scoreFlashUntil.set(id, now + SCORE_FLASH_MS)
+    if (scoreChanged && !basketball) {
+      scoreFlashUntil.set(id, now + SCORE_FLASH_MS)
+      scoreFlashSides.set(id, { home: Boolean(previousScore && match.score && match.score.home > previousScore.home), away: Boolean(previousScore && match.score && match.score.away > previousScore.away) })
+    }
     if (match.score) shownScores.set(id, match.score)
     const rollFrom = scoreChanged && basketball ? previousScore ?? null : null
     const flashUntil = scoreFlashUntil.get(id) ?? 0
-    if (flashUntil && flashUntil <= now) scoreFlashUntil.delete(id)
+    if (flashUntil && flashUntil <= now) {
+      scoreFlashUntil.delete(id)
+      scoreFlashSides.delete(id)
+    }
     const flashing = flashUntil > now
+    const lit = flashing ? scoreFlashSides.get(id) ?? { home: false, away: false } : { home: false, away: false }
 
     const placement = placeMatchLabel({
       panelWidth: panelElement.clientWidth || 1,
@@ -361,7 +409,7 @@ function updatePanelLabels() {
     labelElement.style.setProperty('--label-font', `${placement.fontPx}px`)
 
     // Rebuild the content only when it changes, so the flash animation is not restarted by every poll.
-    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, match.crests.home ?? '', match.crests.away ?? ''].join('|')
+    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, flashing ? `${lit.home ? 'h' : ''}${lit.away ? 'a' : ''}` : '', match.crests.home ?? '', match.crests.away ?? ''].join('|')
     if (labelElement.dataset.contentKey === contentKey) continue
     labelElement.dataset.contentKey = contentKey
     const shownCrests = labelElement.dataset.crests ?? ''
@@ -376,16 +424,16 @@ function updatePanelLabels() {
       if (homeCrest) chip.append(homeCrest)
       chip.append(
         labelSpan('panel__label-team', match.home),
-        match.score ? scoreLabel(match.score, rollFrom) : labelSpan('panel__label-vs', 'x'),
+        match.score ? scoreLabel(match.score, rollFrom, lit) : labelSpan('panel__label-vs', 'x'),
         labelSpan('panel__label-team', match.away),
       )
       if (awayCrest) chip.append(awayCrest)
     } else {
       const rows = [
-        [match.home, match.score?.home, rollFrom?.home, homeCrest],
-        [match.away, match.score?.away, rollFrom?.away, awayCrest],
+        [match.home, match.score?.home, rollFrom?.home, homeCrest, lit.home],
+        [match.away, match.score?.away, rollFrom?.away, awayCrest, lit.away],
       ] as const
-      for (const [team, goals, goalsFrom, crest] of rows) {
+      for (const [team, goals, goalsFrom, crest, goalsLit] of rows) {
         const row = document.createElement('div')
         row.className = 'panel__label-row'
         if (crest) row.append(crest)
@@ -393,7 +441,7 @@ function updatePanelLabels() {
         if (goals !== undefined) {
           const cell = document.createElement('span')
           cell.className = 'panel__label-goals'
-          cell.append(scoreNumber(goals, goalsFrom))
+          cell.append(scoreNumber(goals, goalsFrom, goalsLit))
           row.append(cell)
         }
         chip.append(row)
@@ -517,7 +565,7 @@ function updateAutoControls() {
   const now = Date.now()
   for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
     const entry = autoEntries.find((item) => item.id === panelElement.dataset.panelId)
-    let controls = panelElement.querySelector<HTMLElement>(':scope > .panel__auto-controls')
+    let controls = panelElement.querySelector<HTMLElement>('.panel__auto-controls')
     if (!entry) {
       controls?.remove()
       continue
@@ -526,10 +574,13 @@ function updateAutoControls() {
       controls = document.createElement('div')
       controls.className = 'panel__auto-controls'
       controls.innerHTML = '<span class="panel__auto-count" data-auto-count></span><button type="button" class="btn btn--load" data-auto-pin title="Manter este jogo em destaque">📌 Fixar</button><button type="button" class="btn btn--ghost" data-auto-back title="Voltar ao layout anterior agora">↩ Voltar</button>'
-      panelElement.append(controls)
     }
+    // Inside the green goal badge (next to the score) while it shows; on its own at the top once it fades.
+    const badge = panelElement.querySelector<HTMLElement>(':scope > .panel__alert > .panel__alert-badge')
+    const host = badge ?? panelElement
+    if (controls.parentElement !== host) host.append(controls)
     const count = controls.querySelector<HTMLElement>('[data-auto-count]')
-    const text = `Gol! ${secondsLeft(entry, now)} s`
+    const text = badge ? `${secondsLeft(entry, now)} s` : `Gol! ${secondsLeft(entry, now)} s`
     if (count && count.textContent !== text) count.textContent = text
   }
 }
@@ -762,7 +813,10 @@ function setPanelCount(count: number, options: { recordHistory?: boolean } = {})
     panels = [...panels, ...Array.from({ length: nextCount - panels.length }, createPanel)]
   } else {
     const removed = new Set(panels.slice(nextCount).map((panel) => panel.id))
-    for (const id of removed) clearPanelMatchState(id)
+    for (const id of removed) {
+      clearPanelMatchState(id)
+      dismissAutoOpen(id)
+    }
     panels = panels.slice(0, nextCount)
     highlighted = new Set([...highlighted].filter((id) => !removed.has(id)))
   }
@@ -814,6 +868,7 @@ function removeLastPanel() {
 function removePanel(id: PanelId) {
   if (panels.length <= MIN_PANELS || !panelById(id) || view !== 'grid') return
   pushHistory()
+  dismissAutoOpen(id)
   clearPanelMatchState(id)
   panels = panels.filter((panel) => panel.id !== id)
   panelOrder = panelOrder.filter((panelId) => panelId !== id)
@@ -1006,7 +1061,10 @@ function organizeAutomatically() {
 function applyPanelUrl(id: PanelId, next: string) {
   const panel = panelById(id)
   if (!panel) return
-  if (panel.url !== next) clearPanelMatchState(id)
+  if (panel.url !== next) {
+    clearPanelMatchState(id)
+    dismissAutoOpen(id)
+  }
   panel.url = next
   panel.draftUrl = next
   if (next) {
@@ -1364,11 +1422,304 @@ function setupYoutubeChannelEditor(backdrop: HTMLElement, toggle: HTMLButtonElem
   })
 }
 
+function autoOpenBusy() {
+  // The Auto mode dialog itself doesn't block: turning the mode on opens the games right away.
+  return editorOpen || dragState !== null || document.querySelector('.confirm:not(.auto-open)') !== null || autoEntries.length > 0
+}
+
+/** The user closed or changed a panel Auto mode opened: that game doesn't come back. */
+function dismissAutoOpen(id: PanelId) {
+  const entry = autoOpenPanels.get(id)
+  if (!entry) return
+  autoOpenDismissed.add(entry.url)
+  autoOpenPanels.delete(id)
+}
+
+function autoOpenStatusText() {
+  if (!autoOpenOn) return 'Desligado. Ligue para o Quadra abrir sozinho os jogos que começarem.'
+  if (!autoOpenReadAt) return autoOpenError || 'Ligado · lendo a lista da BLL…'
+  const time = new Date(autoOpenReadAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  const opened = autoOpenPanels.size
+  const parts = [`Ligado · lista lida às ${time}`, `${opened} ${opened === 1 ? 'jogo aberto' : 'jogos abertos'} pelo modo Auto`]
+  if (autoOpenSkipped > 0) parts.push(`${autoOpenSkipped} sem time principal esperando tela livre`)
+  return `${parts.join(' · ')}.${autoOpenError ? ` ${autoOpenError}` : ''}`
+}
+
+function updateAutoOpenIndicators() {
+  const status = autoOpenStatusText()
+  for (const element of document.querySelectorAll<HTMLElement>('[data-auto-open-status]')) element.textContent = status
+  for (const button of document.querySelectorAll<HTMLButtonElement>('[data-auto-open-toggle]')) button.textContent = autoOpenOn ? 'Desligar modo Auto' : 'Ligar modo Auto'
+  const startButton = document.querySelector<HTMLButtonElement>('#btn-start-auto-open')
+  if (startButton) {
+    startButton.textContent = autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'
+    startButton.setAttribute('aria-pressed', String(autoOpenOn))
+  }
+  const menuItem = document.querySelector<HTMLButtonElement>('#btn-auto-open')
+  if (menuItem) menuItem.textContent = autoOpenOn ? 'Modo Auto: ligado…' : 'Modo Auto…'
+  const more = document.querySelector<HTMLButtonElement>('#btn-more')
+  more?.classList.toggle('is-auto-open', autoOpenOn)
+  more?.setAttribute('aria-label', autoOpenOn ? 'Mais opções (modo Auto ligado)' : 'Mais opções')
+}
+
+function autoOpenCandidates(): AutoOpenCandidate[] {
+  return autoOpenEvents.flatMap((event) => {
+    if (!event.live || autoOpenDismissed.has(event.url)) return []
+    const decision = autoOpenDecision(event, autoOpenSettings)
+    return decision.open ? [{ url: event.url, name: event.name, mainTeam: decision.mainTeam !== null }] : []
+  })
+}
+
+function markAutoOpened(id: PanelId, url: string, mainTeam: boolean) {
+  autoOpenPanels.delete(id)
+  autoOpenPanels.set(id, { url, mainTeam })
+  autoOpenSeen.add(url)
+}
+
+/** Opens the games of the last BLL list read that fit the lists, waiting while the user organizes, drags, answers a dialog or watches a goal highlight. */
+function applyAutoOpen() {
+  if (autoOpenRetryTimer !== null) window.clearTimeout(autoOpenRetryTimer)
+  autoOpenRetryTimer = null
+  if (!autoOpenOn) return
+  for (const [id, entry] of autoOpenPanels) {
+    if (panelById(id)?.url !== entry.url) autoOpenPanels.delete(id)
+  }
+  const candidates = autoOpenCandidates()
+  const mainTeam = new Map(candidates.map((candidate) => [candidate.url, candidate.mainTeam]))
+  if (candidates.length > 0 && autoOpenBusy()) {
+    autoOpenRetryTimer = window.setTimeout(applyAutoOpen, AUTO_OPEN_RETRY_MS)
+    return
+  }
+  if (view === 'choose') {
+    // From the start screen only a game Auto mode hasn't opened yet starts a grid, so "Voltar" isn't undone a minute later.
+    autoOpenSkipped = 0
+    if (candidates.some((candidate) => !autoOpenSeen.has(candidate.url))) {
+      const chosen = [...candidates].sort((a, b) => Number(b.mainTeam) - Number(a.mainTeam))
+      autoOpenSkipped = Math.max(0, chosen.length - MAX_PANELS)
+      startWithGames(chosen.slice(0, MAX_PANELS).map((candidate) => candidate.url))
+      autoOpenPanels.clear()
+      for (const panel of panels) markAutoOpened(panel.id, panel.url, mainTeam.get(panel.url) ?? false)
+    }
+    updateAutoOpenIndicators()
+    return
+  }
+  // Oldest Auto panels last, in the order they were opened: the first to give way to a main-team game.
+  const ordered = [
+    ...panels.filter((panel) => !autoOpenPanels.has(panel.id)),
+    ...[...autoOpenPanels.keys()].map((id) => panelById(id)).filter((panel): panel is Panel => Boolean(panel)),
+  ]
+  const plan = planAutoOpen(ordered.map((panel) => ({ id: panel.id, url: panel.url, auto: autoOpenPanels.has(panel.id), mainTeam: autoOpenPanels.get(panel.id)?.mainTeam ?? false })), candidates, MAX_PANELS)
+  autoOpenSkipped = plan.skipped
+  if (plan.fill.length + plan.extra.length + plan.replace.length > 0) {
+    for (const { panelId, url } of [...plan.fill, ...plan.replace]) {
+      const panel = panelById(panelId)
+      if (!panel) continue
+      clearPanelMatchState(panelId)
+      panel.url = url
+      panel.draftUrl = url
+      markAutoOpened(panelId, url, mainTeam.get(url) ?? false)
+    }
+    const added = plan.extra.map((url) => ({ ...createPanel(), url, draftUrl: url }))
+    panels = [...panels, ...added]
+    for (const panel of added) markAutoOpened(panel.id, panel.url, mainTeam.get(panel.url) ?? false)
+    buildCurrentLayout()
+    renderGrid()
+    syncLayout()
+    if (bllsportTargetId && panelById(bllsportTargetId)?.url) {
+      const next = panels.find((panel) => !panel.url)
+      bllsportTargetId = next?.id ?? null
+      if (next) window.quadra?.setBllsportTarget(next.id, panelLabel(next.id))
+      else window.quadra?.setBllsportTarget(null)
+    }
+  }
+  updateAutoOpenIndicators()
+}
+
+async function pollAutoOpen() {
+  if (!autoOpenOn || autoOpenReading) return
+  autoOpenReading = true
+  const result = await window.quadra?.listBllsportEvents().catch(() => null) ?? null
+  autoOpenReading = false
+  if (!autoOpenOn) return
+  if (!result || result.status !== 'ok') {
+    autoOpenError = window.quadra ? 'Não foi possível ler a lista da BLL; tenta de novo no próximo minuto. Se continuar, abra a BLL num painel e confira o login.' : 'O modo Auto só funciona no app do Quadra.'
+    updateAutoOpenIndicators()
+    return
+  }
+  autoOpenError = ''
+  autoOpenReadAt = Date.now()
+  autoOpenEvents = result.events
+  applyAutoOpen()
+}
+
+function setAutoOpen(on: boolean) {
+  if (autoOpenOn === on) return
+  autoOpenOn = on
+  if (autoOpenTimer !== null) window.clearInterval(autoOpenTimer)
+  if (autoOpenRetryTimer !== null) window.clearTimeout(autoOpenRetryTimer)
+  autoOpenTimer = null
+  autoOpenRetryTimer = null
+  autoOpenEvents = []
+  autoOpenReadAt = 0
+  autoOpenError = ''
+  autoOpenSkipped = 0
+  if (on) {
+    // Turning the mode on opens the games already live too, even from the start screen.
+    autoOpenSeen.clear()
+    autoOpenTimer = window.setInterval(() => void pollAutoOpen(), AUTO_OPEN_POLL_MS)
+    void pollAutoOpen()
+  }
+  updateAutoOpenIndicators()
+}
+
+function competitionRowHtml(id: string, label: string, mode: CompetitionMode, custom = false) {
+  return `<div class="auto-open__row"><span>${escapeHtml(label)}</span>
+    <select ${custom ? `data-custom-competition="${escapeHtml(id)}"` : `data-competition="${escapeHtml(id)}"`} aria-label="${escapeHtml(label)}">
+      ${(['all', 'teams', 'off'] as const).map((value) => `<option value="${value}"${mode === value ? ' selected' : ''}>${COMPETITION_MODE_LABEL[value]}</option>`).join('')}
+    </select>${custom ? `<button type="button" class="yt-channels__remove" data-remove-competition="${escapeHtml(id)}" aria-label="Remover ${escapeHtml(label)}" title="Remover">×</button>` : ''}</div>`
+}
+
+function autoOpenListsHtml(settings: AutoOpenSettings) {
+  const group = (legend: string, rules: readonly CompetitionRule[]) => `<fieldset class="bll-batch__group auto-open__group"><legend>${legend}</legend>
+    ${rules.map((rule) => competitionRowHtml(rule.id, rule.label, settings.competitions[rule.id] ?? 'off')).join('')}</fieldset>`
+  return `${group('Brasil', COMPETITIONS.filter((rule) => rule.region === 'Brasil'))}
+    ${group('Europa · ligas', COMPETITIONS.filter((rule) => rule.region === 'Europa' && rule.kind === 'liga'))}
+    ${group('Europa · copas', COMPETITIONS.filter((rule) => rule.region === 'Europa' && rule.kind === 'copa'))}
+    <fieldset class="bll-batch__group auto-open__group"><legend>Outras competições</legend>
+      ${settings.custom.map((item, index) => competitionRowHtml(String(index), item.name, item.mode, true)).join('')}
+      <form class="yt-channels__add" data-add-competition>
+        <input type="text" name="competition" placeholder="Como aparece na BLL, ex.: Portugal, Liga Portugal" aria-label="Competição" autocomplete="off" spellcheck="false" maxlength="120">
+        <button type="submit" class="btn btn--load"${settings.custom.length >= MAX_CUSTOM_COMPETITIONS ? ' disabled' : ''}>Adicionar</button>
+      </form>
+    </fieldset>
+    <fieldset class="bll-batch__group auto-open__group"><legend>Times principais (${settings.teams.length})</legend>
+      <p class="bll-batch__status">Nas competições em "Só times principais", só os jogos destes times abrem. Acima de ${MAX_PANELS} telas, eles têm prioridade.</p>
+      <ul class="yt-channels__list">${settings.teams.map((team, index) => {
+        const name = teamDisplayName(team)
+        const aliases = team.split('/').slice(1).map((alias) => alias.trim()).filter(Boolean)
+        return `<li${aliases.length ? ` title="Também: ${escapeHtml(aliases.join(', '))}"` : ''}><span>${escapeHtml(name)}</span><button type="button" class="yt-channels__remove" data-remove-team="${index}" aria-label="Remover ${escapeHtml(name)}" title="Remover">×</button></li>`
+      }).join('')}</ul>
+      <form class="yt-channels__add" data-add-team>
+        <input type="text" name="team" placeholder="Nome do time; outros nomes separados por / (ex.: Benfica / SL Benfica)" aria-label="Time" autocomplete="off" spellcheck="false" maxlength="120">
+        <button type="submit" class="btn btn--load"${settings.teams.length >= MAX_TEAMS ? ' disabled' : ''}>Adicionar</button>
+      </form>
+      <label class="auto-open__check"><input type="checkbox" data-teams-anywhere${settings.teamsAnywhere ? ' checked' : ''}> Abrir os jogos dos times principais em qualquer competição</label>
+    </fieldset>`
+}
+
+function openAutoOpenDialog() {
+  document.querySelector('.confirm')?.remove()
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm bll-batch auto-open'
+  backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="auto-open-title">
+    <p id="auto-open-title" class="confirm__message">Modo Auto</p>
+    <p class="bll-batch__status" role="status" aria-live="polite" data-auto-open-status></p>
+    <div class="auto-open__body">
+      <p class="bll-batch__status">Ligado, o Quadra lê a lista da BLL a cada minuto e abre numa tela cada jogo que começar nas competições escolhidas (só futebol). Jogos que você fechar não voltam.</p>
+      <div data-auto-open-lists></div>
+      <p class="yt-channels__message" role="status" aria-live="polite" data-auto-open-message></p>
+      <button type="button" class="btn btn--ghost yt-channels__restore" data-restore>Restaurar listas padrão</button>
+    </div>
+    <div class="confirm__actions">
+      <button type="button" class="btn btn--ghost" data-cancel>Fechar</button>
+      <button type="button" class="btn btn--load" data-auto-open-toggle></button>
+    </div>
+  </div>`
+  const lists = backdrop.querySelector<HTMLElement>('[data-auto-open-lists]')!
+  const message = backdrop.querySelector<HTMLElement>('[data-auto-open-message]')!
+  let changed = false
+  const renderLists = (focus?: string) => {
+    lists.innerHTML = autoOpenListsHtml(autoOpenSettings)
+    if (focus) lists.querySelector<HTMLInputElement>(focus)?.focus()
+  }
+  const update = (next: AutoOpenSettings, focus?: string) => {
+    autoOpenSettings = next
+    changed = true
+    saveAutoOpenSettings(autoOpenSettings)
+    renderLists(focus)
+  }
+  const finish = () => {
+    document.removeEventListener('keydown', onKey)
+    backdrop.remove()
+    // New lists count from the last BLL read, without waiting for the next one.
+    if (changed) applyAutoOpen()
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape') return
+    event.preventDefault()
+    finish()
+  }
+  lists.addEventListener('change', (event) => {
+    const target = event.target as HTMLInputElement | HTMLSelectElement
+    if (target instanceof HTMLSelectElement && target.dataset.competition) {
+      update({ ...autoOpenSettings, competitions: { ...autoOpenSettings.competitions, [target.dataset.competition]: target.value as CompetitionMode } })
+    } else if (target instanceof HTMLSelectElement && target.dataset.customCompetition !== undefined) {
+      const index = Number(target.dataset.customCompetition)
+      update({ ...autoOpenSettings, custom: autoOpenSettings.custom.map((item, position) => position === index ? { ...item, mode: target.value as CompetitionMode } : item) })
+    } else if (target instanceof HTMLInputElement && target.dataset.teamsAnywhere !== undefined) {
+      update({ ...autoOpenSettings, teamsAnywhere: target.checked })
+    }
+  })
+  lists.addEventListener('click', (event) => {
+    const button = (event.target as HTMLElement).closest<HTMLElement>('[data-remove-team], [data-remove-competition]')
+    if (!button) return
+    if (button.dataset.removeTeam !== undefined) {
+      const index = Number(button.dataset.removeTeam)
+      const removed = teamDisplayName(autoOpenSettings.teams[index] ?? '')
+      update({ ...autoOpenSettings, teams: autoOpenSettings.teams.filter((_, position) => position !== index) }, '[data-add-team] input')
+      message.textContent = removed ? `${removed} removido.` : ''
+    } else {
+      const index = Number(button.dataset.removeCompetition)
+      const removed = autoOpenSettings.custom[index]?.name ?? ''
+      update({ ...autoOpenSettings, custom: autoOpenSettings.custom.filter((_, position) => position !== index) }, '[data-add-competition] input')
+      message.textContent = removed ? `${removed} removida.` : ''
+    }
+  })
+  lists.addEventListener('submit', (event) => {
+    event.preventDefault()
+    const form = event.target as HTMLFormElement
+    const input = form.querySelector<HTMLInputElement>('input')!
+    const text = input.value.replace(/\s+/g, ' ').trim()
+    if (!text) return
+    if (form.dataset.addTeam !== undefined) {
+      const name = teamDisplayName(text)
+      if (!name) return
+      if (autoOpenSettings.teams.some((team) => mainTeamOf(`${name} x Adversário`, [team]) || teamDisplayName(team).toLowerCase() === name.toLowerCase())) {
+        message.textContent = `${name} já está na lista.`
+        return
+      }
+      update({ ...autoOpenSettings, teams: [...autoOpenSettings.teams, text].slice(0, MAX_TEAMS) }, '[data-add-team] input')
+      message.textContent = `${name} adicionado.`
+    } else {
+      if (autoOpenSettings.custom.some((item) => item.name.toLowerCase() === text.toLowerCase())) {
+        message.textContent = `${text} já está na lista.`
+        return
+      }
+      update({ ...autoOpenSettings, custom: [...autoOpenSettings.custom, { name: text, mode: 'all' as const }].slice(0, MAX_CUSTOM_COMPETITIONS) }, '[data-add-competition] input')
+      message.textContent = `${text} adicionada (todos os jogos).`
+    }
+  })
+  backdrop.querySelector('[data-restore]')!.addEventListener('click', () => {
+    update(defaultAutoOpenSettings())
+    message.textContent = 'Listas padrão restauradas.'
+  })
+  backdrop.querySelector('[data-auto-open-toggle]')!.addEventListener('click', () => setAutoOpen(!autoOpenOn))
+  backdrop.querySelector('[data-cancel]')!.addEventListener('click', finish)
+  backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
+  document.addEventListener('keydown', onKey)
+  renderLists()
+  document.body.appendChild(backdrop)
+  updateAutoOpenIndicators()
+  backdrop.querySelector<HTMLButtonElement>('[data-auto-open-toggle]')?.focus()
+}
+
 function openAllPanels() {
   panels = panels.map((panel) => {
     const input = app.querySelector<HTMLInputElement>(`[data-panel-id="${CSS.escape(panel.id)}"] input[name="url"]`)
     const url = input ? normalizeUrl(input.value) : panel.url
-    if (panel.url !== url) clearPanelMatchState(panel.id)
+    if (panel.url !== url) {
+      clearPanelMatchState(panel.id)
+      dismissAutoOpen(panel.id)
+    }
     if (url) {
       dismissedMatchLabels.delete(panel.id)
       forceReloadIds.add(panel.id)
@@ -1448,6 +1799,7 @@ function toggleAllMuted() {
 function clearAllPanels() {
   pushHistory()
   clearAllPanelMatchState()
+  for (const panel of panels) dismissAutoOpen(panel.id)
   panels = panels.map((panel) => ({ ...panel, url: '', draftUrl: '' }))
   renderGrid()
 }
@@ -2016,6 +2368,7 @@ function bindMoreMenu() {
   trigger.addEventListener('click', (event) => { event.stopPropagation(); setOpen(panel.hasAttribute('hidden')) }, { signal })
   app.querySelector('#btn-bll-batch')?.addEventListener('click', () => { setOpen(false); openBatch('bll') }, { signal })
   app.querySelector('#btn-youtube-batch')?.addEventListener('click', () => { setOpen(false); openBatch('youtube') }, { signal })
+  app.querySelector('#btn-auto-open')?.addEventListener('click', () => { setOpen(false); openAutoOpenDialog() }, { signal })
   app.querySelector('#btn-equal')?.addEventListener('click', () => { makeEqual(); setOpen(false) }, { signal })
   app.querySelector('#btn-auto')?.addEventListener('click', () => { organizeAutomatically(); setOpen(false) }, { signal })
   app.querySelector('#btn-undo')?.addEventListener('click', () => { undo(); setOpen(false) }, { signal })
@@ -2094,7 +2447,7 @@ function renderChoose() {
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
     ${alertControlsHtml('chooser')}
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
@@ -2103,6 +2456,7 @@ function renderChoose() {
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
   app.querySelector<HTMLButtonElement>('#btn-start-bll-batch')?.addEventListener('click', () => openBatch('bll'))
   app.querySelector<HTMLButtonElement>('#btn-start-youtube-batch')?.addEventListener('click', () => openBatch('youtube'))
+  app.querySelector<HTMLButtonElement>('#btn-start-auto-open')?.addEventListener('click', openAutoOpenDialog)
   app.querySelector<HTMLButtonElement>('#btn-release-notes')?.addEventListener('click', () => showReleaseNotes(RELEASES.find((release) => release.version === version) ?? RELEASES[0]))
   bindUpdateCheck()
   bindAlertControls(app)
@@ -2255,11 +2609,12 @@ function renderGrid() {
       <button type="button" class="btn btn--ghost" id="btn-organize">${editorOpen ? 'Cancelar organização' : 'Organizar'}</button>
       <label class="toolbar__count"><span>Telas <output id="panel-count-status" aria-live="polite">${panels.length}/${MAX_PANELS}</output></span><select id="panel-count" aria-label="Quantidade de telas">${Array.from({ length: MAX_PANELS }, (_, index) => `<option value="${index + 1}"${index + 1 === panels.length ? ' selected' : ''}>${index + 1}</option>`).join('')}</select></label>
       <button type="button" class="btn btn--ghost" id="btn-fullscreen">${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}</button>
-      <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon" id="btn-more" aria-label="Mais opções" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu"><svg viewBox="0 0 24 24" width="1.25rem" height="1.25rem" fill="currentColor" aria-hidden="true" focusable="false" style="display:block"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
+      <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon${autoOpenOn ? ' is-auto-open' : ''}" id="btn-more" aria-label="Mais opções${autoOpenOn ? ' (modo Auto ligado)' : ''}" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu"><svg viewBox="0 0 24 24" width="1.25rem" height="1.25rem" fill="currentColor" aria-hidden="true" focusable="false" style="display:block"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
           <div class="toolbar__menu-actions">
           <button type="button" class="btn btn--ghost" id="btn-bll-batch" role="menuitem">Abrir vários jogos da BLL…</button>
           <button type="button" class="btn btn--ghost" id="btn-youtube-batch" role="menuitem">Abrir jogos ao vivo do YouTube…</button>
+          <button type="button" class="btn btn--ghost" id="btn-auto-open" role="menuitem">${autoOpenOn ? 'Modo Auto: ligado…' : 'Modo Auto…'}</button>
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
           <button type="button" class="btn btn--ghost" id="btn-equal" role="menuitem">Sem destaques</button>
           <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>

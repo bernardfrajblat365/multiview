@@ -1,7 +1,7 @@
 {
   "name": "quadra-multiview",
   "private": true,
-  "version": "1.1.7",
+  "version": "1.1.8",
   "description": "Quadra multi-view desktop com painéis independentes no Electron",
   "type": "module",
   "main": "out/main/main.js",
@@ -10,7 +10,7 @@
     "postinstall": "node node_modules/electron/install.js",
     "build": "electron-vite build",
     "preview": "electron-vite preview",
-    "test": "npm run test:routing && node --experimental-strip-types --test tests/layout.test.ts tests/match-label.test.ts tests/score-delay.test.ts tests/alert-settings.test.ts tests/alert-sounds.test.ts tests/match-events.test.ts tests/auto-highlight.test.ts tests/bll-batch.test.ts tests/bll-end.test.ts tests/youtube-lives.test.ts tests/youtube-player.test.ts tests/player-start.test.ts tests/release-notes.test.ts tests/update-flow.test.ts tests/release-notes-update.test.ts tests/startup-degraded.test.ts tests/livescore-365.test.ts tests/livescore-365-basketball.test.ts tests/livescore-365-american-football.test.ts tests/team-crests.test.ts",
+    "test": "npm run test:routing && node --experimental-strip-types --test tests/layout.test.ts tests/match-label.test.ts tests/score-delay.test.ts tests/alert-settings.test.ts tests/alert-sounds.test.ts tests/match-events.test.ts tests/auto-highlight.test.ts tests/bll-batch.test.ts tests/auto-open.test.ts tests/bll-end.test.ts tests/youtube-lives.test.ts tests/youtube-player.test.ts tests/player-start.test.ts tests/release-notes.test.ts tests/update-flow.test.ts tests/release-notes-update.test.ts tests/startup-degraded.test.ts tests/livescore-365.test.ts tests/livescore-365-basketball.test.ts tests/livescore-365-american-football.test.ts tests/team-crests.test.ts",
     "test:app": "node tests/app-integration.cjs",
     "test:close": "node tests/app-close-smoke.cjs",
     "test:packaged": "node tests/packaged-smoke.cjs",

@@ -6,6 +6,16 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.8',
+    label: '1.1.8',
+    notes: [
+      { title: 'Modo Auto', body: 'Ligado, o Quadra abre sozinho os jogos da BLL que começarem nas suas ligas e copas, com prioridade para os seus times.' },
+      { title: 'Fixar e Voltar sem cobrir o placar', body: 'No gol, os botões ficam dentro do selo verde, ao lado do placar.' },
+      { title: 'Quem fez o gol', body: 'No selo e no rótulo do jogo, só o número do time que marcou ganha destaque.' },
+      { title: 'Alertas em cartões', body: 'Na tela inicial, cada alerta aparece num cartão com o seu som; os desligados ficam apagados.' },
+    ],
+  },
+  {
     version: '1.1.7',
     label: '1.1.7',
     notes: [

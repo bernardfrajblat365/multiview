@@ -67,13 +67,15 @@ export type Detail365 = {
   events: Event365[] | null
   /** The game's live commentary feed: the only source of "penalty awarded" and VAR decisions. Null when the game has none. */
   pbpUrl: string | null
+  /** Player id → name (`members`), for the scorer of an event. Absent in older fixtures. */
+  players?: ReadonlyMap<number, string>
 }
 
 /** One line of the 365Scores live commentary (`pbpgenerator.365scores.com`). */
 export type PbpMessage = { id: number; type: number; minute: number; competitorNum: number; comment: string }
 
 /** `stageId`: the period (American football: 64-67 the quarters, 68 overtime). */
-export type Event365 = { order: number; typeId: number; subTypeId: number; competitorId: number; gameTime: number; stageId: number }
+export type Event365 = { order: number; typeId: number; subTypeId: number; competitorId: number; gameTime: number; stageId: number; playerId?: number }
 
 export type LiveState = {
   seeded: boolean
@@ -433,13 +435,50 @@ export function parseGameDetail(raw: unknown): Detail365 | null {
         competitorId: finiteNumber(event.competitorId, -1),
         gameTime: Math.max(0, Math.floor(finiteNumber(event.gameTime))),
         stageId: finiteNumber(event.stageId, -1),
+        ...(finiteNumber(event.playerId) > 0 ? { playerId: finiteNumber(event.playerId) } : {}),
       })
     }
   }
   // Counting goals per side follows the list order, so keep it chronological whatever the API sends.
   events?.sort((a, b) => a.order - b.order)
   const pbp = row.playByPlay && typeof row.playByPlay === 'object' ? (row.playByPlay as Record<string, unknown>).feedURL : null
-  return { id, statusGroup: finiteNumber(row.statusGroup), gameTime: Math.max(0, Math.floor(finiteNumber(row.gameTime))), home, away, events, pbpUrl: pbpFeedUrl(pbp) }
+  return { id, statusGroup: finiteNumber(row.statusGroup), gameTime: Math.max(0, Math.floor(finiteNumber(row.gameTime))), home, away, events, pbpUrl: pbpFeedUrl(pbp), players: parsePlayers(row.members) }
+}
+
+const MAX_PLAYERS = 120
+
+/** `members` of `/web/game/`: the squads' players by id. A short name is used when the full one is missing. */
+function parsePlayers(raw: unknown): Map<number, string> {
+  const players = new Map<number, string>()
+  if (!Array.isArray(raw)) return players
+  for (const item of raw.slice(0, MAX_PLAYERS)) {
+    if (!item || typeof item !== 'object') continue
+    const member = item as Record<string, unknown>
+    const id = Number(member.id)
+    const name = typeof member.name === 'string' && member.name.trim() ? member.name : typeof member.shortName === 'string' ? member.shortName : ''
+    if (Number.isSafeInteger(id) && name.trim()) players.set(id, name.trim().slice(0, MAX_NAME))
+  }
+  return players
+}
+
+/** Name of the player of a 365Scores event, or null when the API doesn't say. */
+export function playerOf(event: Event365, detail: Detail365): string | null {
+  return event.playerId !== undefined && event.playerId > 0 ? detail.players?.get(event.playerId) ?? null : null
+}
+
+/**
+ * Who scored a goal of `side` near `minute`: the closest goal event of that side within two minutes
+ * (the William Hill clock and the 365Scores one differ a little). Null when there is none yet or no name.
+ */
+export function scorerFromDetail(detail: Detail365, side: 'home' | 'away', minute: number): string | null {
+  let best: { name: string; gap: number } | null = null
+  for (const event of detail.events ?? []) {
+    if (event.typeId !== TYPE_GOAL || sideOf(detail, event.competitorId) !== side) continue
+    const name = playerOf(event, detail)
+    const gap = Math.abs(event.gameTime - minute)
+    if (name && gap <= 2 && (!best || gap < best.gap)) best = { name, gap }
+  }
+  return best?.name ?? null
 }
 
 /** Only the commentary host, always over HTTPS (the API hands out some links as http). */
@@ -550,7 +589,8 @@ function sideOf(detail: Detail365, competitorId: number): MatchIncident['team'] 
 /** Maps one 365Scores event to an alert, or null for events that never alert (substitutions, woodwork…). */
 export function classifyEvent365(event: Event365, detail: Detail365): MatchIncident | null {
   // No subtype in the key: 365Scores re-labels events later (a penalty goal became a field goal a minute on), and that is not a new goal.
-  const base = { id: `365:${detail.id}:${event.order}:${event.typeId}`, team: sideOf(detail, event.competitorId), minute: event.gameTime, ownGoal: false, timestamp: 0, note: '' }
+  const player = playerOf(event, detail)
+  const base = { id: `365:${detail.id}:${event.order}:${event.typeId}`, team: sideOf(detail, event.competitorId), minute: event.gameTime, ownGoal: false, timestamp: 0, note: '', ...(player ? { player } : {}) }
   switch (event.typeId) {
     case TYPE_GOAL:
       if (event.subTypeId === SUBTYPE_OWN_GOAL) return { ...base, kind: 'goal', ownGoal: true }

@@ -285,6 +285,7 @@ const scanners = createScoreboardScanners({
         minute: incident.minute,
         score,
         ownGoal: incident.ownGoal,
+        team: incident.team,
         note: incident.note,
         label,
       })
@@ -292,6 +293,7 @@ const scanners = createScoreboardScanners({
   },
   onScore: sendMatchScore,
   onEnd: sendMatchEnded,
+  findScorer: (query) => liveScores.findScorer(query),
 })
 /** YouTube panels and BLL players without a William Hill feed: links the panel to a 365Scores game by the teams in its title, then polls that game. */
 const liveScores = createLiveScoreLinker({
@@ -304,6 +306,7 @@ const liveScores = createLiveScoreLinker({
         minute: incident.minute,
         score,
         ownGoal: incident.ownGoal,
+        team: incident.team,
         note: incident.note,
         label,
       })
@@ -1185,6 +1188,8 @@ function createOverlay() {
   })
   // Smokes run on a fresh profile; the "what's new" popup would cover the screens they click.
   const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off' } : {}
+  // Smokes read the BLL list for Auto mode faster than the minute the app uses.
+  if (Number(process.env.QUADRA_AUTO_OPEN_POLL_MS) > 0) query['auto-open-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_POLL_MS))
   const devUrl = new URL(process.env.ELECTRON_RENDERER_URL ?? 'http://localhost')
   for (const [key, value] of Object.entries(query)) devUrl.searchParams.set(key, value)
   const load = isDev

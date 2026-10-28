@@ -8,6 +8,8 @@ export type AlertSettings = {
   autoHighlight: boolean
   /** How long a goal keeps its panel highlighted. */
   autoHighlightSec: number
+  /** A highlight of the user that goes to half-time swaps places with a game being played until the break ends (3+ panels). */
+  halftimeSwap: boolean
   /** Seconds a score change waits before showing on the panel; null hides the score. */
   scoreDelaySec: number | null
   /** Seconds after the William Hill feed reports the end of a match before its panel closes; null keeps it open. */
@@ -27,16 +29,17 @@ const LEGACY_KINDS: readonly AlertKind[] = ['goal', 'penalty', 'red', 'yellow', 
 const STORAGE_KEY = 'quadra:alert-settings'
 
 export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
-  sounds: { goal: 'gol-torcida', penalty: 'apito-arbitro', red: 'apito-arbitro', yellow: 'apito-arbitro', var: 'apito-arbitro', touchdown: 'gol-torcida', 'field-goal': 'apito-arbitro' },
+  sounds: { goal: 'gol-torcida', penalty: 'apito-arbitro', red: 'apito-arbitro', yellow: 'apito-arbitro', var: 'var-check', touchdown: 'gol-torcida', 'field-goal': 'apito-arbitro' },
   kinds: { goal: true, penalty: true, red: true, yellow: false, var: true, touchdown: true, 'field-goal': true },
   autoHighlight: true,
   autoHighlightSec: 45,
+  halftimeSwap: true,
   scoreDelaySec: 0,
   closeFinishedSec: 60,
 }
 
 export function parseAlertSettings(raw: string | null, validSoundIds: readonly string[]): AlertSettings {
-  const next: AlertSettings = { sounds: { ...DEFAULT_ALERT_SETTINGS.sounds }, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds }, autoHighlight: DEFAULT_ALERT_SETTINGS.autoHighlight, autoHighlightSec: DEFAULT_ALERT_SETTINGS.autoHighlightSec, scoreDelaySec: DEFAULT_ALERT_SETTINGS.scoreDelaySec, closeFinishedSec: DEFAULT_ALERT_SETTINGS.closeFinishedSec }
+  const next: AlertSettings = { sounds: { ...DEFAULT_ALERT_SETTINGS.sounds }, kinds: { ...DEFAULT_ALERT_SETTINGS.kinds }, autoHighlight: DEFAULT_ALERT_SETTINGS.autoHighlight, autoHighlightSec: DEFAULT_ALERT_SETTINGS.autoHighlightSec, halftimeSwap: DEFAULT_ALERT_SETTINGS.halftimeSwap, scoreDelaySec: DEFAULT_ALERT_SETTINGS.scoreDelaySec, closeFinishedSec: DEFAULT_ALERT_SETTINGS.closeFinishedSec }
   if (!raw) return next
   try {
     const parsed = JSON.parse(raw) as (Partial<AlertSettings> & LegacySounds) | null
@@ -53,6 +56,7 @@ export function parseAlertSettings(raw: string | null, validSoundIds: readonly s
     }
     if (typeof parsed?.autoHighlight === 'boolean') next.autoHighlight = parsed.autoHighlight
     if (typeof parsed?.autoHighlightSec === 'number' && AUTO_HIGHLIGHT_OPTIONS.includes(parsed.autoHighlightSec)) next.autoHighlightSec = parsed.autoHighlightSec
+    if (typeof parsed?.halftimeSwap === 'boolean') next.halftimeSwap = parsed.halftimeSwap
     if (parsed?.scoreDelaySec === null) next.scoreDelaySec = null
     else if (typeof parsed?.scoreDelaySec === 'number' && SCORE_DELAY_OPTIONS.includes(parsed.scoreDelaySec)) next.scoreDelaySec = parsed.scoreDelaySec
     if (parsed?.closeFinishedSec === null) next.closeFinishedSec = null

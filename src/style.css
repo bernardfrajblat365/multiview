@@ -220,15 +220,32 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
   background: rgba(0, 0, 0, 0.72);
   outline: 1px solid rgba(244, 255, 232, 0.55);
 }
+/* Match clock after the names: period tag and running time ("2T 67:12"); amber while stopped or at the break. */
+.panel__label-clock {
+  flex: 0 0 auto;
+  padding: 0.05em 0.45em;
+  border-radius: 0.3em;
+  background: rgba(0, 0, 0, 0.55);
+  box-shadow: inset 0 0 0 1px rgba(244, 255, 232, 0.25);
+  font-size: 0.82em;
+  font-variant-numeric: tabular-nums;
+  white-space: nowrap;
+}
+.panel__label-clock-tag { color: #c8f560; font-weight: 800; }
+.panel__label-clock-time { margin-left: 0.35em; font-weight: 700; }
+.panel__label-clock-time:empty { display: none; }
+.panel__label-clock--paused { box-shadow: inset 0 0 0 1px rgba(255, 209, 102, 0.45); }
+.panel__label-clock--paused .panel__label-clock-tag { color: #ffd166; }
 /* Two rows (one per team): names wrap instead of being cut. */
 .panel__label[data-layout="stacked"] .panel__label-chip {
   display: grid;
-  grid-template-columns: minmax(0, 1fr) auto;
+  grid-template-columns: minmax(0, 1fr) auto auto;
   column-gap: 0.5em;
   row-gap: 0.1em;
   text-align: left;
 }
-.panel__label[data-layout="stacked"] .panel__label-dismiss { grid-column: 2; grid-row: 1 / span 2; }
+.panel__label[data-layout="stacked"] .panel__label-clock { grid-column: 2; grid-row: 1 / span 2; align-self: center; }
+.panel__label[data-layout="stacked"] .panel__label-dismiss { grid-column: 3; grid-row: 1 / span 2; }
 .panel__label-row { grid-column: 1; display: flex; align-items: baseline; justify-content: space-between; gap: 0.6em; min-width: 0; }
 .panel__label-row .panel__label-team { white-space: normal; overflow-wrap: anywhere; }
 .panel__label-row .panel__label-goals { min-width: 1.2em; padding: 0 0.15em; text-align: center; }
@@ -523,6 +540,10 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .bll-batch__item small { color: var(--muted, rgba(232,245,238,0.75)); }
 .bll-batch__dialog input[type="checkbox"] { width: 1.15rem; height:1.15rem; margin: 0; flex: none; cursor: pointer; }
 .bll-batch__count { font-weight: 400; opacity: 0.75; }
+.bll-batch__order { display: flex; align-items: center; gap: 0.35rem; margin: 0 0 0.6rem; font-size: 0.85rem; }
+.bll-batch__order span { color: var(--muted, rgba(232,245,238,0.75)); margin-right: 0.15rem; }
+.bll-batch__order button { border: 1px solid var(--line); border-radius: 999px; padding: 0.2rem 0.7rem; background: transparent; color: inherit; font: inherit; cursor: pointer; }
+.bll-batch__order button[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); font-weight: 700; }
 .bll-batch__dialog [hidden] { display: none !important; }
 .yt-channels { flex: 1 1 auto; min-height: 0; overflow: auto; margin-bottom: 0.9rem; display: grid; gap: 0.6rem; align-content: start; }
 .yt-channels[hidden] { display: none; }
@@ -595,6 +616,9 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 
 /* Match alerts: ring + badge on the panel that had a goal/penalty/card */
 .chooser .alert-controls { display: flex; flex-wrap: wrap; align-items: center; justify-content: center; gap: 0.75rem 1rem; margin: -0.6rem auto 1.5rem; }
+/* Alert kinds on their own row, the other settings on the row below */
+.chooser .alert-controls::before { content: ''; flex-basis: 100%; order: 1; }
+.chooser .alert-controls > :not(.alert-kinds) { order: 2; }
 .alert-controls { position: relative; }
 .alert-controls .sound-picker { position: relative; }
 .sound-picker__button strong { color: var(--accent); font-weight: 600; }
@@ -604,16 +628,16 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .sound-picker__list li:hover, .sound-picker__list li:focus-visible { background: rgba(200,245,96,0.14); outline: none; }
 .sound-picker__list li[aria-selected="true"] { background: rgba(200,245,96,0.24); color: var(--accent); font-weight: 600; }
 .sound-picker__index { width: 1.4rem; color: var(--ink-muted); font-size: 0.72rem; text-align: right; }
-.alert-kinds { display: grid; grid-template-columns: repeat(4, minmax(8.5rem, 1fr)); gap: 0.5rem; margin: 0; padding: 0.5rem 0.7rem 0.7rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; font-size: 0.82rem; }
+.alert-kinds { display: grid; grid-auto-flow: column; grid-auto-columns: auto; gap: 0.4rem; margin: 0; padding: 0.3rem 0.5rem 0.5rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 10px; font-size: 0.78rem; }
 .alert-kinds legend { padding: 0 0.3rem; color: var(--ink-muted); font-size: 0.72rem; }
 .alert-kinds label { display: inline-flex; align-items: center; gap: 0.3rem; cursor: pointer; white-space: nowrap; }
-.alert-kind { display: flex; flex-direction: column; align-items: flex-start; gap: 0.35rem; padding: 0.45rem 0.6rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 8px; background: rgba(7,26,20,0.45); }
+.alert-kind { display: flex; flex-direction: column; align-items: flex-start; gap: 0.25rem; padding: 0.3rem 0.5rem; border: 1px solid rgba(200,245,96,0.22); border-radius: 7px; background: rgba(7,26,20,0.45); }
 .alert-kind:has(input:not(:checked)) { opacity: 0.55; }
 .alert-kind .sound-picker { max-width: 100%; }
-.alert-kind .sound-picker__button { padding: 0.15rem 0.5rem; font-size: 0.75rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
-.alert-kind:nth-child(4n) .sound-picker__list { left: auto; right: 0; }
+.alert-kind .sound-picker__button { padding: 0.1rem 0.45rem; font-size: 0.7rem; max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
+.alert-kind:nth-last-child(-n+3) .sound-picker__list { left: auto; right: 0; }
 .toolbar__menu .alert-controls { flex-direction: column; align-items: stretch; flex-wrap: nowrap; gap: 0.6rem; margin: 0; padding-left: 0.7rem; border-left: 1px solid rgba(200,245,96,0.2); }
-.toolbar__menu .alert-kinds { display: grid; grid-template-columns: 1fr; gap: 0.35rem; padding: 0.6rem 0.8rem 0.7rem; }
+.toolbar__menu .alert-kinds { display: grid; grid-auto-flow: row; grid-auto-columns: auto; grid-template-columns: 1fr; gap: 0.35rem; padding: 0.6rem 0.8rem 0.7rem; }
 .toolbar__menu .alert-kind { display: grid; padding: 0; border: 0; background: none; opacity: 1; grid-template-columns: minmax(0, 1fr) auto; gap: 0 0.75rem; }
 .toolbar__menu .alert-kind .sound-picker { display: contents; }
 .toolbar__menu .alert-kind .sound-picker__list { grid-column: 1 / -1; }
@@ -630,6 +654,23 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .panel__alert-badge { position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%); max-width: calc(100% - 1rem); padding: 0.3rem 0.85rem; border-radius: 999px; background: var(--alert-color); color: #101a0c; font-weight: 800; font-size: clamp(0.72rem, 2.4cqw, 1.05rem); letter-spacing: 0.02em; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; box-shadow: 0 2px 10px rgba(0,0,0,0.55); }
 @keyframes alert-pulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.25; } }
 @media (prefers-reduced-motion: reduce) { .panel__alert { animation: none; } }
+
+.panel__var { --var-color: #5fb4ff; position: absolute; inset: 0; z-index: 24; pointer-events: none; border: 3px dashed var(--var-color); }
+.panel__var-badge { position: absolute; top: 0.5rem; left: 50%; transform: translateX(-50%); display: flex; align-items: center; gap: 0.4rem; max-width: calc(100% - 1rem); padding: 0.28rem 0.8rem; border-radius: 999px; background: var(--var-color); color: #04223f; font-weight: 800; font-size: clamp(0.7rem, 2.3cqw, 1rem); white-space: nowrap; box-shadow: 0 2px 10px rgba(0,0,0,0.55); }
+.panel--alert .panel__var-badge { top: 2.8rem; }
+.panel__var-tag { flex: 0 0 auto; padding: 0 0.35rem; border-radius: 0.3rem; background: #04223f; color: var(--var-color); letter-spacing: 0.06em; animation: var-blink 1.2s ease-in-out infinite; }
+.panel__var-icon { flex: 0 0 auto; }
+.panel__var-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.panel__var-badge .panel__auto-controls { position: static; transform: none; flex: 0 0 auto; padding: 0; border: 0; background: transparent; gap: 0.3rem; font-size: inherit; }
+.panel__var-badge .panel__auto-count { color: inherit; padding: 0 0.1rem; }
+.panel__var-badge .panel__auto-count:empty { display: none; }
+.panel__var-badge .panel__auto-controls .btn { padding: 0.1rem 0.5rem; background: #04223f; border-color: #04223f; color: var(--var-color); font-weight: 700; }
+@keyframes var-blink { 50% { opacity: 0.35; } }
+@media (prefers-reduced-motion: reduce) { .panel__var-tag { animation: none; } }
+@container (max-width: 300px), (max-height: 180px) {
+  .panel__var-badge { padding: 0.2rem 0.4rem; }
+  .panel__var-text { display: none; }
+}
 
 .alert-auto { display: inline-flex; align-items: center; gap: 0.4rem; font-size: 0.82rem; }
 .alert-auto label { display: inline-flex; align-items: center; gap: 0.35rem; cursor: pointer; }
@@ -649,6 +690,11 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .panel__finished { position: absolute; z-index: 26; left: 50%; top: 2.8rem; transform: translateX(-50%); display: flex; align-items: center; gap: 0.4rem; max-width: calc(100% - 1rem); padding: 0.25rem 0.5rem; border-radius: 999px; background: rgba(7,26,20,0.92); border: 1px solid var(--accent); pointer-events: auto; font-size: clamp(0.7rem, 2cqw, 0.9rem); white-space: nowrap; }
 .panel__finished-count { padding: 0 0.3rem; font-weight: 700; color: var(--accent); font-variant-numeric: tabular-nums; overflow: hidden; text-overflow: ellipsis; }
 .panel__finished .btn { padding: 0.2rem 0.6rem; font-size: inherit; }
+/* The game that took the place of a highlight at half-time: top center, like the goal's Fixar/Voltar. */
+.panel__halftime { position: absolute; z-index: 26; left: 50%; top: 0.5rem; transform: translateX(-50%); display: flex; align-items: center; gap: 0.4rem; max-width: calc(100% - 1rem); padding: 0.25rem 0.5rem; border-radius: 999px; background: rgba(7,26,20,0.92); border: 1px solid #ffd166; pointer-events: auto; font-size: clamp(0.7rem, 2cqw, 0.9rem); white-space: nowrap; }
+.panel__halftime-text { min-width: 0; padding: 0 0.3rem; overflow: hidden; text-overflow: ellipsis; font-weight: 700; color: #ffd166; }
+.panel__halftime .btn { flex: 0 0 auto; padding: 0.2rem 0.6rem; font-size: inherit; }
+@container (max-width: 300px), (max-height: 180px) { .panel__halftime-text { display: none; } }
 .panel__live { position: absolute; z-index: 25; left: 50%; top: 2.8rem; transform: translateX(-50%); display: flex; flex-wrap: wrap; justify-content: center; align-items: center; gap: 0.35rem; max-width: calc(100% - 1rem); padding: 0.25rem 0.5rem; border-radius: 0.6rem; background: rgba(7,26,20,0.92); border: 1px solid var(--accent); font-size: clamp(0.65rem, 1.8cqw, 0.85rem); pointer-events: auto; }
 .panel__live-title { font-weight: 700; color: var(--accent); }
 .panel__live .btn { padding: 0.2rem 0.55rem; font-size: inherit; }

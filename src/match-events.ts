@@ -134,6 +134,17 @@ export function extractWilliamHillId(value: unknown): string | null {
   return /^\d{1,12}$/.test(id) ? id : null
 }
 
+/** "Frandsen, M" → "M. Frandsen", "Saliakas, Manolis" → "Manolis Saliakas"; names without a comma stay as they are. */
+export function formatPlayerName(name: string): string {
+  const clean = name.replace(/\s+/g, ' ').trim()
+  const comma = clean.indexOf(',')
+  if (comma <= 0) return clean
+  const surname = clean.slice(0, comma).trim()
+  const given = clean.slice(comma + 1).trim()
+  if (!given) return surname
+  return /^\p{L}\.?$/u.test(given) ? `${given.replace(/\.$/, '')}. ${surname}` : `${given} ${surname}`
+}
+
 const KIND_LABELS: Record<AlertKind, string> = {
   goal: 'GOL',
   penalty: 'PÊNALTI',

@@ -4,6 +4,8 @@ import {
   batchCapacity,
   groupByCompetition,
   groupByLeague,
+  groupByTime,
+  parseBllBatchOrder,
   leagueOf,
   stageOf,
   parseBllEvents,
@@ -288,4 +290,24 @@ test('groupByLeague junta as fases da mesma liga, ordena ligas por nome e jogos 
   assert.deepEqual(groups.map((group) => group.competition), ['Asia, AFC Champions League Elite', 'Brazil, Brasileirão Série B', 'Brazil, Campeonato Brasileiro Série A', 'Outros'])
   assert.deepEqual(groups[0].events.map((item) => item.id), ['4', '2', '6'])
   assert.deepEqual(groups[1].events.map((item) => item.id), ['5', '1'])
+})
+
+test('groupByTime põe todos os jogos numa lista por horário, sem horário por último', () => {
+  const event = (id: string, competition: string, time: string): BllEvent => ({ id, name: id, competition, time, live: true, url: id })
+  const groups = groupByTime([
+    event('1', 'Brazil, Brasileirão Série B', '18:00'),
+    event('2', 'Asia, AFC Champions League Elite, East Region', '15:00'),
+    event('3', 'Outros', ''),
+    event('4', 'Italy, Serie A', '15:00'),
+  ])
+  assert.equal(groups.length, 1)
+  assert.deepEqual(groups[0].events.map((item) => item.id), ['2', '4', '1', '3'])
+  assert.deepEqual(groupByTime([]), [])
+})
+
+test('parseBllBatchOrder aceita só "time"; o resto vira "league"', () => {
+  assert.equal(parseBllBatchOrder('time'), 'time')
+  assert.equal(parseBllBatchOrder('league'), 'league')
+  assert.equal(parseBllBatchOrder(null), 'league')
+  assert.equal(parseBllBatchOrder('xyz'), 'league')
 })

@@ -1,7 +1,7 @@
 import './style.css'
 import { version } from '../package.json'
 import { normalizeUrl } from './routing'
-import { batchCapacity, groupByCompetition, groupByLeague, planBatchOpen, stageOf, type BllEvent, type BllEventGroup } from './bll-batch'
+import { batchCapacity, groupByCompetition, groupByLeague, groupByTime, loadBllBatchOrder, planBatchOpen, saveBllBatchOrder, stageOf, type BllBatchOrder, type BllEvent, type BllEventGroup } from './bll-batch'
 import {
   DEFAULT_YOUTUBE_CHANNELS,
   loadYoutubeChannels,
@@ -29,11 +29,11 @@ import {
   type CompetitionMode,
   type CompetitionRule,
 } from './auto-open'
-import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, getAlertSettings, handleMatchEvent, onAlertSettingsChange, onAlertShown, type MatchEventPayload } from './alert-ui'
+import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, handleScorerName, onAlertSettingsChange, onAlertShown, onVarReviewStarted, setVarReview, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
-import type { LiveMatchStatus } from './livescore-365'
-import { AUTO_MIN_PANELS, composeHighlighted, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
+import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
+import { AUTO_MIN_PANELS, VAR_MAX_MS, composeHighlighted, endVarAuto, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
 import {
   buildLayoutTree,
   calculateLayout,
@@ -60,6 +60,8 @@ import {
   type NormRect,
 } from './match-label'
 import { createScoreTimeline, nextScoreChangeAt, pushScore, visibleScore, type ScoreTimeline } from './score-delay'
+import { clockElapsedAt, clockView, createClockTimeline, nextClockChangeAt, pushClock, visibleClock, type ClockTimeline, type ClockView } from './match-clock'
+import { isBreakPeriod, planHalftimeSwaps, type HalftimeSwap, type SwapPanelInfo } from './halftime-swap'
 import {
   buildOrganizerChoices,
   organizerDraftKey,
@@ -122,6 +124,13 @@ type AutoBaseline = { highlighted: PanelId[]; mode: LayoutMode; position: Highli
 let autoEntries: AutoEntry[] = []
 let autoBaseline: AutoBaseline | null = null
 let autoTimer: number | null = null
+/** Highlights of the user at half-time, swapped with a game being played until their break ends. */
+let halftimeSwaps: HalftimeSwap[] = []
+/** Highlights the user kept in their break ("Voltar", "Fixar" or a manual change): not swapped again until it ends. */
+const halftimeSkipped = new Set<PanelId>()
+let halftimeCheckTimer: number | null = null
+/** While the user organizes, drags or answers a dialog, the half-time swap waits this long to try again. */
+const HALFTIME_RETRY_MS = 5000
 const panelTitles = new Map<PanelId, string>()
 const panelVideoRects = new Map<PanelId, NormRect | null>()
 /** Per-panel dismiss; restored when the user opens/reloads the panel URL. */
@@ -131,6 +140,8 @@ const panelFeeds = new Map<PanelId, { home: string; away: string; timeline: Scor
 type Crests = { home: string | null; away: string | null }
 /** Team crests (data URLs, in the feed's home/away order) from 365Scores; they arrive after the names and score. */
 const panelCrests = new Map<PanelId, Crests>()
+/** Match clock readings per panel (William Hill or 365Scores), held back like the score. */
+const panelClocks = new Map<PanelId, ClockTimeline>()
 /** Last score shown per panel, to flash the label (or roll the numbers, in basketball) when it changes. */
 const shownScores = new Map<PanelId, MatchScore>()
 const scoreFlashUntil = new Map<PanelId, number>()
@@ -138,6 +149,8 @@ const scoreFlashUntil = new Map<PanelId, number>()
 const scoreFlashSides = new Map<PanelId, { home: boolean; away: boolean }>()
 const SCORE_FLASH_MS = 6000
 let labelRefreshTimer: number | null = null
+/** Some label shows a running clock or the half-time countdown, so the labels refresh every second. */
+let clockTicking = false
 /** 365Scores link of each YouTube panel (and BLL panel without a William Hill feed), as reported by the main process. */
 const panelLive = new Map<PanelId, LiveMatchStatus>()
 /** Per-panel delay (s) chosen on a 365Scores-linked panel; memory only, like the rest of the panel state. */
@@ -152,7 +165,7 @@ const keptFinishedPanels = new Set<PanelId>()
 let finishedTimer: number | null = null
 
 /** Auto mode: re-reads the BLL list and opens the games that start in the chosen competitions; on/off lasts only for this session. */
-const AUTO_OPEN_POLL_MS = Number(new URLSearchParams(location.search).get('auto-open-poll-ms')) || 60_000
+const AUTO_OPEN_POLL_MS = Number(new URLSearchParams(location.search).get('auto-open-poll-ms')) || 25_000
 /** While the user organizes, drags, answers a dialog or a goal is highlighted, new games wait this long to try again. */
 const AUTO_OPEN_RETRY_MS = 5000
 let autoOpenOn = false
@@ -182,6 +195,7 @@ function clearPanelMatchState(id: PanelId) {
   panelLive.delete(id)
   panelDelayOverride.delete(id)
   clearPendingAlerts(id)
+  clearVarReview(id, app)
   finishedPanels.delete(id)
   keptFinishedPanels.delete(id)
   panelTitles.delete(id)
@@ -189,6 +203,7 @@ function clearPanelMatchState(id: PanelId) {
   dismissedMatchLabels.delete(id)
   panelFeeds.delete(id)
   panelCrests.delete(id)
+  panelClocks.delete(id)
   shownScores.delete(id)
   scoreFlashUntil.delete(id)
   scoreFlashSides.delete(id)
@@ -246,7 +261,13 @@ function scheduleLabelRefresh(now: number) {
     const delay = panelScoreDelayMs(id)
     if (delay !== null) consider(nextScoreChangeAt(feed.timeline, now, delay))
   }
+  for (const [id, timeline] of panelClocks) {
+    const delay = panelScoreDelayMs(id)
+    if (delay !== null) consider(nextClockChangeAt(timeline, now, delay))
+  }
   for (const until of scoreFlashUntil.values()) consider(until)
+  // A clock on screen ticks: wake up on the next whole second.
+  if (clockTicking) consider(now + 1000 - (now % 1000))
   if (next === null) return
   labelRefreshTimer = window.setTimeout(() => {
     labelRefreshTimer = null
@@ -254,7 +275,7 @@ function scheduleLabelRefresh(now: number) {
   }, Math.max(0, next - now) + 30)
 }
 
-function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null; crests: Crests } | null {
+function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null; crests: Crests; clock: ClockView | null } | null {
   const feed = panelFeeds.get(id)
   const titleLabel = extractMatchLabel(panelTitles.get(id) ?? '')
   const titleTeams = titleLabel ? splitMatchTeams(titleLabel) : null
@@ -268,7 +289,35 @@ function panelMatch(id: PanelId, now: number): { home: string; away: string; sco
   const crests = titleTeams && feedTeams && teamsReversed(titleTeams, feedTeams)
     ? { home: feedCrests.away, away: feedCrests.home }
     : feedCrests
-  return { ...teams, score, crests }
+  // The clock follows the score's delay (and hides with it): the video trails the feed.
+  const timeline = panelClocks.get(id)
+  const reading = timeline && delay !== null ? visibleClock(timeline, now, delay) : null
+  const clock = reading && delay !== null ? clockView(reading, now - delay) : null
+  return { ...teams, score, crests, clock }
+}
+
+/** Width the label reserves for the clock box; the time counts as at least "00:00" so it doesn't jitter each second. */
+function clockChars(clock: ClockView | null) {
+  if (!clock) return 0
+  return clock.tag.length + (clock.time ? 1 + Math.max(5, clock.time.length) : 0)
+}
+
+/** The clock box after the names: a tag ("2T", "Intervalo") and the time, which ticks in place. */
+function clockBox(clock: ClockView) {
+  const box = document.createElement('span')
+  box.className = clock.paused ? 'panel__label-clock panel__label-clock--paused' : 'panel__label-clock'
+  box.title = clock.title
+  box.append(labelSpan('panel__label-clock-tag', clock.tag))
+  box.append(labelSpan('panel__label-clock-time', clock.time))
+  return box
+}
+
+function updateClockBox(labelElement: HTMLElement, clock: ClockView | null) {
+  const box = labelElement.querySelector<HTMLElement>('.panel__label-clock')
+  if (!box || !clock) return
+  const time = box.querySelector<HTMLElement>('.panel__label-clock-time')
+  if (time && time.textContent !== clock.time) time.textContent = clock.time
+  box.title = clock.title
 }
 
 function crestImage(src: string | null, fresh: boolean) {
@@ -349,6 +398,7 @@ function updatePanelLabels() {
   const stage = app.querySelector<HTMLElement>('#layout-stage')
   if (!stage) return
   const now = Date.now()
+  clockTicking = false
   for (const panelElement of stage.querySelectorAll<HTMLElement>('.panel')) {
     const id = panelElement.dataset.panelId
     if (!id) continue
@@ -389,7 +439,9 @@ function updatePanelLabels() {
       away: match.away,
       score: match.score,
       crests: Boolean(match.crests.home || match.crests.away),
+      clockChars: clockChars(match.clock),
     })
+    if (match.clock?.time) clockTicking = true
     const labelElement = existing ?? document.createElement('div')
     if (!existing) {
       labelElement.className = 'panel__label'
@@ -401,7 +453,9 @@ function updatePanelLabels() {
     labelElement.dataset.label = label
     labelElement.dataset.score = scoreText
     labelElement.classList.toggle('panel__label--flash', flashing)
-    labelElement.setAttribute('aria-label', scoreText ? `${match.home} ${scoreText} ${match.away}` : label)
+    const clockText = match.clock ? ` · ${match.clock.title}${match.clock.time ? ` ${match.clock.time}` : ''}` : ''
+    labelElement.dataset.clock = match.clock ? `${match.clock.tag} ${match.clock.time}`.trim() : ''
+    labelElement.setAttribute('aria-label', `${scoreText ? `${match.home} ${scoreText} ${match.away}` : label}${clockText}`)
     labelElement.style.setProperty('--label-x', `${placement.box.x * 100}%`)
     labelElement.style.setProperty('--label-y', `${placement.box.y * 100}%`)
     labelElement.style.setProperty('--label-w', `${placement.box.width * 100}%`)
@@ -409,8 +463,13 @@ function updatePanelLabels() {
     labelElement.style.setProperty('--label-font', `${placement.fontPx}px`)
 
     // Rebuild the content only when it changes, so the flash animation is not restarted by every poll.
-    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, flashing ? `${lit.home ? 'h' : ''}${lit.away ? 'a' : ''}` : '', match.crests.home ?? '', match.crests.away ?? ''].join('|')
-    if (labelElement.dataset.contentKey === contentKey) continue
+    // The clock's time isn't part of the key: it ticks in place every second.
+    const clockKey = match.clock ? `${match.clock.tag}:${match.clock.paused ? 'p' : 'r'}:${match.clock.time ? 't' : ''}` : ''
+    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, flashing ? `${lit.home ? 'h' : ''}${lit.away ? 'a' : ''}` : '', match.crests.home ?? '', match.crests.away ?? '', clockKey].join('|')
+    if (labelElement.dataset.contentKey === contentKey) {
+      updateClockBox(labelElement, match.clock)
+      continue
+    }
     labelElement.dataset.contentKey = contentKey
     const shownCrests = labelElement.dataset.crests ?? ''
     const homeCrest = crestImage(match.crests.home, !shownCrests.includes('h'))
@@ -447,10 +506,13 @@ function updatePanelLabels() {
         chip.append(row)
       }
     }
+    if (match.clock) chip.append(clockBox(match.clock))
     chip.append(dismiss)
     labelElement.replaceChildren(chip)
   }
   scheduleLabelRefresh(now)
+  // The visible clocks just moved: a highlight may have gone to half-time or come back from it.
+  scheduleHalftimeCheck()
 }
 
 function createPanel(): Panel {
@@ -510,12 +572,14 @@ function cloneSnapshot(): LayoutSnapshot {
 
 function pushHistory() {
   cancelAutoMode()
+  forgetHalftimeSwaps()
   captureDrafts()
   history = [...history.slice(-(HISTORY_LIMIT - 1)), cloneSnapshot()]
 }
 
 function restoreSnapshot(snapshot: LayoutSnapshot) {
   cancelAutoMode()
+  forgetHalftimeSwaps()
   panels = snapshot.panels.map((panel) => ({ ...panel }))
   highlighted = new Set(snapshot.highlighted)
   layoutTree = snapshot.tree
@@ -575,12 +639,15 @@ function updateAutoControls() {
       controls.className = 'panel__auto-controls'
       controls.innerHTML = '<span class="panel__auto-count" data-auto-count></span><button type="button" class="btn btn--load" data-auto-pin title="Manter este jogo em destaque">📌 Fixar</button><button type="button" class="btn btn--ghost" data-auto-back title="Voltar ao layout anterior agora">↩ Voltar</button>'
     }
-    // Inside the green goal badge (next to the score) while it shows; on its own at the top once it fades.
+    // Inside the green goal badge (next to the score) or the blue VAR badge while one shows; on its own at the top once it fades.
     const badge = panelElement.querySelector<HTMLElement>(':scope > .panel__alert > .panel__alert-badge')
+      ?? panelElement.querySelector<HTMLElement>(':scope > .panel__var > .panel__var-badge')
     const host = badge ?? panelElement
     if (controls.parentElement !== host) host.append(controls)
     const count = controls.querySelector<HTMLElement>('[data-auto-count]')
-    const text = badge ? `${secondsLeft(entry, now)} s` : `Gol! ${secondsLeft(entry, now)} s`
+    // A review in progress has no end time yet: no countdown.
+    const seconds = entry.reviewing ? '' : `${secondsLeft(entry, now)} s`
+    const text = badge ? seconds : `${entry.reason === 'var' ? 'VAR' : 'Gol!'} ${seconds}`.trim()
     if (count && count.textContent !== text) count.textContent = text
   }
 }
@@ -651,13 +718,14 @@ function tickAuto() {
   else updateAutoControls()
 }
 
-function startAutoGoal(panelId: PanelId) {
+/** `reason: 'var'`: a VAR review, highlighted until it ends (capped by `VAR_MAX_MS`). */
+function startAutoGoal(panelId: PanelId, reason?: 'var') {
   const alertSettings = getAlertSettings()
   if (view !== 'grid' || panels.length < AUTO_MIN_PANELS || !alertSettings.autoHighlight) return
   if (!autoBaseline) {
     autoBaseline = { highlighted: [...highlighted], mode: layoutMode, position: highlightPosition, variant: compositionVariant }
   }
-  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id), alertSettings.autoHighlightSec * 1000)
+  const result = registerGoal(autoEntries, panelId, Date.now(), panels.length, autoBaseline.highlighted, panels.map((panel) => panel.id), reason ? VAR_MAX_MS : alertSettings.autoHighlightSec * 1000, reason)
   autoEntries = result.autos
   if (!result.highlighted) {
     if (autoEntries.length === 0) autoBaseline = null
@@ -678,6 +746,151 @@ function releaseAutoPanel(panelId: PanelId) {
   if (!autoEntries.some((entry) => entry.id === panelId)) return
   autoEntries = autoEntries.filter((entry) => entry.id !== panelId)
   applyAutoLayout()
+}
+
+/** Visible clock of a panel (with the score's delay, or the alerts' one while the score is hidden). */
+function panelVisibleClock(id: PanelId, now: number) {
+  const timeline = panelClocks.get(id)
+  if (!timeline) return null
+  const delay = panelScoreDelayMs(id) ?? panelAlertDelayMs(id)
+  const clock = visibleClock(timeline, now, delay)
+  return clock ? { period: clock.period, elapsed: clockElapsedAt(clock, now - delay) } : null
+}
+
+function swapPanelInfo(panel: Panel, now: number): SwapPanelInfo {
+  const clock = panel.url ? panelVisibleClock(panel.id, now) : null
+  const delay = panelScoreDelayMs(panel.id) ?? panelAlertDelayMs(panel.id)
+  const feed = panelFeeds.get(panel.id)
+  const name = extractMatchLabel(panelTitles.get(panel.id) ?? '') ?? (feed?.home && feed.away ? `${feed.home} x ${feed.away}` : '')
+  const mainTeam = Boolean(autoOpenPanels.get(panel.id)?.mainTeam || (name && mainTeamOf(name, autoOpenSettings.teams)))
+  return {
+    id: panel.id,
+    period: clock?.period ?? null,
+    elapsed: clock?.elapsed ?? null,
+    score: feed ? visibleScore(feed.timeline, now, delay) : null,
+    mainTeam,
+    alertsOff: panel.alertsOff,
+  }
+}
+
+/** The user's own highlights: kept aside while a goal is highlighted. */
+function userHighlights(): PanelId[] {
+  return autoBaseline ? [...autoBaseline.highlighted] : [...highlighted]
+}
+
+/** Exchanges the places of two panels, like dragging one onto the other; doing it again undoes it. */
+function exchangeHighlights(a: PanelId, b: PanelId) {
+  if (!panelById(a) || !panelById(b)) return
+  const result = swapPanels(panelOrder, userHighlights(), a, b)
+  panelOrder = result.order
+  if (autoBaseline) autoBaseline = { ...autoBaseline, highlighted: result.highlighted }
+  else highlighted = new Set(result.highlighted)
+}
+
+function relayoutHalftime() {
+  if (autoBaseline) {
+    applyAutoLayout()
+    return
+  }
+  captureDrafts()
+  buildCurrentLayout(layoutMode)
+  renderGrid()
+}
+
+function scheduleHalftimeCheck(delayMs = 0) {
+  if (halftimeCheckTimer !== null) {
+    if (delayMs > 0) return
+    window.clearTimeout(halftimeCheckTimer)
+  }
+  halftimeCheckTimer = window.setTimeout(() => {
+    halftimeCheckTimer = null
+    checkHalftimeSwaps()
+  }, delayMs)
+}
+
+/** A manual layout change wins: the swaps on screen stay as they are, and the games in a break are left alone until it ends. */
+function forgetHalftimeSwaps() {
+  const now = Date.now()
+  for (const panel of panels) {
+    if (isBreakPeriod(panelVisibleClock(panel.id, now)?.period ?? null)) halftimeSkipped.add(panel.id)
+  }
+  if (halftimeSwaps.length === 0) return
+  halftimeSwaps = []
+  updateHalftimeControls()
+}
+
+/** Swaps a highlight going to half-time with the best game being played, and back once its break is over. */
+function checkHalftimeSwaps() {
+  const now = Date.now()
+  const infos = panels.map((panel) => swapPanelInfo(panel, now))
+  for (const id of halftimeSkipped) {
+    const info = infos.find((item) => item.id === id)
+    if (!info || !isBreakPeriod(info.period)) halftimeSkipped.delete(id)
+  }
+  if (view !== 'grid') {
+    halftimeSwaps = []
+    return
+  }
+  if (editorOpen || dragState !== null || document.querySelector('.confirm')) {
+    scheduleHalftimeCheck(HALFTIME_RETRY_MS)
+    return
+  }
+  const enabled = panels.length >= AUTO_MIN_PANELS && getAlertSettings().halftimeSwap
+  // Turned off (or too few panels): every swap goes back now.
+  const plan = enabled
+    ? planHalftimeSwaps({ swaps: halftimeSwaps, userHighlighted: userHighlights(), highlighted: [...highlighted], panels: infos, order: panelOrder, skipped: halftimeSkipped })
+    : { restore: [...halftimeSwaps], start: [] }
+  if (plan.restore.length === 0 && plan.start.length === 0) {
+    updateHalftimeControls()
+    return
+  }
+  for (const swap of plan.restore) exchangeHighlights(swap.out, swap.in)
+  for (const swap of plan.start) exchangeHighlights(swap.out, swap.in)
+  halftimeSwaps = [...halftimeSwaps.filter((swap) => !plan.restore.includes(swap)), ...plan.start]
+  relayoutHalftime()
+}
+
+/** "Voltar": the game in its break goes back to the highlight and stays there until the break ends. */
+function releaseHalftimeSwap(inId: PanelId) {
+  const swap = halftimeSwaps.find((item) => item.in === inId)
+  if (!swap) return
+  halftimeSwaps = halftimeSwaps.filter((item) => item !== swap)
+  halftimeSkipped.add(swap.out)
+  exchangeHighlights(swap.out, swap.in)
+  relayoutHalftime()
+}
+
+/** "Fixar": the game that came in keeps the highlight; the other one doesn't come back. */
+function pinHalftimeSwap(inId: PanelId) {
+  const swap = halftimeSwaps.find((item) => item.in === inId)
+  if (!swap) return
+  halftimeSwaps = halftimeSwaps.filter((item) => item !== swap)
+  halftimeSkipped.add(swap.out)
+  updateHalftimeControls()
+}
+
+function updateHalftimeControls() {
+  const now = Date.now()
+  for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
+    const swap = halftimeSwaps.find((item) => item.in === panelElement.dataset.panelId)
+    let badge = panelElement.querySelector<HTMLElement>(':scope > .panel__halftime')
+    if (!swap) {
+      badge?.remove()
+      continue
+    }
+    if (!badge) {
+      badge = document.createElement('div')
+      badge.className = 'panel__halftime'
+      badge.innerHTML = '<span class="panel__halftime-text" data-halftime-text></span><button type="button" class="btn btn--load" data-halftime-pin title="Manter este jogo em destaque">📌 Fixar</button><button type="button" class="btn btn--ghost" data-halftime-back title="Voltar o jogo do intervalo para o destaque agora">↩ Voltar</button>'
+      panelElement.append(badge)
+    }
+    const match = panelMatch(swap.out, now)
+    const name = match ? `${match.home} x ${match.away}` : extractMatchLabel(panelTitles.get(swap.out) ?? '') ?? 'outro jogo'
+    const text = `Intervalo em ${name}`
+    const textElement = badge.querySelector<HTMLElement>('[data-halftime-text]')
+    if (textElement && textElement.textContent !== text) textElement.textContent = text
+    badge.title = `${text}: volta ao destaque quando o jogo recomeçar`
+  }
 }
 
 function liveDelayLabel(seconds: number) {
@@ -737,11 +950,23 @@ function updateLiveControls() {
   }
 }
 
+/** Shows or ends a VAR review now; its end leaves the highlight a few more seconds for the decision. */
+function deliverLiveVar(payload: LiveVarPayload) {
+  if (payload.review && (view !== 'grid' || panelById(payload.panelId)?.alertsOff)) return
+  if (setVarReview(payload.panelId, payload.review, app, (panelId) => Boolean(panelById(panelId)))) return
+  if (payload.review) return
+  autoEntries = endVarAuto(autoEntries, payload.panelId, Date.now())
+  updateAutoControls()
+}
+
 /** Shows an alert now; a goal the VAR cancelled also undoes that panel's goal highlight. */
 function deliverMatchEvent(payload: MatchEventPayload) {
   if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
   if (payload.kind === 'var' && payload.note === 'gol anulado') releaseAutoPanel(payload.panelId)
-  handleMatchEvent(payload, app, (panelId) => Boolean(panelById(panelId)))
+  // With the goal highlight on, the alert (and the scorer's name in it) lasts as long as the highlight, so they leave together.
+  const alertSettings = getAlertSettings()
+  const highlightMs = panels.length >= AUTO_MIN_PANELS && alertSettings.autoHighlight ? alertSettings.autoHighlightSec * 1000 : undefined
+  handleMatchEvent(payload, app, (panelId) => Boolean(panelById(panelId)), highlightMs)
 }
 
 app.addEventListener('click', (event) => {
@@ -750,6 +975,8 @@ app.addEventListener('click', (event) => {
   if (!panelId) return
   if (target.closest('[data-auto-pin]')) pinAutoPanel(panelId)
   else if (target.closest('[data-auto-back]')) releaseAutoPanel(panelId)
+  if (target.closest('[data-halftime-pin]')) pinHalftimeSwap(panelId)
+  else if (target.closest('[data-halftime-back]')) releaseHalftimeSwap(panelId)
   if (target.closest('[data-finished-keep]')) keepFinishedPanel(panelId)
   const choice = target.closest<HTMLElement>('[data-live-choose]')?.dataset.liveChoose
   if (choice) window.quadra?.chooseLiveMatch(panelId, choice === 'none' ? null : Number(choice))
@@ -1182,14 +1409,14 @@ function startWithGames(urls: string[]) {
   render()
 }
 
-function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean) {
+function batchListHtml(groups: BllEventGroup<BatchEvent>[], fromChooser: boolean, checked: ReadonlySet<string> = new Set(), byTime = false) {
   const open = new Set(fromChooser ? [] : panels.map((panel) => panel.url).filter(Boolean))
   return groups.map((group, groupIndex) => `<fieldset class="bll-batch__group">
     <legend><label><input type="checkbox" data-group="${groupIndex}"> ${escapeHtml(group.competition)} <span class="bll-batch__count">(${group.events.length})</span></label></legend>
     ${group.events.map((event) => {
       const isOpen = open.has(event.url)
-      return `<label class="bll-batch__item${isOpen ? ' is-open' : ''}"><input type="checkbox" data-url="${escapeHtml(event.url)}" data-group-item="${groupIndex}"${isOpen ? ' checked disabled' : ''}>
-        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}${event.basketball ? '<span class="bll-batch__sport" title="Basquete" aria-label="Basquete">🏀</span> ' : ''}${event.americanFootball ? '<span class="bll-batch__sport" title="Futebol americano" aria-label="Futebol americano">🏈</span> ' : ''}<span>${escapeHtml(event.name)}</span>${event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
+      return `<label class="bll-batch__item${isOpen ? ' is-open' : ''}"><input type="checkbox" data-url="${escapeHtml(event.url)}" data-group-item="${groupIndex}"${isOpen ? ' checked disabled' : checked.has(event.url) ? ' checked' : ''}>
+        ${event.time ? `<span class="bll-batch__time">${escapeHtml(event.time)}</span> ` : ''}${event.basketball ? '<span class="bll-batch__sport" title="Basquete" aria-label="Basquete">🏀</span> ' : ''}${event.americanFootball ? '<span class="bll-batch__sport" title="Futebol americano" aria-label="Futebol americano">🏈</span> ' : ''}<span>${escapeHtml(event.name)}</span>${byTime ? ` <small class="bll-batch__channel">${escapeHtml(event.competition)}</small>` : ''}${!byTime && event.competition !== group.competition && stageOf(event.competition) ? ` <small class="bll-batch__channel">${escapeHtml(stageOf(event.competition))}</small>` : ''}${event.channel && event.channel !== group.competition ? ` <small class="bll-batch__channel">${escapeHtml(event.channel)}</small>` : ''}${isOpen ? ' <small>já aberto</small>' : ''}</label>`
     }).join('')}
   </fieldset>`).join('')
 }
@@ -1244,6 +1471,11 @@ function openBatch(source: BatchSource) {
   backdrop.className = 'confirm bll-batch'
   backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="bll-batch-title">
     <p id="bll-batch-title" class="confirm__message">${config.title}</p>
+    ${source === 'bll' ? `<div class="bll-batch__order" role="group" aria-label="Ordem da lista">
+      <span>Ordem:</span>
+      <button type="button" data-order="league">Por liga</button>
+      <button type="button" data-order="time">Por horário</button>
+    </div>` : ''}
     <p class="bll-batch__status" role="status" aria-live="polite"></p>
     <div class="bll-batch__list"></div>
     ${source === 'youtube' ? `<div class="yt-channels" hidden>
@@ -1311,9 +1543,29 @@ function openBatch(source: BatchSource) {
       status.textContent = config.empty
       return
     }
-    list.innerHTML = batchListHtml(source === 'bll' ? groupByLeague(result.events) : groupByCompetition(result.events), fromChooser)
+    events = result.events
+    renderList()
+  }
+  let events: BatchEvent[] = []
+  let order: BllBatchOrder = loadBllBatchOrder()
+  const orderButtons = [...backdrop.querySelectorAll<HTMLButtonElement>('[data-order]')]
+  const renderList = () => {
+    for (const button of orderButtons) button.setAttribute('aria-pressed', String(button.dataset.order === order))
+    if (events.length === 0) return
+    // Switching the order keeps the games already ticked.
+    const checked = new Set(selectedUrls())
+    const groups = source !== 'bll' ? groupByCompetition(events) : order === 'time' ? groupByTime(events) : groupByLeague(events)
+    list.innerHTML = batchListHtml(groups, fromChooser, checked, source === 'bll' && order === 'time')
     updateSelection()
   }
+  for (const button of orderButtons) {
+    button.addEventListener('click', () => {
+      order = button.dataset.order === 'time' ? 'time' : 'league'
+      saveBllBatchOrder(order)
+      renderList()
+    })
+  }
+  renderList()
   const finish = () => {
     document.removeEventListener('keydown', onKey)
     backdrop.remove()
@@ -1541,7 +1793,7 @@ async function pollAutoOpen() {
   autoOpenReading = false
   if (!autoOpenOn) return
   if (!result || result.status !== 'ok') {
-    autoOpenError = window.quadra ? 'Não foi possível ler a lista da BLL; tenta de novo no próximo minuto. Se continuar, abra a BLL num painel e confira o login.' : 'O modo Auto só funciona no app do Quadra.'
+    autoOpenError = window.quadra ? 'Não foi possível ler a lista da BLL; tenta de novo em 25 s. Se continuar, abra a BLL num painel e confira o login.' : 'O modo Auto só funciona no app do Quadra.'
     updateAutoOpenIndicators()
     return
   }
@@ -1614,7 +1866,7 @@ function openAutoOpenDialog() {
     <p id="auto-open-title" class="confirm__message">Modo Auto</p>
     <p class="bll-batch__status" role="status" aria-live="polite" data-auto-open-status></p>
     <div class="auto-open__body">
-      <p class="bll-batch__status">Ligado, o Quadra lê a lista da BLL a cada minuto e abre numa tela cada jogo que começar nas competições escolhidas (só futebol). Jogos que você fechar não voltam.</p>
+      <p class="bll-batch__status">Ligado, o Quadra lê a lista da BLL a cada 25 s e abre numa tela cada jogo que começar nas competições escolhidas (só futebol). Jogos que você fechar não voltam.</p>
       <div data-auto-open-lists></div>
       <p class="yt-channels__message" role="status" aria-live="polite" data-auto-open-message></p>
       <button type="button" class="btn btn--ghost yt-channels__restore" data-restore>Restaurar listas padrão</button>
@@ -1778,6 +2030,7 @@ function togglePanelAlerts(id: PanelId) {
   if (panel.alertsOff) {
     clearPendingAlerts(id)
     clearAlert(id, app)
+    clearVarReview(id, app)
     releaseAutoPanel(id)
   }
   syncAlertAudio()
@@ -2659,6 +2912,7 @@ function renderGrid() {
   updatePanelLabels()
   applyAlertStates(app)
   updateAutoControls()
+  updateHalftimeControls()
   updateFinishedControls()
   updateLiveControls()
   focusPendingPanel()
@@ -2701,6 +2955,7 @@ window.quadra?.onMatchScore(({ panelId, home, away, score }) => {
   if (!parsed) {
     panelFeeds.delete(panelId)
     panelCrests.delete(panelId)
+    panelClocks.delete(panelId)
   } else {
     const feed = panelFeeds.get(panelId) ?? { home: '', away: '', timeline: createScoreTimeline() }
     feed.home = home
@@ -2708,6 +2963,13 @@ window.quadra?.onMatchScore(({ panelId, home, away, score }) => {
     pushScore(feed.timeline, Date.now(), parsed)
     panelFeeds.set(panelId, feed)
   }
+  updatePanelLabels()
+})
+window.quadra?.onMatchClock(({ panelId, clock }) => {
+  if (!panelById(panelId)) return
+  const timeline = panelClocks.get(panelId) ?? createClockTimeline()
+  pushClock(timeline, Date.now(), clock)
+  panelClocks.set(panelId, timeline)
   updatePanelLabels()
 })
 window.quadra?.onMatchCrests(({ panelId, home, away }) => {
@@ -2723,6 +2985,7 @@ onAlertSettingsChange(() => {
 onAlertShown((panelId, payload) => {
   if (payload.kind === 'goal' || payload.kind === 'touchdown') startAutoGoal(panelId)
 })
+onVarReviewStarted((panelId) => startAutoGoal(panelId, 'var'))
 window.quadra?.onMatchEvent((payload) => {
   if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
   // 365Scores-linked panels trail the data: hold the alert as long as the panel's score is held.
@@ -2739,6 +3002,26 @@ window.quadra?.onMatchEvent((payload) => {
   timers.add(timer)
   pendingAlerts.set(payload.panelId, timers)
 })
+window.quadra?.onMatchScorer((payload) => {
+  if (view !== 'grid') return
+  handleScorerName(payload.panelId, payload.eventId, payload.player, app)
+})
+window.quadra?.onLiveVar((payload) => {
+  if (!panelById(payload.panelId)) return
+  // Held as long as the panel's alerts, so the badge and the highlight show with the video, not before.
+  const delay = panelAlertDelayMs(payload.panelId)
+  if (delay <= 0) {
+    deliverLiveVar(payload)
+    return
+  }
+  const timers = pendingAlerts.get(payload.panelId) ?? new Set<number>()
+  const timer = window.setTimeout(() => {
+    timers.delete(timer)
+    deliverLiveVar(payload)
+  }, delay)
+  timers.add(timer)
+  pendingAlerts.set(payload.panelId, timers)
+})
 window.quadra?.onMatchEnded(({ panelId }) => onMatchEnded(panelId))
 window.quadra?.onLiveMatch((status) => {
   if (!panelById(status.panelId)) return
@@ -2746,6 +3029,7 @@ window.quadra?.onLiveMatch((status) => {
     panelLive.delete(status.panelId)
     panelDelayOverride.delete(status.panelId)
     clearPendingAlerts(status.panelId)
+    deliverLiveVar({ panelId: status.panelId, review: null })
   } else {
     panelLive.set(status.panelId, status)
   }

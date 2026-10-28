@@ -6,6 +6,17 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.9',
+    label: '1.1.9',
+    notes: [
+      { title: 'Nome de quem fez o gol', body: 'O selo do gol mostra o jogador assim que o nome chega, e com o destaque ligado selo, nome e destaque saem juntos.' },
+      { title: 'VAR em andamento', body: 'Nos jogos ligados ao 365Scores, um selo azul VAR mostra o que está sendo revisado, toca o som "VAR check" e o jogo vira destaque até a decisão.' },
+      { title: 'Tempo de jogo no rótulo', body: 'Depois do placar aparece o tempo e o relógio correndo, inclusive nos acréscimos, e no intervalo a contagem dos 15 minutos.' },
+      { title: 'Troca no intervalo', body: 'Quando um jogo seu em destaque vai para o intervalo, o jogo rolando mais interessante assume o lugar dele até o 2º tempo começar.' },
+      { title: 'Lista da BLL por horário', body: 'Em "Abrir vários jogos da BLL", escolha ver os jogos agrupados por liga ou numa lista só, por horário.' },
+    ],
+  },
+  {
     version: '1.1.8',
     label: '1.1.8',
     notes: [

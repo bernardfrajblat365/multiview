@@ -4,10 +4,13 @@ import {
   AUTO_HIGHLIGHT_MS,
   companionHelps,
   composeHighlighted,
+  endVarAuto,
   expireAutos,
   highlightCapacity,
   registerGoal,
   secondsLeft,
+  VAR_AFTER_MS,
+  VAR_MAX_MS,
   type AutoEntry,
 } from '../src/auto-highlight.ts'
 
@@ -189,4 +192,40 @@ test('gol repetido no mesmo painel com outra duração substitui o expiresAt', (
 
   const second = registerGoal(first.autos, 'p5', 30_000, 9, [], panelOrderOf(9), 15_000)
   assert.deepEqual(second.autos, [{ id: 'p5', expiresAt: 45_000 }])
+})
+
+test('a VAR review highlights its panel until the review ends, then VAR_AFTER_MS more', () => {
+  const order = ['a', 'b', 'c', 'd', 'e']
+  const started = registerGoal([], 'c', 1000, 5, [], order, VAR_MAX_MS, 'var')
+  assert.deepEqual(started.autos, [{ id: 'c', expiresAt: 1000 + VAR_MAX_MS, reason: 'var', reviewing: true }])
+  assert.equal(started.highlighted?.[0], 'c')
+  const ended = endVarAuto(started.autos, 'c', 60_000)
+  assert.deepEqual(ended, [{ id: 'c', expiresAt: 60_000 + VAR_AFTER_MS, reason: 'var' }])
+  // Ending again (or another panel) changes nothing.
+  assert.deepEqual(endVarAuto(ended, 'c', 70_000), ended)
+  assert.deepEqual(endVarAuto(started.autos, 'a', 60_000), started.autos)
+})
+
+test('a goal during a VAR review keeps at least the goal time after the review', () => {
+  const order = ['a', 'b', 'c', 'd', 'e']
+  const review = registerGoal([], 'c', 0, 5, [], order, VAR_MAX_MS, 'var').autos
+  const goal = registerGoal(review, 'c', 10_000, 5, [], order, AUTO_HIGHLIGHT_MS).autos
+  assert.equal(goal[0].reviewing, true)
+  assert.equal(goal[0].holdUntil, 10_000 + AUTO_HIGHLIGHT_MS)
+  // The VAR decides 5 s later: the goal's 45 s outlast the 15 s after the review, so it is a goal highlight again.
+  assert.deepEqual(endVarAuto(goal, 'c', 15_000), [{ id: 'c', expiresAt: 10_000 + AUTO_HIGHLIGHT_MS }])
+})
+
+test('a VAR review right after a goal keeps the goal time too', () => {
+  const order = ['a', 'b', 'c', 'd', 'e']
+  const goal = registerGoal([], 'c', 0, 5, [], order, AUTO_HIGHLIGHT_MS).autos
+  const review = registerGoal(goal, 'c', 5000, 5, [], order, VAR_MAX_MS, 'var').autos
+  assert.deepEqual(review, [{ id: 'c', expiresAt: 5000 + VAR_MAX_MS, reason: 'var', reviewing: true, holdUntil: AUTO_HIGHLIGHT_MS }])
+  // A long review: past the goal's time, the review's 15 s decide.
+  assert.deepEqual(endVarAuto(review, 'c', 100_000), [{ id: 'c', expiresAt: 100_000 + VAR_AFTER_MS, reason: 'var' }])
+})
+
+test('a VAR review follows the same rules as a goal: 3+ panels, never a panel the user highlighted', () => {
+  assert.equal(registerGoal([], 'a', 0, 2, [], ['a', 'b'], VAR_MAX_MS, 'var').highlighted, null)
+  assert.equal(registerGoal([], 'a', 0, 5, ['a'], ['a', 'b', 'c', 'd', 'e'], VAR_MAX_MS, 'var').highlighted, null)
 })

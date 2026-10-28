@@ -11,7 +11,7 @@ import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
 import { createTeamCrests } from './team-crests'
-import { createScoreboardScanners, type ScannerScore } from './scoreboard-scanner'
+import { createScoreboardScanners, type ScannerClock, type ScannerScore } from './scoreboard-scanner'
 import {
   createLoadPacer,
   PLAYBACK_CHECK_INTERVAL_MS,
@@ -288,10 +288,16 @@ const scanners = createScoreboardScanners({
         team: incident.team,
         note: incident.note,
         label,
+        eventId: incident.id,
+        player: incident.player,
       })
     }
   },
+  onScorer: ({ panelIds, incidentId, player }) => {
+    for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-scorer', { panelId, eventId: incidentId, player })
+  },
   onScore: sendMatchScore,
+  onClock: sendMatchClock,
   onEnd: sendMatchEnded,
   findScorer: (query) => liveScores.findScorer(query),
 })
@@ -309,16 +315,22 @@ const liveScores = createLiveScoreLinker({
         team: incident.team,
         note: incident.note,
         label,
+        eventId: incident.id,
+        player: incident.player,
       })
     }
   },
   onScore: sendMatchScore,
+  onClock: sendMatchClock,
   onStatus: (status) => {
     // Unlinked (other video, no match): its crests go with it.
     if (status.status === 'off') teamCrests.clear(status.panelId)
     overlayWindow?.webContents.send('quadra:live-match', status)
   },
   onEnd: sendMatchEnded,
+  onVar: ({ panelIds, review }) => {
+    for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:live-var', { panelId, review })
+  },
   onList: (games) => teamCrests.prefetch(games),
 })
 /** Crests for the match label, from 365Scores; they follow the names and score, never hold them up. */
@@ -329,6 +341,10 @@ const teamCrests = createTeamCrests({
 
 function sendMatchEnded({ panelIds }: { panelIds: string[] }) {
   for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-ended', { panelId })
+}
+
+function sendMatchClock({ panelIds, clock }: ScannerClock) {
+  for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-clock', { panelId, clock })
 }
 
 function sendMatchScore({ panelIds, home, away, score, teams }: ScannerScore) {

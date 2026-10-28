@@ -281,8 +281,8 @@ test('parseGameDetail lê placar, cartões e eventos em ordem cronológica', () 
   assert.equal(parsed.home.score, 1)
   assert.equal(parsed.away.redCards, 1)
   assert.deepEqual(parsed.events, [
-    { order: 1, typeId: 1, subTypeId: 1, competitorId: 10, gameTime: 12 },
-    { order: 2, typeId: 3, subTypeId: 21, competitorId: 20, gameTime: 30 },
+    { order: 1, typeId: 1, subTypeId: 1, competitorId: 10, gameTime: 12, stageId: -1 },
+    { order: 2, typeId: 3, subTypeId: 21, competitorId: 20, gameTime: 30, stageId: -1 },
   ])
 })
 

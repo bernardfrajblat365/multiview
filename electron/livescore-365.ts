@@ -1,7 +1,9 @@
 import { net } from 'electron'
 import {
   candidateOf,
+  createAmericanFootballState,
   createLiveState,
+  diffAmericanFootball,
   diffDetail,
   diffPbp,
   dropRepeatedVar,
@@ -16,6 +18,7 @@ import {
   parsePbpFeed,
   sourceKeyOf,
   SPORT_IDS,
+  type AmericanFootballState,
   type Game365,
   type LiveMatchStatus,
   type LiveState,
@@ -44,10 +47,11 @@ type PanelLink = {
 type Poller = {
   gameId: number
   label: string
-  /** Basketball: names, crests and score only, no alerts and no closing at the end. */
+  /** Basketball: names, crests and score only. American football: touchdowns and field goals. Neither closes the panel at the end. */
   sport: Sport365
   panelIds: Set<string>
   state: LiveState
+  americanFootball: AmericanFootballState
   coverage: 'events' | 'score' | null
   sentKey: string
   home: string
@@ -98,6 +102,9 @@ function brazilDate(now: Date) {
   return `${part('day')}/${part('month')}/${part('year')}`
 }
 
+/** Sport named in log lines about the games list. */
+const SPORT_NOTES: Record<Sport365, string> = { football: '', basketball: ' (basquete)', 'american-football': ' (futebol americano)' }
+
 /** Hour of the day in Brazil. */
 function brazilHour(now: Date) {
   return Number(new Intl.DateTimeFormat('en-GB', { timeZone: 'America/Sao_Paulo', hour: '2-digit', hourCycle: 'h23' }).format(now))
@@ -141,7 +148,7 @@ export function createLiveScoreLinker(options: {
         current.status === 'fulfilled' ? parseGameList(current.value, SPORT_IDS[sport]) : [],
         schedule.status === 'fulfilled' ? parseGameList(schedule.value, SPORT_IDS[sport]) : [],
       )
-      if (schedule.status === 'rejected') logScanner(`365Scores: agenda do dia${sport === 'basketball' ? ' (basquete)' : ''} indisponível (${schedule.reason instanceof Error ? schedule.reason.message : 'erro'}); só os ${games.length} jogos ao vivo da lista curta`, '365')
+      if (schedule.status === 'rejected') logScanner(`365Scores: agenda do dia${SPORT_NOTES[sport]} indisponível (${schedule.reason instanceof Error ? schedule.reason.message : 'erro'}); só os ${games.length} jogos ao vivo da lista curta`, '365')
       listCache.set(sport, { at: Date.now(), games })
       if (sport === 'football') options.onList?.(games)
       return games
@@ -171,7 +178,7 @@ export function createLiveScoreLinker(options: {
   function emit(poller: Poller, incidents: MatchIncident[], fromCommentary = false) {
     for (const incident of dropRepeatedVar(poller.state, incidents)) {
       const teamName = incident.team === 'home' ? poller.home : incident.team === 'away' ? poller.away : ''
-      logScanner(`[${poller.label}] ${incident.kind.toUpperCase()} ${incident.team} ${incident.minute}' ${teamName}${incident.note ? ` (${incident.note})` : ''}${fromCommentary ? ' · narração' : ''}`, '365')
+      logScanner(`[${poller.label}] ${incident.kind.toUpperCase()} ${incident.team}${incident.minute ? ` ${incident.minute}'` : ''} ${teamName}${incident.note ? ` (${incident.note})` : ''}${fromCommentary ? ' · narração' : ''}`, '365')
       options.onEvent({
         panelIds: [...poller.panelIds],
         incident,
@@ -226,9 +233,10 @@ export function createLiveScoreLinker(options: {
       logScanner(`[${poller.label}] 365Scores voltou a responder após ${poller.failures} falha(s) (${seconds} s sem dados)`, '365')
     }
     poller.failures = 0
-    if (poller.sport === 'basketball') {
-      // Score only for now: no alerts, and the panel stays open when the game ends.
+    if (poller.sport !== 'football') {
+      // Basketball is score only; neither sport closes the panel when the game ends (the BLL's "Encerrado" does).
       setScore(poller, detail)
+      if (poller.sport === 'american-football') emit(poller, diffAmericanFootball(poller.americanFootball, detail, Date.now()))
       if (detail.statusGroup === 4) {
         logScanner(`[${poller.label}] jogo encerrado (${poller.score}); 365Scores parou de consultar`, '365')
         poller.stopped = true
@@ -306,14 +314,14 @@ export function createLiveScoreLinker(options: {
     const label = `${game.home} x ${game.away}`
     let poller = pollers.get(game.id)
     if (!poller) {
-      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false, sawLive: false }
+      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', failures: 0, failingSince: 0, lastPbpAt: 0, stopped: false, sawLive: false }
       pollers.set(game.id, poller)
       schedulePoll(poller, 0)
     }
     poller.panelIds.add(panelId)
     sendStatus(panelId, { status: 'linked', label, coverage: poller.coverage, sport: poller.sport })
     publishScore(poller, [panelId], true)
-    logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id}${poller.sport === 'basketball' ? ', basquete: só placar' : ''})`, '365')
+    logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id}${poller.sport === 'basketball' ? ', basquete: só placar' : poller.sport === 'american-football' ? ', futebol americano: touchdowns e field goals' : ''})`, '365')
   }
 
   async function resolve(panelId: string) {

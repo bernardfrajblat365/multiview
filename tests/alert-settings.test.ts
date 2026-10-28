@@ -2,7 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import { DEFAULT_ALERT_SETTINGS, parseAlertSettings } from '../src/alert-settings.ts'
 
-const SOUND_IDS = [DEFAULT_ALERT_SETTINGS.soundId, DEFAULT_ALERT_SETTINGS.goalSoundId, 'gongo', 'sirene']
+const SOUND_IDS = [...new Set(Object.values(DEFAULT_ALERT_SETTINGS.sounds)), 'gongo', 'sirene']
 
 test('scoreDelaySec padrão é 0 quando não há configuração salva', () => {
   const settings = parseAlertSettings(null, SOUND_IDS)
@@ -47,18 +47,30 @@ test('closeFinishedSec inválido volta para 60', () => {
   assert.equal(parseAlertSettings(JSON.stringify({ closeFinishedSec: '60' }), SOUND_IDS).closeFinishedSec, 60)
 })
 
-test('som do gol é separado do som dos outros alertas', () => {
-  assert.notEqual(DEFAULT_ALERT_SETTINGS.goalSoundId, DEFAULT_ALERT_SETTINGS.soundId)
+test('cada tipo de alerta guarda o seu som', () => {
+  assert.notEqual(DEFAULT_ALERT_SETTINGS.sounds.goal, DEFAULT_ALERT_SETTINGS.sounds.penalty)
+  const sounds = { goal: 'gongo', penalty: 'sirene', red: 'gongo', yellow: 'sirene', var: 'gongo', touchdown: 'sirene', 'field-goal': 'gongo' }
+  assert.deepEqual(parseAlertSettings(JSON.stringify({ sounds }), SOUND_IDS).sounds, sounds)
+})
+
+test('som inválido de um tipo volta para o padrão só daquele tipo', () => {
+  const settings = parseAlertSettings(JSON.stringify({ sounds: { goal: 'inexistente', red: 'sirene', var: 7 } }), SOUND_IDS)
+  assert.deepEqual(settings.sounds, { ...DEFAULT_ALERT_SETTINGS.sounds, red: 'sirene' })
+})
+
+test('preferência com um só som (soundId) vale para todos os tipos daquela época', () => {
+  const settings = parseAlertSettings(JSON.stringify({ soundId: 'sirene' }), SOUND_IDS)
+  assert.deepEqual(settings.sounds, { ...DEFAULT_ALERT_SETTINGS.sounds, goal: 'sirene', penalty: 'sirene', red: 'sirene', yellow: 'sirene', var: 'sirene' })
+})
+
+test('preferência com som do gol + outros alertas é migrada por tipo', () => {
   const settings = parseAlertSettings(JSON.stringify({ soundId: 'sirene', goalSoundId: 'gongo' }), SOUND_IDS)
-  assert.equal(settings.soundId, 'sirene')
-  assert.equal(settings.goalSoundId, 'gongo')
+  assert.deepEqual(settings.sounds, { ...DEFAULT_ALERT_SETTINGS.sounds, goal: 'gongo', penalty: 'sirene', red: 'sirene', yellow: 'sirene', var: 'sirene' })
+  assert.equal(parseAlertSettings(JSON.stringify({ soundId: 'sirene', goalSoundId: 'inexistente' }), SOUND_IDS).sounds.goal, DEFAULT_ALERT_SETTINGS.sounds.goal)
+  assert.equal(parseAlertSettings(JSON.stringify({ goalSoundId: 'gongo' }), SOUND_IDS).sounds.penalty, DEFAULT_ALERT_SETTINGS.sounds.penalty)
 })
 
-test('preferência salva antes do som do gol usa o som escolhido também para o gol', () => {
-  assert.equal(parseAlertSettings(JSON.stringify({ soundId: 'sirene' }), SOUND_IDS).goalSoundId, 'sirene')
-})
-
-test('som do gol inválido volta para o padrão do gol', () => {
-  assert.equal(parseAlertSettings(JSON.stringify({ soundId: 'sirene', goalSoundId: 'inexistente' }), SOUND_IDS).goalSoundId, DEFAULT_ALERT_SETTINGS.goalSoundId)
-  assert.equal(parseAlertSettings(JSON.stringify({ goalSoundId: 'inexistente' }), SOUND_IDS).goalSoundId, DEFAULT_ALERT_SETTINGS.goalSoundId)
+test('formato novo ignora os campos antigos', () => {
+  const settings = parseAlertSettings(JSON.stringify({ soundId: 'sirene', goalSoundId: 'gongo', sounds: { red: 'gongo' } }), SOUND_IDS)
+  assert.deepEqual(settings.sounds, { ...DEFAULT_ALERT_SETTINGS.sounds, red: 'gongo' })
 })

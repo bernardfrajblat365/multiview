@@ -5,7 +5,7 @@
  */
 
 /** Gap between two sports-player loads. */
-export const PLAYER_LOAD_SPACING_MS = 200
+export const PLAYER_LOAD_SPACING_MS = 50
 /** How often a freshly loaded player is checked for a running video. */
 export const PLAYBACK_CHECK_INTERVAL_MS = 3000
 /** No running video after this long since the page loaded → reload. */

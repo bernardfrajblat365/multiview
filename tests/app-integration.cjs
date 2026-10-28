@@ -92,6 +92,8 @@ async function run() {
   const crestRequests = []
   let basketballListRequests = 0
   let basketballDetailRequests = 0
+  let americanFootballListRequests = 0
+  let americanFootballDetailRequests = 0
   let bllEndOpened = false
   let bllEndListLoads = 0
   const port = 46000 + Math.floor(Math.random() * 1000)
@@ -164,6 +166,28 @@ async function run() {
       }
       response.writeHead(200, { 'content-type': 'image/png' })
       response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'))
+      return
+    }
+    if (request.url?.startsWith('/web/games/') && new URL(request.url, 'http://fixture').searchParams.get('sports') === '6') {
+      // American football list: a BLL "🏈" game is looked up here, even when the BLL gives it a William Hill id.
+      americanFootballListRequests += 1
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ games: [{
+        id: 9201, sportId: 6, statusGroup: 3, statusText: 'Q1', competitionDisplayName: 'NFL',
+        startTime: new Date().toISOString(), homeCompetitor: { id: 7, name: 'Green Bay Packers', shortName: 'Packers' }, awayCompetitor: { id: 8, name: 'Carolina Panthers', shortName: 'Panthers' },
+      }] }))
+      return
+    }
+    if (request.url?.startsWith('/web/game/') && new URL(request.url, 'http://fixture').searchParams.get('gameId') === '9201') {
+      // 0-0 for the first two rounds, then a passing touchdown with the extra point (7-0).
+      americanFootballDetailRequests += 1
+      const scored = americanFootballDetailRequests >= 3
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ game: {
+        id: 9201, statusGroup: 3, gameTime: 9,
+        homeCompetitor: { id: 7, name: 'Green Bay Packers', score: scored ? 7 : 0 }, awayCompetitor: { id: 8, name: 'Carolina Panthers', score: 0 },
+        events: scored ? [{ order: 1, competitorId: 7, stageId: 64, gameTime: 9, eventType: { id: 16, name: 'Touchdown', subTypeId: 26 } }] : [],
+      } }))
       return
     }
     if (request.url?.startsWith('/web/games/') && new URL(request.url, 'http://fixture').searchParams.get('sports') === '2') {
@@ -788,6 +812,16 @@ async function run() {
     assert.ok(basketballDetailRequests >= 4, 'O jogo de basquete precisa ter sido consultado até acabar.')
     await wait(1500)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelectorAll('.panel').length`), 2, 'O painel de basquete não fecha no fim do jogo.')
+    // A BLL American football game ("🏈") goes to 365Scores even with a William Hill id, and alerts the touchdown.
+    await openFinishingMatch(1, 0, `nfl?evento=${encodeURIComponent('🏈 Packers x Panthers')}&wh=7101`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.score === '7 – 0'`, 30000).catch(async (error) => {
+      const label = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ ...document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset })`)
+      throw new Error(`${error.message}; rótulo: ${label}; listas de futebol americano: ${americanFootballListRequests}; detalhes: ${americanFootballDetailRequests}`)
+    })
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__label').dataset.label`), 'Green Bay Packers x Carolina Panthers',
+      'O rótulo do jogo de futebol americano usa os nomes do 365Scores.')
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"]')?.classList.contains('panel--alert-touchdown')`, 20000)
+    assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__alert')?.textContent ?? ''`), /TOUCHDOWN · Green Bay Packers \(passe · 1º quarto\) · 7 - 0/)
     // Any BLL game closes once the BLL list moves it from "Ao Vivo" to "Encerrado" (no William Hill or 365Scores needed).
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-add-panel').click()`)
     await waitForExpression(target, `document.querySelectorAll('.panel').length === 3`)

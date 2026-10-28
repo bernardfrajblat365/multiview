@@ -64,6 +64,7 @@ export const ALERT_SOUNDS: readonly AlertSound[] = [
   { id: 'galvao-bueno', label: 'Galvão Bueno', notes: [], src: new URL('./assets/sounds/galvao-bueno.mp3', import.meta.url).href },
   { id: 'gol-torcida', label: 'Gol torcida', notes: [], src: new URL('./assets/sounds/gol-torcida.mp3', import.meta.url).href },
   { id: 'fox-sports', label: 'Fox Sports', notes: [], src: new URL('./assets/sounds/fox-sports.mp3', import.meta.url).href },
+  { id: 'var-check', label: 'VAR check', notes: [], src: new URL('./assets/sounds/var-check.mp3', import.meta.url).href },
 ]
 
 export const ALERT_SOUND_IDS: readonly string[] = ALERT_SOUNDS.map((sound) => sound.id)

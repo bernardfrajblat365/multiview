@@ -9,7 +9,7 @@ export const RELEASES: readonly Release[] = [
     version: '1.1.9',
     label: '1.1.9',
     notes: [
-      { title: 'VAR em andamento', body: 'Nos jogos ligados ao 365Scores, um selo azul VAR mostra o que está sendo revisado e o jogo vira destaque até a decisão.' },
+      { title: 'VAR em andamento', body: 'Nos jogos ligados ao 365Scores, um selo azul VAR mostra o que está sendo revisado, toca o som "VAR check" e o jogo vira destaque até a decisão.' },
     ],
   },
   {

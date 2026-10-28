@@ -80,9 +80,9 @@ test('monta o rótulo do alerta', () => {
   assert.equal(alertLabel('red', '', 0), 'CARTÃO VERMELHO')
 })
 
-test('há 33 sons únicos e válidos', () => {
-  assert.equal(ALERT_SOUNDS.length, 33)
-  assert.equal(new Set(ALERT_SOUND_IDS).size, 33)
+test('há 34 sons únicos e válidos', () => {
+  assert.equal(ALERT_SOUNDS.length, 34)
+  assert.equal(new Set(ALERT_SOUND_IDS).size, 34)
   for (const sound of ALERT_SOUNDS) {
     assert.ok(sound.label.length > 0)
     if (sound.src) {

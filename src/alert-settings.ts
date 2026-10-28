@@ -27,7 +27,7 @@ const LEGACY_KINDS: readonly AlertKind[] = ['goal', 'penalty', 'red', 'yellow', 
 const STORAGE_KEY = 'quadra:alert-settings'
 
 export const DEFAULT_ALERT_SETTINGS: AlertSettings = {
-  sounds: { goal: 'gol-torcida', penalty: 'apito-arbitro', red: 'apito-arbitro', yellow: 'apito-arbitro', var: 'apito-arbitro', touchdown: 'gol-torcida', 'field-goal': 'apito-arbitro' },
+  sounds: { goal: 'gol-torcida', penalty: 'apito-arbitro', red: 'apito-arbitro', yellow: 'apito-arbitro', var: 'var-check', touchdown: 'gol-torcida', 'field-goal': 'apito-arbitro' },
   kinds: { goal: true, penalty: true, red: true, yellow: false, var: true, touchdown: true, 'field-goal': true },
   autoHighlight: true,
   autoHighlightSec: 45,

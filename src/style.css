@@ -728,8 +728,13 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .panel__delay-value { font-variant-numeric: tabular-nums; }
 /* A delay chosen for this panel (not the default) is highlighted, like a pressed mute. */
 .panel__controls .panel__delay.is-custom { color: var(--accent); border-color: var(--accent); }
-.panel__delay:focus-within { outline: 2px solid var(--accent); outline-offset: 2px; }
-.panel__delay select { position: absolute; inset: 0; width: 100%; height: 100%; opacity: 0; cursor: pointer; font-size: 0.85rem; }
+.panel__delay:focus-visible, .panel__delay[aria-expanded="true"] { outline: 2px solid var(--accent); outline-offset: 2px; }
+/* Delay list of the ⏱ button, in the same style as the sound picker */
+.delay-menu { position: fixed; z-index: 90; min-width: 9rem; max-height: 70vh; overflow-y: auto; margin: 0; padding: 0.25rem; list-style: none; text-align: left; border: 1px solid rgba(200,245,96,0.35); border-radius: 10px; background: rgba(7,26,20,0.97); box-shadow: 0 10px 28px rgba(0,0,0,0.5); }
+.delay-menu__title { padding: 0.3rem 0.55rem 0.35rem; color: var(--accent); font-size: 0.66rem; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; }
+.delay-menu [role="option"] { padding: 0.35rem 0.55rem; border-radius: 6px; cursor: pointer; font-size: 0.85rem; color: var(--ink); white-space: nowrap; font-variant-numeric: tabular-nums; }
+.delay-menu [role="option"]:hover, .delay-menu [role="option"]:focus-visible { background: rgba(200,245,96,0.14); outline: none; }
+.delay-menu [role="option"][aria-selected="true"] { background: rgba(200,245,96,0.24); color: var(--accent); font-weight: 600; }
 
 .panel__alerts-icon { display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .panel__controls .panel__alerts[aria-pressed="true"] { color: #ffb0a8; border-color: rgba(255, 126, 116, 0.72); }

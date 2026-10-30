@@ -31,6 +31,7 @@ import {
 } from './auto-open'
 import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, handleScorerName, onAlertSettingsChange, onAlertShown, onVarReviewStarted, setVarReview, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
+import { FIRST_STEPS, markFirstStepsSeen, readFirstStepsSeen, shouldShowFirstSteps } from './first-steps'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
 import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
 import { AUTO_MIN_PANELS, VAR_MAX_MS, composeHighlighted, endVarAuto, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
@@ -2352,10 +2353,48 @@ function showReleaseNotes(release: Release) {
   backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
 }
 
+/** The welcome guide: three steps, from the home button or by itself on a fresh install. */
+function showFirstSteps() {
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
+  markFirstStepsSeen()
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm first-steps'
+  backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog first-steps__dialog" role="dialog" aria-modal="true" aria-labelledby="first-steps-title">
+    <p class="release-notes__eyebrow">Bem-vindo ao Quadra</p>
+    <h2 id="first-steps-title" class="confirm__message">Acompanhe vários jogos ao mesmo tempo</h2>
+    <div class="release-notes__scroll"><ol class="first-steps__list">${FIRST_STEPS.map((step) => `<li><strong>${escapeHtml(step.title)}</strong><p>${escapeHtml(step.body)}</p></li>`).join('')}</ol></div>
+    <p class="first-steps__hint">Para ver isto de novo, use o botão <strong>Primeiros passos</strong> na tela inicial.</p>
+    <div class="confirm__actions"><button type="button" class="btn btn--load" data-ok>Começar</button></div>
+  </div>`
+  const close = () => {
+    document.removeEventListener('keydown', onKey)
+    backdrop.remove()
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') close()
+  }
+  backdrop.querySelector('[data-ok]')!.addEventListener('click', close)
+  backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close() })
+  document.addEventListener('keydown', onKey)
+  document.body.appendChild(backdrop)
+  backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
+}
+
+/** Fresh install: the guide replaces "what's new" (nothing is new to a new user). `?first-steps=off|on` overrides for smokes. */
+function showFirstStepsIfNew(): boolean {
+  const override = new URLSearchParams(location.search).get('first-steps')
+  if (window.quadra ? override === 'off' : override !== 'on') return false
+  if (!shouldShowFirstSteps(readFirstStepsSeen(), readLastSeenVersion())) return false
+  markVersionSeen(version)
+  showFirstSteps()
+  return true
+}
+
 /** Once per installed version, after an update (or a first install). `?release-notes=off|on` overrides for smokes. */
 function showReleaseNotesIfNew() {
   const override = new URLSearchParams(location.search).get('release-notes')
   if (window.quadra ? override === 'off' : override !== 'on') return
+  if (showFirstStepsIfNew()) return
   const release = releaseToShow(version, readLastSeenVersion())
   if (!release) return
   markVersionSeen(version)
@@ -2754,7 +2793,7 @@ function renderChoose() {
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-first-steps">Primeiros passos</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
     ${alertControlsHtml('chooser')}
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
@@ -2764,6 +2803,7 @@ function renderChoose() {
   app.querySelector<HTMLButtonElement>('#btn-start-bll-batch')?.addEventListener('click', () => openBatch('bll'))
   app.querySelector<HTMLButtonElement>('#btn-start-youtube-batch')?.addEventListener('click', () => openBatch('youtube'))
   app.querySelector<HTMLButtonElement>('#btn-start-auto-open')?.addEventListener('click', openAutoOpenDialog)
+  app.querySelector<HTMLButtonElement>('#btn-first-steps')?.addEventListener('click', showFirstSteps)
   app.querySelector<HTMLButtonElement>('#btn-release-notes')?.addEventListener('click', () => showReleaseNotes(RELEASES.find((release) => release.version === version) ?? RELEASES[0]))
   bindUpdateCheck()
   bindAlertControls(app)

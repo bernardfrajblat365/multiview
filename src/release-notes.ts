@@ -9,6 +9,7 @@ export const RELEASES: readonly Release[] = [
     version: '1.1.10',
     label: '1.1.10',
     notes: [
+      { title: 'Primeiros passos', body: 'Quem abre o Quadra pela primeira vez vê um guia de três passos; o botão "Primeiros passos" na tela inicial reabre quando quiser.' },
       { title: 'Aviso de atualização no visual do Quadra', body: 'O aviso de nova versão e o de "reiniciar e instalar" agora aparecem dentro do Quadra, no mesmo estilo das outras janelas, em vez da caixa padrão do Windows.' },
     ],
   },

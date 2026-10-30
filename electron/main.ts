@@ -1217,7 +1217,7 @@ function createOverlay() {
     overlayWindow?.webContents.send('quadra:request-layout')
   })
   // Smokes run on a fresh profile; the "what's new" popup would cover the screens they click.
-  const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off' } : {}
+  const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off', 'first-steps': 'off' } : {}
   // Smokes read the BLL list for Auto mode faster than the minute the app uses.
   if (Number(process.env.QUADRA_AUTO_OPEN_POLL_MS) > 0) query['auto-open-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_POLL_MS))
   const devUrl = new URL(process.env.ELECTRON_RENDERER_URL ?? 'http://localhost')

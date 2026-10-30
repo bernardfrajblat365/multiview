@@ -536,6 +536,32 @@ async function run() {
     const reopened = await readNotes()
     assert.equal(reopened.open && reopened.items === firstLaunch.items, true, 'botão Novidades reabre a lista')
     console.log(JSON.stringify({ releaseNotes: firstLaunch }))
+
+    // Fresh install: the welcome guide opens by itself, in place of "what's new", and only once.
+    const readGuide = () => window.webContents.executeJavaScript(`(() => {
+      const dialog = document.querySelector('.first-steps')
+      return {
+        open: Boolean(dialog),
+        steps: dialog ? dialog.querySelectorAll('.first-steps__list li').length : 0,
+        notesOpen: Boolean(document.querySelector('.release-notes')),
+        focused: document.activeElement?.matches('.first-steps [data-ok]') ?? false,
+        fitsViewport: dialog ? dialog.querySelector('.first-steps__dialog').getBoundingClientRect().bottom <= innerHeight : false,
+      }
+    })()`)
+    await window.webContents.executeJavaScript('localStorage.clear()')
+    await window.loadFile(notesFile, { query: { 'release-notes': 'on', 'first-steps': 'on' } })
+    const guide = await readGuide()
+    assert.equal(guide.open && guide.steps === 3 && !guide.notesOpen && guide.focused && guide.fitsViewport, true, JSON.stringify(guide))
+    await window.webContents.executeJavaScript(`document.querySelector('.first-steps [data-ok]').click()`)
+    assert.equal((await readGuide()).open, false, 'Começar fecha o guia')
+    await window.loadFile(notesFile, { query: { 'release-notes': 'on', 'first-steps': 'on' } })
+    const second = await readGuide()
+    assert.equal(second.open || second.notesOpen, false, 'guia e novidades aparecem só uma vez')
+    await window.webContents.executeJavaScript(`document.querySelector('#btn-first-steps').click()`)
+    assert.equal((await readGuide()).open, true, 'botão Primeiros passos reabre o guia')
+    await window.webContents.executeJavaScript(`document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape' }))`)
+    assert.equal((await readGuide()).open, false, 'Esc fecha o guia')
+    console.log(JSON.stringify({ firstSteps: guide }))
   } catch (error) {
     failed = true
     console.error(error)

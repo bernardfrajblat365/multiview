@@ -527,6 +527,14 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .release-notes__list strong { display: block; margin-bottom: 0.2rem; font-size: 0.95rem; }
 .release-notes__list p { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--ink-muted); }
 
+.first-steps__dialog { width: min(100%, 34rem); }
+.first-steps__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 1rem; counter-reset: step; }
+.first-steps__list li { position: relative; padding-left: 3rem; counter-increment: step; }
+.first-steps__list li::before { content: counter(step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 50%; background: var(--accent); color: #0a1f17; font-weight: 800; }
+.first-steps__list strong { display: block; margin-bottom: 0.15rem; font-size: 0.98rem; }
+.first-steps__list p { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--ink-muted); }
+.first-steps__hint { margin: 0 0 1rem; font-size: 0.8rem; color: var(--ink-muted); }
+
 /* Dialogs the main process asks for (update prompts); they sit above any other open dialog. */
 .ui-dialog { z-index: 110; }
 .ui-dialog__dialog { width: min(100%, 30rem); }

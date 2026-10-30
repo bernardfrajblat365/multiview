@@ -117,7 +117,7 @@ jobs:
             if ($release.tagName -ne $tag) { throw 'GitHub returned a release for an unexpected tag.' }
             if (-not $release.isDraft) { throw "Release $tag is already public; refusing to replace its assets." }
           } elseif ($viewStatus -eq 1) {
-            gh release create $tag --repo $repo --verify-tag --draft --title "Quadra $tag" --generate-notes
+            gh release create $tag --repo $repo --verify-tag --draft --title "Quadra $tag" --notes-file .github/release-install.md --generate-notes
             if ($LASTEXITCODE -ne 0) { throw "Could not create draft $tag." }
           } else {
             throw "Could not safely inspect release $tag (exit $viewStatus)."

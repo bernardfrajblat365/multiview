@@ -26,6 +26,7 @@ import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSki
 import { createAutoUpdateController } from './update'
 import { fetchGitHubReleaseNotes } from './release-notes'
 import { createUiMessageBox } from './ui-dialog'
+import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
 
 const { autoUpdater } = electronUpdater
 
@@ -419,23 +420,37 @@ function setNativeFullscreen(on: boolean) {
   mainWindow.setFullScreen(on)
 }
 
-const ZOOM_STEP = 0.5
-const ZOOM_LIMIT = 3
+/** Overlay or panel players: where Ctrl + / Ctrl - / Ctrl + wheel zoom the overlay UI. */
+function isUiZoomSource(contents: Electron.WebContents) {
+  if (overlayWindow && !overlayWindow.isDestroyed() && contents === overlayWindow.webContents) return true
+  for (const state of slotViews.values()) if (state.view.webContents === contents) return true
+  return false
+}
 
-// Ctrl + / Ctrl - / Ctrl 0 on the overlay UI. Chromium only zooms out natively here
-// because the app has no menu with the zoom-in accelerator.
-function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
-  if (!overlayWindow || overlayWindow.isDestroyed() || contents !== overlayWindow.webContents) return false
-  if (!input.control || input.alt || input.type !== 'keyDown') return false
-  const key = input.key
-  let level: number
-  if (key === '+' || key === '=' || input.code === 'NumpadAdd') level = contents.getZoomLevel() + ZOOM_STEP
-  else if (key === '-' || key === '_' || input.code === 'NumpadSubtract') level = contents.getZoomLevel() - ZOOM_STEP
-  else if (key === '0' || input.code === 'Numpad0') level = 0
-  else return false
-  event.preventDefault()
-  contents.setZoomLevel(Math.max(-ZOOM_LIMIT, Math.min(ZOOM_LIMIT, level)))
+// Only the overlay zooms (buttons, toolbar); applyLayout scales the panel bounds back, so
+// the grid and the players keep their size. The panel pages themselves never zoom.
+function zoomOverlay(command: ZoomCommand) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  const contents = overlayWindow.webContents
+  const level = nextZoomLevel(contents.getZoomLevel(), command)
+  if (level === contents.getZoomLevel()) return
+  contents.setZoomLevel(level)
   contents.send('quadra:request-layout')
+}
+
+const wheelZoomGate = createWheelZoomGate()
+
+function zoomOverlayByWheel(direction: 'in' | 'out') {
+  if (wheelZoomGate()) zoomOverlay(direction)
+}
+
+// Ctrl + / Ctrl - / Ctrl 0. Chromium only zooms out natively here because the app has no
+// menu with the zoom-in accelerator; with panels open the keys reach the focused player.
+function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
+  const command = zoomCommandOf(input)
+  if (!command || !isUiZoomSource(contents)) return false
+  event.preventDefault()
+  zoomOverlay(command)
   return true
 }
 
@@ -1078,6 +1093,8 @@ function createSlotView(id: string, url: string, muted: boolean) {
     },
   })
   configureRemoteContents(view.webContents, id)
+  // Ctrl + wheel over a player zooms the overlay UI, as over the buttons (Electron never zooms the page itself).
+  view.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
   view.webContents.setAudioMuted(muted)
   mainWindow?.contentView.addChildView(view)
   const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0 }
@@ -1208,6 +1225,7 @@ function createOverlay() {
   })
   // A reload drops whatever the overlay was showing; its dialogs count as dismissed.
   overlayWindow.webContents.on('did-start-loading', () => uiMessageBox.cancelAll())
+  overlayWindow.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
   overlayWindow.webContents.on('did-finish-load', () => {
     overlayReady = true
     syncOverlayBounds()

@@ -1370,9 +1370,12 @@ type BatchSource = 'bll' | 'youtube'
 type BatchEvent = BllEvent & { channel?: string }
 type BatchLoad = { status: 'ok'; events: BatchEvent[] } | { status: 'error'; message: string }
 
-function applyBatch(urls: string[], source: BatchSource) {
+function applyBatch(urls: string[], source: BatchSource, firstPanelId: PanelId | null = null) {
   if (view !== 'grid') return
-  const plan = planBatchOpen(panels, urls, MAX_PANELS)
+  // Opened from a panel's own button: that panel gets the first game.
+  const first = firstPanelId ? panelById(firstPanelId) : undefined
+  const slots = first ? [first, ...panels.filter((panel) => panel !== first)] : panels
+  const plan = planBatchOpen(slots, urls, MAX_PANELS)
   if (plan.fill.length === 0 && plan.extra.length === 0) return
   pushHistory()
   for (const { panelId, url } of plan.fill) {
@@ -1464,7 +1467,7 @@ const BATCH_SOURCES: Record<BatchSource, { title: string; loading: string; empty
   },
 }
 
-function openBatch(source: BatchSource) {
+function openBatch(source: BatchSource, firstPanelId: PanelId | null = null) {
   const config = BATCH_SOURCES[source]
   const fromChooser = view === 'choose'
   document.querySelector('.confirm:not(.ui-dialog)')?.remove()
@@ -1593,7 +1596,7 @@ function openBatch(source: BatchSource) {
     const urls = selectedUrls()
     finish()
     if (fromChooser && view === 'choose') startWithGames(urls)
-    else applyBatch(urls, source)
+    else applyBatch(urls, source, firstPanelId)
   })
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
   document.addEventListener('keydown', onKey)
@@ -2080,6 +2083,7 @@ function urlFormHtml(panel: Panel, options: { withClose?: boolean } = {}): strin
       <input id="url-${escapeHtml(panel.id)}" type="url" name="url" inputmode="url" autocomplete="off" spellcheck="false"
         placeholder="Cole link YouTube ou URL e pressione Enter" value="${escapeHtml(panel.draftUrl)}" />
       <button type="button" class="btn btn--bllsport${bllsportTargetId === panel.id ? ' is-target' : ''}" data-bllsport aria-pressed="${bllsportTargetId === panel.id}" aria-label="Escolher jogo no BLL para o jogo ${index + 1}" title="Abrir BLL para este painel">BLL</button>
+      <button type="button" class="btn btn--youtube" data-youtube aria-label="Escolher live do YouTube para o jogo ${index + 1}" title="Abrir jogos ao vivo do YouTube">YouTube</button>
       <button type="button" class="btn btn--zapping" data-zapping aria-label="Abrir Zapping no jogo ${index + 1}" title="Abrir Zapping para este painel">Zapping</button>
       <button type="submit" class="btn btn--load" aria-label="Abrir link">Abrir</button>
       <button type="button" class="btn btn--clear" data-clear aria-label="Limpar link">Limpar</button>
@@ -2213,6 +2217,7 @@ function bindPanelForm(panelElement: HTMLElement) {
   form?.querySelector('[data-clear]')?.addEventListener('click', () => applyPanelUrl(id, ''))
   form?.querySelector('[data-weddbets]')?.addEventListener('click', () => openWeddbets(id))
   form?.querySelector('[data-bllsport]')?.addEventListener('click', () => openBllsport(id))
+  form?.querySelector('[data-youtube]')?.addEventListener('click', () => openBatch('youtube', id))
   form?.querySelector('[data-zapping]')?.addEventListener('click', () => openZapping(id))
   form?.querySelector('[data-close]')?.addEventListener('click', () => setPanelEditing(panelElement, false))
   form?.addEventListener('keydown', (event) => {

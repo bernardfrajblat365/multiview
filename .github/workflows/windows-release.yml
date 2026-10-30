@@ -58,6 +58,20 @@ jobs:
       - name: Build application
         run: npm run build
 
+      # PRs may skip the toolbar smoke when layout code is untouched, so the
+      # full product suite always runs here before the installer is built.
+      - name: Renderer smoke
+        run: npm run test:renderer
+
+      - name: Toolbar smoke
+        run: npm run test:toolbar
+
+      - name: Application integration smoke
+        run: npm run test:app
+
+      - name: Window close smoke
+        run: npm run test:close
+
       - name: Configure Python for EVS
         uses: actions/setup-python@v5
         with:

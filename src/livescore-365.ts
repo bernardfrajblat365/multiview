@@ -144,6 +144,8 @@ const TOKEN_ALIASES: Record<string, string> = {
   praga: 'praha', prague: 'praha', moscou: 'moscow', moskva: 'moscow', bucareste: 'bucuresti', bucharest: 'bucuresti',
   // "Bayern München" in the BLL, "Bayern de Munique" / "Bayern Munich" in 365Scores; "Barça Basket" / "Barcelona".
   munchen: 'munich', munique: 'munich', barca: 'barcelona',
+  // "Inter de Milão" in 365Scores, "Inter Milan" in titles and feeds.
+  milao: 'milan',
 }
 /** Nicknames used in Brazilian titles. Keys and values are normalized names. */
 const NICKNAMES: Record<string, string> = {
@@ -199,12 +201,20 @@ function tokensMatch(a: string, b: string) {
   return short.length >= 3 && long.startsWith(short)
 }
 
+/** "PSG" for "Paris Saint-Germain", "QPR" for "Queens Park Rangers": one short word made of the other name's initials. */
+function isAcronymOf(short: readonly string[], long: readonly string[]) {
+  if (short.length !== 1 || long.length < 2) return false
+  const word = short[0]
+  return word.length >= 2 && word.length <= 4 && /^[a-z]+$/.test(word) && word === long.map((token) => token[0]).join('')
+}
+
 /** 0..1 similarity of two team names: Dice coefficient over tokens, with prefix matches ("Man" ~ "Manchester"). */
 export function teamSimilarity(a: string, b: string) {
   const left = teamTokens(a)
   const right = teamTokens(b)
   if (left.length === 0 || right.length === 0) return 0
   if (left.join(' ') === right.join(' ')) return 1
+  if (isAcronymOf(left, right) || isAcronymOf(right, left)) return 0.9
   const used = new Set<number>()
   let matched = 0
   for (const token of left) {
@@ -323,14 +333,42 @@ function sameSet(a: Set<string>, b: Set<string>) {
   return a.size === b.size && [...a].every((value) => b.has(value))
 }
 
+/** A name that matched a team outright (0.9+) with a word few clubs share: "Venezia", "Le Havre", not "Inter". */
+const STRONG_SIDE = 0.9
+
+type Side = { name: string; variants: readonly string[]; fit: number }
+
+/** A distinctive word of the title's name that none of the game's names for that team has ("Betis" against "Real Madrid"). */
+function contradicts(side: Side) {
+  const variantTokens = side.variants.flatMap(teamTokens)
+  return distinctiveTokens(side.name).some((token) => !variantTokens.some((other) => tokensMatch(token, other)))
+}
+
+/**
+ * Fit of one pairing of the title's teams with the game's. Both must match, except that one team named
+ * unmistakably carries the other: "Venezia x Inter" links to Venezia x Inter de Milão (when no other game
+ * fits as well, see LINK_MARGIN), and a side the matcher can't read at all still makes the game a
+ * candidate for the user while it is being played, so the panel asks instead of staying silent.
+ */
+function pairFit(first: Side, second: Side, nearNow: boolean) {
+  const [strong, weak] = first.fit >= second.fit ? [first, second] : [second, first]
+  if (weak.fit >= LINK_SCORE || strong.fit < STRONG_SIDE || distinctiveTokens(strong.name).length === 0) return weak.fit
+  // "Inter" or "Inter Milan" for "Inter de Milão" carries; "Real Betis" for "Real Madrid" names another club.
+  if (weak.fit >= CANDIDATE_SCORE) return contradicts(weak) ? weak.fit : LINK_SCORE
+  // An exact name (1) lists before a prefix ("Paris" ~ "Pari", 0.9).
+  return nearNow ? CANDIDATE_SCORE + (strong.fit - STRONG_SIDE) / 10 : weak.fit
+}
+
 /**
  * `fit`: how well the game's teams match the title's (either order), 0..1.
  * `rank`: fit plus small nudges toward a live game, today's games and the title's competition.
  */
 export function scoreGame(teams: NonNullable<ReturnType<typeof teamsFromTitle>>, game: Game365, now: number, sport: Sport365 = 'football') {
   const similarity = sport === 'basketball' ? looseSimilarity : bestSimilarity
-  const straight = Math.min(similarity(teams.home, game.homeNames), similarity(teams.away, game.awayNames))
-  const reversed = Math.min(similarity(teams.home, game.awayNames), similarity(teams.away, game.homeNames))
+  const nearNow = game.statusGroup === 3 || (game.statusGroup !== 4 && game.startTime > 0 && Math.abs(game.startTime - now) <= 3 * 3600_000)
+  const side = (name: string, variants: readonly string[]): Side => ({ name, variants, fit: similarity(name, variants) })
+  const straight = pairFit(side(teams.home, game.homeNames), side(teams.away, game.awayNames), nearNow)
+  const reversed = pairFit(side(teams.home, game.awayNames), side(teams.away, game.homeNames), nearNow)
   let fit = Math.max(straight, reversed)
   if (fit === 0) return { fit: 0, rank: 0 }
   // A youth/women's/reserve side never links on its own to a senior one (or the other way round).

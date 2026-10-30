@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.2.1',
+    label: '1.2.1',
+    notes: [
+      { title: 'Mais jogos do YouTube reconhecidos', body: 'Siglas como PSG e nomes curtos como "Inter" já bastam para achar o jogo no 365Scores, e quando só um dos times é reconhecido o painel pergunta se é aquele jogo em vez de ficar sem placar.' },
+    ],
+  },
+  {
     version: '1.2.0',
     label: '1.2',
     notes: [

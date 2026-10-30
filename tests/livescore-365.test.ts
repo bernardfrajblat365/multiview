@@ -141,6 +141,19 @@ test('teamSimilarity: subconjunto só com palavra genérica ("Atlético") dá 0.
   assert.equal(teamSimilarity('Kairat', 'Kairat Almaty'), 0.9)
 })
 
+test('teamSimilarity: sigla de uma palavra ("PSG") bate com as iniciais do nome, nos dois sentidos', () => {
+  assert.equal(teamSimilarity('PSG', 'Paris Saint-Germain'), 0.9)
+  assert.equal(teamSimilarity('Paris Saint-Germain', 'PSG'), 0.9)
+})
+
+test('teamSimilarity: "QPR" bate com "Queens Park Rangers" pelas iniciais', () => {
+  assert.equal(teamSimilarity('QPR', 'Queens Park Rangers'), 0.9)
+})
+
+test('teamSimilarity: alias "Inter de Milão" bate com "Inter Milan" (100%)', () => {
+  assert.equal(teamSimilarity('Inter Milan', 'Inter de Milão'), 1)
+})
+
 // 3. parseGameList ---------------------------------------------------------
 
 function row(id: unknown, extra: Record<string, unknown> = {}) {
@@ -241,18 +254,57 @@ test('matchGame: jogo ao vivo tem preferência sobre um jogo encerrado com os me
   assert.equal(result.status === 'matched' && result.game.id, 11)
 })
 
-test('matchGame: "Atlético" no título não liga sozinho a "Atlético Paranaense" (ambiguous com candidato)', () => {
+test('matchGame: "Atlético" no título liga a "Atlético Paranaense" quando Flamengo (distintivo) é o único jogo', () => {
   const paranaense = game(12, 'Atlético Paranaense', 'Flamengo')
   const result = matchGame('Atlético x Flamengo AO VIVO', [paranaense], NOW)
-  assert.equal(result.status, 'ambiguous')
-  assert.ok(result.status === 'ambiguous')
-  assert.deepEqual(result.candidates.map((g) => g.id), [12])
+  assert.equal(result.status, 'matched')
+  assert.equal(result.status === 'matched' && result.game.id, 12)
 })
 
-test('matchGame: "Real" no título não liga sozinho a "Real Madrid" (ambiguous)', () => {
+test('matchGame: "Real" no título liga a "Real Madrid" quando Barcelona (distintivo) confirma o jogo', () => {
   const madrid = game(13, 'Real Madrid', 'Barcelona')
   const result = matchGame('Real x Barcelona', [madrid], NOW)
+  assert.equal(result.status, 'matched')
+  assert.equal(result.status === 'matched' && result.game.id, 13)
+})
+
+test('matchGame: sigla "PSG" com o outro time pelo nome liga ao jogo sem concorrente', () => {
+  const result = matchGame('AO VIVO: LE HAVRE X PARIS SAINT-GERMAIN | LIGUE 1 26/27 | 9ª RODADA', [game(1, 'Le Havre', 'PSG')], NOW)
+  assert.equal(result.status, 'matched')
+  assert.equal(result.status === 'matched' && result.game.id, 1)
+})
+
+test('matchGame: "Venezia x Inter" liga a Venezia x Inter de Milão, Internacional ou Inter Milan (único jogo)', () => {
+  for (const title of ['Venezia x Inter', 'Venezia x Internacional', 'Venezia x Inter Milan']) {
+    const result = matchGame(title, [game(2, 'Venezia', 'Inter de Milão')], NOW)
+    assert.equal(result.status, 'matched', title)
+    assert.equal(result.status === 'matched' && result.game.id, 2, title)
+  }
+})
+
+test('matchGame: "Real Betis x Unicaja" não liga a "Real Madrid x Unicaja" (contradição no time forte)', () => {
+  const result = matchGame('Real Betis x Unicaja', [game(3, 'Real Madrid', 'Unicaja')], NOW)
+  assert.notEqual(result.status, 'matched')
+})
+
+test('matchGame: jogo ao vivo com um time ilegível e o outro time exato vira candidato (ambiguous)', () => {
+  const result = matchGame('Le Havre x Paris Saint Germano', [game(4, 'Le Havre', 'Lyon', { statusGroup: 3 })], NOW)
   assert.equal(result.status, 'ambiguous')
+  assert.ok(result.status === 'ambiguous')
+  assert.deepEqual(result.candidates.map((g) => g.id), [4])
+})
+
+test('matchGame: o mesmo jogo já encerrado (statusGroup 4) não vira candidato (none)', () => {
+  const result = matchGame('Le Havre x Paris Saint Germano', [game(4, 'Le Havre', 'Lyon', { statusGroup: 4, statusText: 'Final' })], NOW)
+  assert.deepEqual(result, { status: 'none' })
+})
+
+test('matchGame: "Atlético x Flamengo" com dois Atléticos no dia continua ambiguous (margem)', () => {
+  const games = [game(5, 'Atlético Paranaense', 'Flamengo'), game(6, 'Atlético Mineiro', 'Flamengo')]
+  const result = matchGame('Atlético x Flamengo AO VIVO', games, NOW)
+  assert.equal(result.status, 'ambiguous')
+  assert.ok(result.status === 'ambiguous')
+  assert.deepEqual(result.candidates.map((g) => g.id).sort(), [5, 6])
 })
 
 test('matchGame: título com o nome completo "Real Madrid" liga ao jogo', () => {

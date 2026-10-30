@@ -23,6 +23,8 @@ import {
   QUICK_RETRIES,
   retryDelayMs,
   scorerFromDetail,
+  scorerUpdates,
+  SCORER_WAIT_MS,
   SLOW_DETAIL_TIMEOUT_MS,
   sourceKeyOf,
   teamQualifiers,
@@ -995,4 +997,139 @@ test('varReviewKey changes only when the review does', () => {
   assert.equal(varReviewKey([]), '')
   assert.equal(varReviewKey([review]), varReviewKey([{ ...review }]))
   assert.notEqual(varReviewKey([review]), varReviewKey([{ ...review, kind: 'goal' }]))
+})
+
+// 16. scorerUpdates: nome do gol que já foi alertado -------------------------
+
+/** Mandante com `score` gols e sem cartões. */
+function homeScore(score: number) {
+  return { id: 10, name: 'Santos', score, redCards: 0 }
+}
+
+/** Estado depois de um gol do mandante alertado pelo placar, sem evento ainda. Devolve também o instante do alerta. */
+function stateWithScoreGoal() {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [] }), NOW), [])
+  assert.deepEqual(diffDetail(state, detail({ events: [], home: homeScore(1) }), NOW), [])
+  const alertAt = NOW + GOAL_EVENT_GRACE_MS
+  const alerts = diffDetail(state, detail({ events: [], home: homeScore(1) }), alertAt)
+  assert.equal(alerts.length, 1)
+  assert.equal(alerts[0].id, '365:777:score:home:1')
+  return { state, alertAt }
+}
+
+test('scorerUpdates: gol alertado pelo placar recebe o nome do evento que chega depois, uma vez', () => {
+  const { state, alertAt } = stateWithScoreGoal()
+  const alert = diffDetail(state, detail({ events: [], home: homeScore(1) }), alertAt)
+  assert.deepEqual(alert, [])
+  const named = detail({
+    events: [{ ...event(1, 1, 0, 10, 31), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  assert.deepEqual(diffDetail(state, named, alertAt + 1000), [])
+  assert.deepEqual(scorerUpdates(state, named, alertAt + 1000), [{ incidentId: '365:777:score:home:1', player: 'Neymar' }])
+  assert.deepEqual(scorerUpdates(state, named, alertAt + 2000), [])
+})
+
+test('scorerUpdates: alerta do placar sai sem jogador', () => {
+  const state = createLiveState()
+  diffDetail(state, detail({ events: [] }), NOW)
+  diffDetail(state, detail({ events: [], home: homeScore(1) }), NOW)
+  const [goal] = diffDetail(state, detail({ events: [], home: homeScore(1) }), NOW + GOAL_EVENT_GRACE_MS)
+  assert.equal(goal.kind, 'goal')
+  assert.equal(goal.player, undefined)
+})
+
+test('scorerUpdates: gol que chega sem nome recebe o nome quando o jogador aparece', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [] }), NOW), [])
+
+  // O evento vem antes do jogador: o id do gol é o do evento (ordem e tipo).
+  const first = diffDetail(state, detail({ events: [{ ...event(1, 1, 0, 10, 12), playerId: 9 }], home: homeScore(1), players: new Map() }), NOW)
+  assert.equal(first.length, 1)
+  assert.equal(first[0].id, '365:777:1:1')
+  assert.equal(first[0].kind, 'goal')
+  assert.equal(first[0].player, undefined)
+  assert.deepEqual(scorerUpdates(state, detail({ events: [{ ...event(1, 1, 0, 10, 12), playerId: 9 }], home: homeScore(1), players: new Map() }), NOW + 1000), [])
+
+  const named = detail({ events: [{ ...event(1, 1, 0, 10, 12), playerId: 9 }], home: homeScore(1), players: new Map([[9, 'Gabriel']]) })
+  assert.deepEqual(scorerUpdates(state, named, NOW + 5000), [{ incidentId: '365:777:1:1', player: 'Gabriel' }])
+  assert.deepEqual(scorerUpdates(state, named, NOW + 6000), [])
+})
+
+test('scorerUpdates: gol que já chega com o jogador não fica pendente', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [] }), NOW), [])
+  const named = detail({
+    events: [{ ...event(1, 1, 0, 10, 12), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  const alerts = diffDetail(state, named, NOW)
+  assert.equal(alerts.length, 1)
+  assert.equal(alerts[0].player, 'Neymar')
+  assert.deepEqual(scorerUpdates(state, named, NOW), [])
+})
+
+test('scorerUpdates: gol do placar só recebe nome de evento a até 3 minutos do alerta', () => {
+  const { state, alertAt } = stateWithScoreGoal()
+  // Alerta foi no minuto 30 (gameTime do detalhe); evento no 40 fica longe demais.
+  const far = detail({
+    events: [{ ...event(1, 1, 0, 10, 40), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  assert.deepEqual(scorerUpdates(state, far, alertAt), [])
+
+  // Dentro de 3 minutos (33) o nome entra; o pendente não foi removido pelo caso anterior.
+  const near = detail({
+    events: [{ ...event(1, 1, 0, 10, 33), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  assert.deepEqual(scorerUpdates(state, near, alertAt), [{ incidentId: '365:777:score:home:1', player: 'Neymar' }])
+})
+
+test('scorerUpdates: gol contra não dá nome ao alerta pendente', () => {
+  const { state, alertAt } = stateWithScoreGoal()
+  // Gol contra do visitante creditado ao mandante (subtipo 2), com nome do jogador.
+  const ownGoal = detail({
+    events: [{ ...event(1, 1, 2, 10, 31), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  assert.deepEqual(diffDetail(state, ownGoal, alertAt + 1000), [])
+  assert.deepEqual(scorerUpdates(state, ownGoal, alertAt + 1000), [])
+})
+
+test('scorerUpdates: dentro de SCORER_WAIT_MS ainda dá o nome', () => {
+  const { state, alertAt } = stateWithScoreGoal()
+  const named = detail({
+    events: [{ ...event(1, 1, 0, 10, 31), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  assert.deepEqual(scorerUpdates(state, named, alertAt + SCORER_WAIT_MS - 1), [{ incidentId: '365:777:score:home:1', player: 'Neymar' }])
+})
+
+test('scorerUpdates: passado SCORER_WAIT_MS o gol pendente é esquecido', () => {
+  const { state, alertAt } = stateWithScoreGoal()
+  const named = detail({
+    events: [{ ...event(1, 1, 0, 10, 31), playerId: 5 }],
+    home: homeScore(1),
+    players: new Map([[5, 'Neymar']]),
+  })
+  assert.deepEqual(scorerUpdates(state, named, alertAt + SCORER_WAIT_MS), [])
+  assert.deepEqual(scorerUpdates(state, named, alertAt + 1000), [])
+})
+
+test('scorerUpdates: jogo sem lista de eventos (events undefined) não dá nome', () => {
+  const state = createLiveState()
+  const noEvents = (extra: Partial<Detail365> = {}) => ({ ...detail(extra), events: undefined }) as unknown as Detail365
+  assert.deepEqual(diffDetail(state, noEvents(), NOW), [])
+  const alerts = diffDetail(state, noEvents({ home: homeScore(1) }), NOW)
+  assert.equal(alerts.length, 1)
+  assert.equal(alerts[0].id, '365:777:score:home:1')
+  assert.deepEqual(scorerUpdates(state, noEvents({ home: homeScore(1) }), NOW + 1000), [])
 })

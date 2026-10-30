@@ -4,7 +4,19 @@ App desktop Windows (Electron) para assistir de 1 a 18 páginas ao mesmo tempo n
 
 ![Tela inicial do Quadra](docs/images/tela-inicial.png)
 
-## Como rodar
+## Como instalar
+
+1. Abra a [última versão em Releases](https://github.com/bernardfrajblat365/multiview/releases/latest), role até **Assets** e baixe **`Quadra-Setup-<versão>.exe`**. Os outros arquivos (`.blockmap`, `latest.yml`, `release-verification.json`) são do atualizador: ignore.
+2. Abra o arquivo baixado. A instalação é de um clique, não precisa de administrador e abre o Quadra no final.
+
+**O Windows vai mostrar um aviso** porque o instalador ainda não tem assinatura digital paga (Authenticode). É só confirmar:
+
+- **"O Windows protegeu seu computador"** (SmartScreen): **Mais informações → Executar assim mesmo**.
+- **"Não é baixado com frequência"** (Edge ou Chrome): **Manter** (ou **Manter mesmo assim**).
+
+Depois de instalado, o Quadra avisa quando sair uma versão nova e pergunta antes de baixar. Se o antivírus ou o TI da empresa bloquear o instalador, peça a liberação ao TI.
+
+## Como rodar (desenvolvimento)
 
 ```bash
 npm ci               # dependências + runtime ECS da Castlabs
@@ -37,6 +49,7 @@ npm run dist:release # instalador NSIS em release/
 
 - Os tamanhos maximizam a área de vídeo 16:9 sem cortar a imagem; players esportivos ganham barras pretas quando preciso.
 - Destaque (★) leva o jogo ao espaço grande; dois destaques mudam para uma composição que comporte dois. Redimensionar recalcula preservando destaques. A barra de controles fica visível também em tela cheia.
+- **Zoom dos botões:** Ctrl + / Ctrl − (ou Ctrl + rodinha do mouse) aumentam/diminuem os botões dos painéis e a barra de baixo, como no navegador, também com o foco ou o mouse em cima de um jogo; Ctrl 0 volta ao normal (de −3 a +3 níveis, só enquanto o app está aberto). Os vídeos e a grade não mudam de tamanho, e a página do player nunca recebe zoom.
 - **Nome do jogo:** com `Time A x Time B` no título (ou nomes do feed), o painel mostra o nome inteiro dos times, nunca sigla: na faixa preta de baixo/cima (fonte encolhe; duas linhas se preciso) ou numa legenda em degradê na base do vídeo (até 36 px). Emojis de som/esporte do título são removidos. O **×** (aparece com o mouse sobre os nomes) oculta aquele painel; **Abrir** restaura; o menu **⋯** oculta todos.
 
 ### Alertas de lances

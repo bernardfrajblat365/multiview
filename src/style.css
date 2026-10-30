@@ -300,6 +300,7 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .panel__bar .btn--load,
 .panel__bar .btn--clear,
 .panel__bar .btn--bllsport,
+.panel__bar .btn--youtube,
 .panel__bar .btn--zapping {
   flex: 0 1 auto; min-width: 0;
   padding: clamp(0.28rem, 1.35cqw, 0.62rem) clamp(0.32rem, 1.5cqw, 0.82rem);
@@ -309,6 +310,8 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .btn--bllsport { border: 1px solid rgba(255, 168, 76, 0.55); background: rgba(140, 72, 18, 0.78); color: #fff3e6; }
 .btn--bllsport:hover { border-color: rgba(255, 196, 122, 0.9); background: rgba(168, 88, 24, 0.92); }
 .btn--bllsport.is-target { border-color: #ffd7a8; box-shadow: 0 0 0 2px rgba(255, 168, 76, 0.22); }
+.btn--youtube { border: 1px solid rgba(255, 92, 92, 0.6); background: rgba(150, 22, 22, 0.8); color: #fff0f0; }
+.btn--youtube:hover { border-color: rgba(255, 140, 140, 0.9); background: rgba(190, 30, 30, 0.92); }
 .btn--zapping { border: 1px solid rgba(96, 180, 255, 0.55); background: rgba(24, 72, 120, 0.78); color: #e8f4ff; }
 .btn--zapping:hover { border-color: rgba(140, 205, 255, 0.9); background: rgba(32, 96, 160, 0.92); }
 .panel__close { flex-shrink: 0; color: var(--ink-muted); }
@@ -527,6 +530,23 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .release-notes__list strong { display: block; margin-bottom: 0.2rem; font-size: 0.95rem; }
 .release-notes__list p { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--ink-muted); }
 
+.first-steps__dialog { width: min(100%, 34rem); }
+.first-steps__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 1rem; counter-reset: step; }
+.first-steps__list li { position: relative; padding-left: 3rem; counter-increment: step; }
+.first-steps__list li::before { content: counter(step); position: absolute; left: 0; top: 0; display: grid; place-items: center; width: 2.1rem; height: 2.1rem; border-radius: 50%; background: var(--accent); color: #0a1f17; font-weight: 800; }
+.first-steps__list strong { display: block; margin-bottom: 0.15rem; font-size: 0.98rem; }
+.first-steps__list p { margin: 0; font-size: 0.88rem; line-height: 1.45; color: var(--ink-muted); }
+.first-steps__hint { margin: 0 0 1rem; font-size: 0.8rem; color: var(--ink-muted); }
+
+/* Dialogs the main process asks for (update prompts); they sit above any other open dialog. */
+.ui-dialog { z-index: 110; }
+.ui-dialog__dialog { width: min(100%, 30rem); }
+.ui-dialog__body { gap: 0.8rem; }
+.ui-dialog__text { margin: 0; font-size: 0.9rem; line-height: 1.45; color: var(--ink-muted); }
+.ui-dialog__list { margin: 0; padding: 0; list-style: none; display: grid; gap: 0.5rem; }
+.ui-dialog__list li { position: relative; padding-left: 1.1rem; font-size: 0.9rem; line-height: 1.4; }
+.ui-dialog__list li::before { content: ''; position: absolute; left: 0.15rem; top: 0.55em; width: 0.38rem; height: 0.38rem; border-radius: 50%; background: var(--accent); }
+
 .bll-batch__dialog { width: min(100%, 38rem); max-height: calc(100svh - 2.5rem); display: flex; flex-direction: column; }
 .bll-batch__dialog .confirm__message { margin-bottom: 0.4rem; }
 .bll-batch__status { margin: 0 0 0.75rem; font-size: 0.88rem; color: var(--muted, rgba(232,245,238,0.75)); line-height: 1.4; }
@@ -573,13 +593,13 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 
 @container (max-width: 420px) {
   .panel__bar input { flex: 1 1 100%; }
-  .panel__bar .btn--load, .panel__bar .btn--clear, .panel__bar .btn--bllsport, .panel__bar .btn--zapping { flex: 1 1 auto; }
+  .panel__bar .btn--load, .panel__bar .btn--clear, .panel__bar .btn--bllsport, .panel__bar .btn--youtube, .panel__bar .btn--zapping { flex: 1 1 auto; }
 }
 
 @container (max-width: 260px) {
   .panel__empty { padding: 0.25rem; gap: 0.2rem; }
   .panel__bar { gap: 0.15rem; padding: 0.2rem; }
-  .panel__bar .btn--zapping { letter-spacing: -0.02em; }
+  .panel__bar .btn--youtube, .panel__bar .btn--zapping { letter-spacing: -0.02em; }
 }
 
 @container (max-width: 340px) {

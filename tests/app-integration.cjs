@@ -40,6 +40,23 @@ function evaluate(webSocketUrl, expression) {
   })
 }
 
+function sendCdp(webSocketUrl, method, params) {
+  return new Promise((resolve, reject) => {
+    const socket = new WebSocket(webSocketUrl)
+    const timer = setTimeout(() => { socket.close(); reject(new Error(`Timeout em ${method}.`)) }, 10000)
+    socket.addEventListener('open', () => socket.send(JSON.stringify({ id: 1, method, params })))
+    socket.addEventListener('message', (event) => {
+      const message = JSON.parse(event.data.toString())
+      if (message.id !== 1) return
+      clearTimeout(timer)
+      socket.close()
+      if (message.error) return reject(new Error(message.error.message))
+      resolve(message.result)
+    })
+    socket.addEventListener('error', () => { clearTimeout(timer); reject(new Error('WebSocket encerrou.')) })
+  })
+}
+
 async function waitForRendererTarget(port) {
   const deadline = Date.now() + 20000
   while (Date.now() < deadline) {
@@ -314,7 +331,8 @@ async function run() {
   const baseUrl = `http://127.0.0.1:${server.address().port}`
   const childEnv = { ...process.env }
   delete childEnv.ELECTRON_RUN_AS_NODE
-  const child = spawn(electronPath, [mainPath, `--remote-debugging-port=${port}`], {
+  const inspectPort = port + 1
+  const child = spawn(electronPath, [`--inspect=${inspectPort}`, mainPath, `--remote-debugging-port=${port}`], {
     windowsHide: false, stdio: ['ignore', 'ignore', 'ignore'],
     env: {
       ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl, QUADRA_365SCORES_IMAGE_URL: baseUrl,
@@ -327,6 +345,13 @@ async function run() {
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.app-version')?.textContent`), expectedAppVersion)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('[data-count="2"]').click()`)
     await waitForExpression(target, `Boolean(document.querySelector('.panel[data-slot="0"] [data-bllsport]'))`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel[data-slot="0"] .panel__bar button')].map((button) => button.textContent.trim())`),
+    ['BLL', 'YouTube', 'Zapping', 'Abrir', 'Limpar'], 'O botão YouTube fica entre BLL e Zapping.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] [data-youtube]').click()`)
+    await waitForExpression(target, `document.querySelector('#bll-batch-title')?.textContent === 'Abrir jogos ao vivo do YouTube'`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-cancel]').click()`)
+    await waitForExpression(target, `!document.querySelector('.bll-batch')`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-bllsport]').click()`)
     const bllCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
     if (!bllCatalog) {
@@ -591,7 +616,8 @@ async function run() {
       ],
     }, 'O lote do YouTube deve listar só jogos ao vivo dos canais da lista, agrupados por competição ou canal.')
     const playlistQueries = youtubeQueries.filter((query) => query.path === '/youtube/playlistItems')
-    assert.equal(playlistQueries.length, 10, 'A lista padrão tem 10 canais, um playlistItems por canal.')
+    // The panel's YouTube button may already have searched once (more than 60 s ago, past the cache).
+    assert.equal(new Set(playlistQueries.map((query) => query.playlistId)).size, 10, 'A lista padrão tem 10 canais, um playlistItems por canal.')
     assert.ok(playlistQueries.some((query) => query.playlistId === 'UUZiYbVptd3PVPf4f6eR6UaQ'), 'A playlist de uploads é o id do canal com UU no lugar de UC.')
     assert.ok(youtubeQueries.every((query) => query.key === youtubeTestKey), 'A chave deve vir do ambiente/.env, só no main.')
     assert.equal(youtubeQueries.some((query) => query.path === '/youtube/search'), false, 'Sem busca aberta (100 unidades).')
@@ -731,6 +757,64 @@ async function run() {
     const audioTargets = await fetchJson(`http://127.0.0.1:${port}/json`)
     assert.deepEqual(audioTargets.filter((page) => page.url.startsWith(`${baseUrl}/page?slot=`)).map((page) => page.id).sort(),
       [...stablePageIds].sort(), 'Os controles de áudio recriaram uma página.')
+
+    // Ctrl + / Ctrl - / Ctrl + wheel inside an open player zoom only the overlay UI.
+    const zoomPanel = (await fetchJson(`http://127.0.0.1:${port}/json`))
+      .find((page) => page.type === 'page' && page.url.startsWith(`${baseUrl}/page?slot=`))
+    assert.ok(zoomPanel, 'Nenhum painel aberto para testar o zoom.')
+    const uiZoom = () => evaluate(target.webSocketDebuggerUrl, `({ ratio: window.devicePixelRatio,
+      button: document.querySelector('[data-mute]').getBoundingClientRect().width * window.devicePixelRatio,
+      // The ⋯ button: the text buttons shrink below 1000 CSS px, which a zoomed 1024 px window (CI) crosses.
+      toolbar: document.querySelector('#btn-more').getBoundingClientRect().height * window.devicePixelRatio,
+      panel: document.querySelector('.panel[data-slot="0"]').getBoundingClientRect().width * window.devicePixelRatio })`)
+    const playerSize = () => evaluate(zoomPanel.webSocketDebuggerUrl, `({ ratio: window.devicePixelRatio, width: window.innerWidth * window.devicePixelRatio })`)
+    // DevTools input skips Electron's input hooks, so the keys and the wheel go through the player's sendInputEvent.
+    const mainProcess = (await fetchJson(`http://127.0.0.1:${inspectPort}/json`))[0]
+    const inPlayer = (events) => sendCdp(mainProcess.webSocketDebuggerUrl, 'Runtime.evaluate', {
+      includeCommandLineAPI: true, awaitPromise: true, returnByValue: true,
+      expression: `(async () => {
+        const { webContents } = require('electron')
+        const player = webContents.getAllWebContents().find((contents) => contents.getURL() === ${JSON.stringify(zoomPanel.url)})
+        if (!player) return false
+        for (const event of ${JSON.stringify(events)}) { player.sendInputEvent(event); await new Promise((resolve) => setTimeout(resolve, 30)) }
+        return true
+      })()`,
+    }).then((result) => assert.equal(result.result?.value, true, `Não deu para mandar teclas ao player: ${JSON.stringify(result)}`))
+    const pressInPlayer = (keyCode) => inPlayer(['keyDown', 'keyUp'].map((type) => ({ type, keyCode, modifiers: ['control'] })))
+    const wheelInPlayer = (deltaY) => inPlayer([{ type: 'mouseWheel', x: 40, y: 40, deltaX: 0, deltaY, wheelTicksX: 0, wheelTicksY: Math.sign(deltaY), canScroll: true, modifiers: ['control'] }])
+    const waitForZoom = async (predicate, message) => {
+      const deadline = Date.now() + 5000
+      let last
+      while (Date.now() < deadline) {
+        last = await uiZoom()
+        if (predicate(last)) return last
+        await wait(100)
+      }
+      throw new Error(`${message} (${JSON.stringify(last)})`)
+    }
+    const zoomBefore = await uiZoom()
+    const playerBefore = await playerSize()
+    await pressInPlayer('=')
+    const zoomedIn = await waitForZoom((value) => value.ratio > zoomBefore.ratio, 'Ctrl + no player não aumentou a interface.')
+    assert.ok(zoomedIn.button > zoomBefore.button * 1.05, 'Os botões do painel não cresceram com Ctrl +.')
+    assert.ok(zoomedIn.toolbar > zoomBefore.toolbar * 1.05, 'A barra de baixo não cresceu com Ctrl +.')
+    await wait(400)
+    assert.ok(Math.abs((await uiZoom()).panel - zoomBefore.panel) <= 3, 'O zoom da interface mudou o tamanho do painel.')
+    const playerZoomed = await playerSize()
+    assert.equal(playerZoomed.ratio, playerBefore.ratio, 'Ctrl + deu zoom na página do player.')
+    assert.ok(Math.abs(playerZoomed.width - playerBefore.width) <= 3, 'O zoom da interface mudou o tamanho do player.')
+    await pressInPlayer('-')
+    await pressInPlayer('-')
+    await waitForZoom((value) => value.ratio < zoomBefore.ratio, 'Ctrl - no player não diminuiu a interface.')
+    await wheelInPlayer(120)
+    await waitForZoom((value) => Math.abs(value.ratio - zoomBefore.ratio) < 0.01, 'Ctrl + roda do mouse no player não aumentou a interface.')
+    await wheelInPlayer(120)
+    await waitForZoom((value) => value.ratio > zoomBefore.ratio, 'Ctrl + roda do mouse no player não aumentou a interface de novo.')
+    await pressInPlayer('0')
+    await waitForZoom((value) => Math.abs(value.ratio - zoomBefore.ratio) < 0.01, 'Ctrl 0 no player não voltou a interface ao tamanho normal.')
+    assert.equal((await playerSize()).ratio, playerBefore.ratio, 'O player ficou com zoom.')
+    assert.deepEqual((await fetchJson(`http://127.0.0.1:${port}/json`)).filter((page) => page.url.startsWith(`${baseUrl}/page?slot=`)).map((page) => page.id).sort(),
+      [...stablePageIds].sort(), 'O zoom da interface recriou uma página.')
 
     await evaluate(target.webSocketDebuggerUrl, `(() => {
       const panel = document.querySelector('.panel[data-slot="0"]')

@@ -31,6 +31,7 @@ import {
 } from './auto-open'
 import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, handleScorerName, onAlertSettingsChange, onAlertShown, onVarReviewStarted, setVarReview, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
+import { FIRST_STEPS, markFirstStepsSeen, readFirstStepsSeen, shouldShowFirstSteps } from './first-steps'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
 import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
 import { AUTO_MIN_PANELS, VAR_MAX_MS, composeHighlighted, endVarAuto, expireAutos, registerGoal, secondsLeft, type AutoEntry } from './auto-highlight'
@@ -1369,9 +1370,12 @@ type BatchSource = 'bll' | 'youtube'
 type BatchEvent = BllEvent & { channel?: string }
 type BatchLoad = { status: 'ok'; events: BatchEvent[] } | { status: 'error'; message: string }
 
-function applyBatch(urls: string[], source: BatchSource) {
+function applyBatch(urls: string[], source: BatchSource, firstPanelId: PanelId | null = null) {
   if (view !== 'grid') return
-  const plan = planBatchOpen(panels, urls, MAX_PANELS)
+  // Opened from a panel's own button: that panel gets the first game.
+  const first = firstPanelId ? panelById(firstPanelId) : undefined
+  const slots = first ? [first, ...panels.filter((panel) => panel !== first)] : panels
+  const plan = planBatchOpen(slots, urls, MAX_PANELS)
   if (plan.fill.length === 0 && plan.extra.length === 0) return
   pushHistory()
   for (const { panelId, url } of plan.fill) {
@@ -1463,10 +1467,10 @@ const BATCH_SOURCES: Record<BatchSource, { title: string; loading: string; empty
   },
 }
 
-function openBatch(source: BatchSource) {
+function openBatch(source: BatchSource, firstPanelId: PanelId | null = null) {
   const config = BATCH_SOURCES[source]
   const fromChooser = view === 'choose'
-  document.querySelector('.confirm')?.remove()
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
   const backdrop = document.createElement('div')
   backdrop.className = 'confirm bll-batch'
   backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="bll-batch-title">
@@ -1592,7 +1596,7 @@ function openBatch(source: BatchSource) {
     const urls = selectedUrls()
     finish()
     if (fromChooser && view === 'choose') startWithGames(urls)
-    else applyBatch(urls, source)
+    else applyBatch(urls, source, firstPanelId)
   })
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
   document.addEventListener('keydown', onKey)
@@ -1859,7 +1863,7 @@ function autoOpenListsHtml(settings: AutoOpenSettings) {
 }
 
 function openAutoOpenDialog() {
-  document.querySelector('.confirm')?.remove()
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
   const backdrop = document.createElement('div')
   backdrop.className = 'confirm bll-batch auto-open'
   backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="auto-open-title">
@@ -2079,6 +2083,7 @@ function urlFormHtml(panel: Panel, options: { withClose?: boolean } = {}): strin
       <input id="url-${escapeHtml(panel.id)}" type="url" name="url" inputmode="url" autocomplete="off" spellcheck="false"
         placeholder="Cole link YouTube ou URL e pressione Enter" value="${escapeHtml(panel.draftUrl)}" />
       <button type="button" class="btn btn--bllsport${bllsportTargetId === panel.id ? ' is-target' : ''}" data-bllsport aria-pressed="${bllsportTargetId === panel.id}" aria-label="Escolher jogo no BLL para o jogo ${index + 1}" title="Abrir BLL para este painel">BLL</button>
+      <button type="button" class="btn btn--youtube" data-youtube aria-label="Escolher live do YouTube para o jogo ${index + 1}" title="Abrir jogos ao vivo do YouTube">YouTube</button>
       <button type="button" class="btn btn--zapping" data-zapping aria-label="Abrir Zapping no jogo ${index + 1}" title="Abrir Zapping para este painel">Zapping</button>
       <button type="submit" class="btn btn--load" aria-label="Abrir link">Abrir</button>
       <button type="button" class="btn btn--clear" data-clear aria-label="Limpar link">Limpar</button>
@@ -2212,6 +2217,7 @@ function bindPanelForm(panelElement: HTMLElement) {
   form?.querySelector('[data-clear]')?.addEventListener('click', () => applyPanelUrl(id, ''))
   form?.querySelector('[data-weddbets]')?.addEventListener('click', () => openWeddbets(id))
   form?.querySelector('[data-bllsport]')?.addEventListener('click', () => openBllsport(id))
+  form?.querySelector('[data-youtube]')?.addEventListener('click', () => openBatch('youtube', id))
   form?.querySelector('[data-zapping]')?.addEventListener('click', () => openZapping(id))
   form?.querySelector('[data-close]')?.addEventListener('click', () => setPanelEditing(panelElement, false))
   form?.addEventListener('keydown', (event) => {
@@ -2246,7 +2252,7 @@ function toggleFullscreen() {
 
 function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boolean> {
   return new Promise((resolve) => {
-    document.querySelector('.confirm')?.remove()
+    document.querySelector('.confirm:not(.ui-dialog)')?.remove()
     const backdrop = document.createElement('div')
     backdrop.className = 'confirm'
     backdrop.innerHTML = `<div class="confirm__dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -2271,8 +2277,62 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
   })
 }
 
+/** Body of a dialog from the main process: "• " lines become a list, the other blocks paragraphs. */
+function uiDialogBodyHtml(detail: string): string {
+  const blocks: string[] = []
+  let items: string[] = []
+  const flush = () => {
+    if (items.length) blocks.push(`<ul class="ui-dialog__list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`)
+    items = []
+  }
+  for (const line of detail.split('\n')) {
+    const text = line.trim()
+    if (text.startsWith('•')) items.push(text.replace(/^•\s*/, ''))
+    else {
+      flush()
+      if (text) blocks.push(`<p class="ui-dialog__text">${escapeHtml(text)}</p>`)
+    }
+  }
+  flush()
+  return blocks.join('')
+}
+
+type UiDialogPayload = Parameters<Parameters<NonNullable<Window['quadra']>['onUiDialog']>[0]>[0]
+
+/** Update prompts: the main process asks, the answer is the index of the button. Stacks over other dialogs. */
+function showUiDialog(payload: UiDialogPayload) {
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm ui-dialog'
+  const buttons = payload.buttons.map((label, index) => ({ label, index }))
+  // The main button goes last (right), as in the other dialogs.
+  buttons.sort((a, b) => Number(a.index === payload.defaultId) - Number(b.index === payload.defaultId))
+  backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog ui-dialog__dialog" role="alertdialog" aria-modal="true" aria-labelledby="ui-dialog-message">
+    <p class="release-notes__eyebrow">${escapeHtml(payload.title)}</p>
+    <h2 id="ui-dialog-message" class="confirm__message">${escapeHtml(payload.message)}</h2>
+    <div class="release-notes__scroll ui-dialog__body">${uiDialogBodyHtml(payload.detail)}</div>
+    <div class="confirm__actions">${buttons.map(({ label, index }) => `<button type="button" class="btn ${index === payload.defaultId ? 'btn--load' : 'btn--ghost'}" data-response="${index}">${escapeHtml(label)}</button>`).join('')}</div>
+  </div>`
+  const finish = (response: number) => {
+    document.removeEventListener('keydown', onKey, true)
+    backdrop.remove()
+    window.quadra?.respondUiDialog(payload.id, response)
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !backdrop.isConnected) return
+    event.preventDefault()
+    event.stopPropagation()
+    finish(payload.cancelId)
+  }
+  for (const button of backdrop.querySelectorAll<HTMLButtonElement>('[data-response]')) {
+    button.addEventListener('click', () => finish(Number(button.dataset.response)))
+  }
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(backdrop)
+  backdrop.querySelector<HTMLButtonElement>(`[data-response="${payload.defaultId}"]`)?.focus()
+}
+
 function showReleaseNotes(release: Release) {
-  document.querySelector('.confirm')?.remove()
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
   const backdrop = document.createElement('div')
   backdrop.className = 'confirm release-notes'
   backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
@@ -2298,10 +2358,48 @@ function showReleaseNotes(release: Release) {
   backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
 }
 
+/** The welcome guide: three steps, from the home button or by itself on a fresh install. */
+function showFirstSteps() {
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
+  markFirstStepsSeen()
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm first-steps'
+  backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog first-steps__dialog" role="dialog" aria-modal="true" aria-labelledby="first-steps-title">
+    <p class="release-notes__eyebrow">Bem-vindo ao Quadra</p>
+    <h2 id="first-steps-title" class="confirm__message">Acompanhe vários jogos ao mesmo tempo</h2>
+    <div class="release-notes__scroll"><ol class="first-steps__list">${FIRST_STEPS.map((step) => `<li><strong>${escapeHtml(step.title)}</strong><p>${escapeHtml(step.body)}</p></li>`).join('')}</ol></div>
+    <p class="first-steps__hint">Para ver isto de novo, use o botão <strong>Primeiros passos</strong> na tela inicial.</p>
+    <div class="confirm__actions"><button type="button" class="btn btn--load" data-ok>Começar</button></div>
+  </div>`
+  const close = () => {
+    document.removeEventListener('keydown', onKey)
+    backdrop.remove()
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key === 'Escape') close()
+  }
+  backdrop.querySelector('[data-ok]')!.addEventListener('click', close)
+  backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close() })
+  document.addEventListener('keydown', onKey)
+  document.body.appendChild(backdrop)
+  backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
+}
+
+/** Fresh install: the guide replaces "what's new" (nothing is new to a new user). `?first-steps=off|on` overrides for smokes. */
+function showFirstStepsIfNew(): boolean {
+  const override = new URLSearchParams(location.search).get('first-steps')
+  if (window.quadra ? override === 'off' : override !== 'on') return false
+  if (!shouldShowFirstSteps(readFirstStepsSeen(), readLastSeenVersion())) return false
+  markVersionSeen(version)
+  showFirstSteps()
+  return true
+}
+
 /** Once per installed version, after an update (or a first install). `?release-notes=off|on` overrides for smokes. */
 function showReleaseNotesIfNew() {
   const override = new URLSearchParams(location.search).get('release-notes')
   if (window.quadra ? override === 'off' : override !== 'on') return
+  if (showFirstStepsIfNew()) return
   const release = releaseToShow(version, readLastSeenVersion())
   if (!release) return
   markVersionSeen(version)
@@ -2700,7 +2798,7 @@ function renderChoose() {
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-first-steps">Primeiros passos</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
     ${alertControlsHtml('chooser')}
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
@@ -2710,6 +2808,7 @@ function renderChoose() {
   app.querySelector<HTMLButtonElement>('#btn-start-bll-batch')?.addEventListener('click', () => openBatch('bll'))
   app.querySelector<HTMLButtonElement>('#btn-start-youtube-batch')?.addEventListener('click', () => openBatch('youtube'))
   app.querySelector<HTMLButtonElement>('#btn-start-auto-open')?.addEventListener('click', openAutoOpenDialog)
+  app.querySelector<HTMLButtonElement>('#btn-first-steps')?.addEventListener('click', showFirstSteps)
   app.querySelector<HTMLButtonElement>('#btn-release-notes')?.addEventListener('click', () => showReleaseNotes(RELEASES.find((release) => release.version === version) ?? RELEASES[0]))
   bindUpdateCheck()
   bindAlertControls(app)
@@ -3023,6 +3122,7 @@ window.quadra?.onLiveVar((payload) => {
   pendingAlerts.set(payload.panelId, timers)
 })
 window.quadra?.onMatchEnded(({ panelId }) => onMatchEnded(panelId))
+window.quadra?.onUiDialog(showUiDialog)
 window.quadra?.onLiveMatch((status) => {
   if (!panelById(status.panelId)) return
   if (status.status === 'off') {

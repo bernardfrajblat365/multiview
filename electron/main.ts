@@ -25,6 +25,8 @@ import { listYoutubeLives, resolveYoutubeChannel } from './youtube-search'
 import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSkipScript, youtubePlayerCss } from './youtube-player'
 import { createAutoUpdateController } from './update'
 import { fetchGitHubReleaseNotes } from './release-notes'
+import { createUiMessageBox } from './ui-dialog'
+import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
 
 const { autoUpdater } = electronUpdater
 
@@ -217,6 +219,16 @@ let visiblePanelIds = new Set<string>()
 let fullscreenPrioritySyncPending = false
 let autoUpdateController: ReturnType<typeof createAutoUpdateController> | null = null
 
+/** Update prompts are drawn by the overlay in Quadra's style; the native box is only the fallback. */
+const uiMessageBox = createUiMessageBox({
+  send: (request) => {
+    if (!overlayWindow || overlayWindow.isDestroyed() || !overlayReady) return false
+    overlayWindow.webContents.send('quadra:ui-dialog', request)
+    return true
+  },
+  fallback: (options) => dialog.showMessageBox(options),
+})
+
 const sportsCatalogs: Record<SportsCatalogId, SportsCatalog> = {
   weddbets: {
     id: 'weddbets',
@@ -408,23 +420,37 @@ function setNativeFullscreen(on: boolean) {
   mainWindow.setFullScreen(on)
 }
 
-const ZOOM_STEP = 0.5
-const ZOOM_LIMIT = 3
+/** Overlay or panel players: where Ctrl + / Ctrl - / Ctrl + wheel zoom the overlay UI. */
+function isUiZoomSource(contents: Electron.WebContents) {
+  if (overlayWindow && !overlayWindow.isDestroyed() && contents === overlayWindow.webContents) return true
+  for (const state of slotViews.values()) if (state.view.webContents === contents) return true
+  return false
+}
 
-// Ctrl + / Ctrl - / Ctrl 0 on the overlay UI. Chromium only zooms out natively here
-// because the app has no menu with the zoom-in accelerator.
-function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
-  if (!overlayWindow || overlayWindow.isDestroyed() || contents !== overlayWindow.webContents) return false
-  if (!input.control || input.alt || input.type !== 'keyDown') return false
-  const key = input.key
-  let level: number
-  if (key === '+' || key === '=' || input.code === 'NumpadAdd') level = contents.getZoomLevel() + ZOOM_STEP
-  else if (key === '-' || key === '_' || input.code === 'NumpadSubtract') level = contents.getZoomLevel() - ZOOM_STEP
-  else if (key === '0' || input.code === 'Numpad0') level = 0
-  else return false
-  event.preventDefault()
-  contents.setZoomLevel(Math.max(-ZOOM_LIMIT, Math.min(ZOOM_LIMIT, level)))
+// Only the overlay zooms (buttons, toolbar); applyLayout scales the panel bounds back, so
+// the grid and the players keep their size. The panel pages themselves never zoom.
+function zoomOverlay(command: ZoomCommand) {
+  if (!overlayWindow || overlayWindow.isDestroyed()) return
+  const contents = overlayWindow.webContents
+  const level = nextZoomLevel(contents.getZoomLevel(), command)
+  if (level === contents.getZoomLevel()) return
+  contents.setZoomLevel(level)
   contents.send('quadra:request-layout')
+}
+
+const wheelZoomGate = createWheelZoomGate()
+
+function zoomOverlayByWheel(direction: 'in' | 'out') {
+  if (wheelZoomGate()) zoomOverlay(direction)
+}
+
+// Ctrl + / Ctrl - / Ctrl 0. Chromium only zooms out natively here because the app has no
+// menu with the zoom-in accelerator; with panels open the keys reach the focused player.
+function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
+  const command = zoomCommandOf(input)
+  if (!command || !isUiZoomSource(contents)) return false
+  event.preventDefault()
+  zoomOverlay(command)
   return true
 }
 
@@ -1047,7 +1073,7 @@ function installAutoUpdater() {
   autoUpdateController = createAutoUpdateController({
     enabled: app.isPackaged && process.platform === 'win32',
     updater: autoUpdater,
-    showMessageBox: (options) => dialog.showMessageBox(options),
+    showMessageBox: uiMessageBox.show,
     quitAndInstall: () => autoUpdater.quitAndInstall(),
     fetchReleaseNotes: (version) => fetchGitHubReleaseNotes(version, (url, init) => net.fetch(String(url), init)),
     log: (message) => console.warn(`[updater] ${message}`),
@@ -1067,6 +1093,8 @@ function createSlotView(id: string, url: string, muted: boolean) {
     },
   })
   configureRemoteContents(view.webContents, id)
+  // Ctrl + wheel over a player zooms the overlay UI, as over the buttons (Electron never zooms the page itself).
+  view.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
   view.webContents.setAudioMuted(muted)
   mainWindow?.contentView.addChildView(view)
   const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0 }
@@ -1192,8 +1220,12 @@ function createOverlay() {
   overlayWindow.on('closed', () => {
     overlayWindow = null
     overlayReady = false
+    uiMessageBox.cancelAll()
     scheduleFullscreenPrioritySync()
   })
+  // A reload drops whatever the overlay was showing; its dialogs count as dismissed.
+  overlayWindow.webContents.on('did-start-loading', () => uiMessageBox.cancelAll())
+  overlayWindow.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
   overlayWindow.webContents.on('did-finish-load', () => {
     overlayReady = true
     syncOverlayBounds()
@@ -1203,7 +1235,7 @@ function createOverlay() {
     overlayWindow?.webContents.send('quadra:request-layout')
   })
   // Smokes run on a fresh profile; the "what's new" popup would cover the screens they click.
-  const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off' } : {}
+  const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off', 'first-steps': 'off' } : {}
   // Smokes read the BLL list for Auto mode faster than the minute the app uses.
   if (Number(process.env.QUADRA_AUTO_OPEN_POLL_MS) > 0) query['auto-open-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_POLL_MS))
   const devUrl = new URL(process.env.ELECTRON_RENDERER_URL ?? 'http://localhost')
@@ -1218,6 +1250,9 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:check-for-update', (event) => {
     if (!isUiSender(event)) throw new Error('Invalid update request sender')
     return autoUpdateController?.check() ?? 'disabled'
+  })
+  ipcMain.on('quadra:ui-dialog-response', (event, id: unknown, response: unknown) => {
+    if (isUiSender(event)) uiMessageBox.respond(id, response)
   })
   ipcMain.on('quadra:choose-live-match', (event, panelId: unknown, gameId: unknown) => {
     if (!isUiSender(event) || typeof panelId !== 'string') return

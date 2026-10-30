@@ -6,6 +6,16 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.2.0',
+    label: '1.2',
+    notes: [
+      { title: 'Primeiros passos', body: 'Quem abre o Quadra pela primeira vez vê um guia de três passos; o botão "Primeiros passos" na tela inicial reabre quando quiser.' },
+      { title: 'Aviso de atualização no visual do Quadra', body: 'O aviso de nova versão e o de "reiniciar e instalar" agora aparecem dentro do Quadra, no mesmo estilo das outras janelas, em vez da caixa padrão do Windows.' },
+      { title: 'YouTube em cada painel', body: 'Os painéis vazios ganharam um botão vermelho YouTube, entre BLL e Zapping, que abre a lista de jogos ao vivo do YouTube; o primeiro jogo escolhido entra nesse painel.' },
+      { title: 'Zoom dos botões', body: 'Ctrl + e Ctrl − (ou Ctrl + rodinha do mouse) aumentam e diminuem os botões dos painéis e a barra de baixo, mesmo com os jogos abertos; Ctrl 0 volta ao normal. Os vídeos não mudam de tamanho.' },
+    ],
+  },
+  {
     version: '1.1.9',
     label: '1.1.9',
     notes: [

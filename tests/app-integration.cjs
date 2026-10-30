@@ -764,7 +764,8 @@ async function run() {
     assert.ok(zoomPanel, 'Nenhum painel aberto para testar o zoom.')
     const uiZoom = () => evaluate(target.webSocketDebuggerUrl, `({ ratio: window.devicePixelRatio,
       button: document.querySelector('[data-mute]').getBoundingClientRect().width * window.devicePixelRatio,
-      toolbar: document.querySelector('#btn-mute-all').getBoundingClientRect().height * window.devicePixelRatio,
+      // The ⋯ button: the text buttons shrink below 1000 CSS px, which a zoomed 1024 px window (CI) crosses.
+      toolbar: document.querySelector('#btn-more').getBoundingClientRect().height * window.devicePixelRatio,
       panel: document.querySelector('.panel[data-slot="0"]').getBoundingClientRect().width * window.devicePixelRatio })`)
     const playerSize = () => evaluate(zoomPanel.webSocketDebuggerUrl, `({ ratio: window.devicePixelRatio, width: window.innerWidth * window.devicePixelRatio })`)
     // DevTools input skips Electron's input hooks, so the keys and the wheel go through the player's sendInputEvent.

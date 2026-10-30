@@ -5,6 +5,8 @@ import type { AlertKind } from './match-events'
 import type { MatchClock } from './match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
 
+/** A dialog the main process asks the overlay to draw (update prompts); answer with `respondUiDialog`. */
+type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 /** Crest data URLs in the feed's home/away order; null where there is none (both null: clear). */
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
@@ -16,6 +18,8 @@ type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; m
 type QuadraBridge = {
   checkForUpdate: () => Promise<UpdateCheckResult>
   ready: () => void
+  onUiDialog: (callback: (payload: UiDialogPayload) => void) => () => void
+  respondUiDialog: (id: number, response: number) => void
   setLayout: (payload: LayoutPayload) => void
   setFullscreen: (on: boolean) => void
   setChromeInteractive: (interactive: boolean, refocusPlayers?: boolean) => void

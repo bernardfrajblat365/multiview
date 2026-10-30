@@ -25,6 +25,7 @@ import { listYoutubeLives, resolveYoutubeChannel } from './youtube-search'
 import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSkipScript, youtubePlayerCss } from './youtube-player'
 import { createAutoUpdateController } from './update'
 import { fetchGitHubReleaseNotes } from './release-notes'
+import { createUiMessageBox } from './ui-dialog'
 
 const { autoUpdater } = electronUpdater
 
@@ -216,6 +217,16 @@ let cursorHidden = false
 let visiblePanelIds = new Set<string>()
 let fullscreenPrioritySyncPending = false
 let autoUpdateController: ReturnType<typeof createAutoUpdateController> | null = null
+
+/** Update prompts are drawn by the overlay in Quadra's style; the native box is only the fallback. */
+const uiMessageBox = createUiMessageBox({
+  send: (request) => {
+    if (!overlayWindow || overlayWindow.isDestroyed() || !overlayReady) return false
+    overlayWindow.webContents.send('quadra:ui-dialog', request)
+    return true
+  },
+  fallback: (options) => dialog.showMessageBox(options),
+})
 
 const sportsCatalogs: Record<SportsCatalogId, SportsCatalog> = {
   weddbets: {
@@ -1047,7 +1058,7 @@ function installAutoUpdater() {
   autoUpdateController = createAutoUpdateController({
     enabled: app.isPackaged && process.platform === 'win32',
     updater: autoUpdater,
-    showMessageBox: (options) => dialog.showMessageBox(options),
+    showMessageBox: uiMessageBox.show,
     quitAndInstall: () => autoUpdater.quitAndInstall(),
     fetchReleaseNotes: (version) => fetchGitHubReleaseNotes(version, (url, init) => net.fetch(String(url), init)),
     log: (message) => console.warn(`[updater] ${message}`),
@@ -1192,8 +1203,11 @@ function createOverlay() {
   overlayWindow.on('closed', () => {
     overlayWindow = null
     overlayReady = false
+    uiMessageBox.cancelAll()
     scheduleFullscreenPrioritySync()
   })
+  // A reload drops whatever the overlay was showing; its dialogs count as dismissed.
+  overlayWindow.webContents.on('did-start-loading', () => uiMessageBox.cancelAll())
   overlayWindow.webContents.on('did-finish-load', () => {
     overlayReady = true
     syncOverlayBounds()
@@ -1218,6 +1232,9 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:check-for-update', (event) => {
     if (!isUiSender(event)) throw new Error('Invalid update request sender')
     return autoUpdateController?.check() ?? 'disabled'
+  })
+  ipcMain.on('quadra:ui-dialog-response', (event, id: unknown, response: unknown) => {
+    if (isUiSender(event)) uiMessageBox.respond(id, response)
   })
   ipcMain.on('quadra:choose-live-match', (event, panelId: unknown, gameId: unknown) => {
     if (!isUiSender(event) || typeof panelId !== 'string') return

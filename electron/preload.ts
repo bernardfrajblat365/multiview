@@ -6,6 +6,7 @@ import type { AlertKind } from '../src/match-events'
 import type { MatchClock } from '../src/match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
 
+type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
 type MatchCrestsPayload = { panelId: string; home: string | null; away: string | null }
 /** Match clock for the label; null: no clock (not started, over). */
@@ -21,6 +22,12 @@ const quadra = {
   setChromeInteractive: (interactive: boolean, refocusPlayers = false) => ipcRenderer.send('quadra:set-chrome-interactive', interactive, refocusPlayers),
   setCursorHidden: (hidden: boolean) => ipcRenderer.send('quadra:set-cursor-hidden', hidden),
   checkForUpdate: () => ipcRenderer.invoke('quadra:check-for-update'),
+  onUiDialog: (callback: (payload: UiDialogPayload) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: UiDialogPayload) => callback(payload)
+    ipcRenderer.on('quadra:ui-dialog', listener)
+    return () => ipcRenderer.removeListener('quadra:ui-dialog', listener)
+  },
+  respondUiDialog: (id: number, response: number) => ipcRenderer.send('quadra:ui-dialog-response', id, response),
   openWeddbets: (panelId: string, label: string) => ipcRenderer.send('quadra:open-weddbets', panelId, label),
   setWeddbetsTarget: (panelId: string | null, label = '') => ipcRenderer.send('quadra:set-weddbets-target', panelId, label),
   openBllsport: (panelId: string, label: string) => ipcRenderer.send('quadra:open-bllsport', panelId, label),

@@ -1466,7 +1466,7 @@ const BATCH_SOURCES: Record<BatchSource, { title: string; loading: string; empty
 function openBatch(source: BatchSource) {
   const config = BATCH_SOURCES[source]
   const fromChooser = view === 'choose'
-  document.querySelector('.confirm')?.remove()
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
   const backdrop = document.createElement('div')
   backdrop.className = 'confirm bll-batch'
   backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="bll-batch-title">
@@ -1859,7 +1859,7 @@ function autoOpenListsHtml(settings: AutoOpenSettings) {
 }
 
 function openAutoOpenDialog() {
-  document.querySelector('.confirm')?.remove()
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
   const backdrop = document.createElement('div')
   backdrop.className = 'confirm bll-batch auto-open'
   backdrop.innerHTML = `<div class="confirm__dialog bll-batch__dialog" role="dialog" aria-modal="true" aria-labelledby="auto-open-title">
@@ -2246,7 +2246,7 @@ function toggleFullscreen() {
 
 function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boolean> {
   return new Promise((resolve) => {
-    document.querySelector('.confirm')?.remove()
+    document.querySelector('.confirm:not(.ui-dialog)')?.remove()
     const backdrop = document.createElement('div')
     backdrop.className = 'confirm'
     backdrop.innerHTML = `<div class="confirm__dialog" role="alertdialog" aria-modal="true" aria-labelledby="confirm-title">
@@ -2271,8 +2271,62 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
   })
 }
 
+/** Body of a dialog from the main process: "• " lines become a list, the other blocks paragraphs. */
+function uiDialogBodyHtml(detail: string): string {
+  const blocks: string[] = []
+  let items: string[] = []
+  const flush = () => {
+    if (items.length) blocks.push(`<ul class="ui-dialog__list">${items.map((item) => `<li>${escapeHtml(item)}</li>`).join('')}</ul>`)
+    items = []
+  }
+  for (const line of detail.split('\n')) {
+    const text = line.trim()
+    if (text.startsWith('•')) items.push(text.replace(/^•\s*/, ''))
+    else {
+      flush()
+      if (text) blocks.push(`<p class="ui-dialog__text">${escapeHtml(text)}</p>`)
+    }
+  }
+  flush()
+  return blocks.join('')
+}
+
+type UiDialogPayload = Parameters<Parameters<NonNullable<Window['quadra']>['onUiDialog']>[0]>[0]
+
+/** Update prompts: the main process asks, the answer is the index of the button. Stacks over other dialogs. */
+function showUiDialog(payload: UiDialogPayload) {
+  const backdrop = document.createElement('div')
+  backdrop.className = 'confirm ui-dialog'
+  const buttons = payload.buttons.map((label, index) => ({ label, index }))
+  // The main button goes last (right), as in the other dialogs.
+  buttons.sort((a, b) => Number(a.index === payload.defaultId) - Number(b.index === payload.defaultId))
+  backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog ui-dialog__dialog" role="alertdialog" aria-modal="true" aria-labelledby="ui-dialog-message">
+    <p class="release-notes__eyebrow">${escapeHtml(payload.title)}</p>
+    <h2 id="ui-dialog-message" class="confirm__message">${escapeHtml(payload.message)}</h2>
+    <div class="release-notes__scroll ui-dialog__body">${uiDialogBodyHtml(payload.detail)}</div>
+    <div class="confirm__actions">${buttons.map(({ label, index }) => `<button type="button" class="btn ${index === payload.defaultId ? 'btn--load' : 'btn--ghost'}" data-response="${index}">${escapeHtml(label)}</button>`).join('')}</div>
+  </div>`
+  const finish = (response: number) => {
+    document.removeEventListener('keydown', onKey, true)
+    backdrop.remove()
+    window.quadra?.respondUiDialog(payload.id, response)
+  }
+  const onKey = (event: KeyboardEvent) => {
+    if (event.key !== 'Escape' || !backdrop.isConnected) return
+    event.preventDefault()
+    event.stopPropagation()
+    finish(payload.cancelId)
+  }
+  for (const button of backdrop.querySelectorAll<HTMLButtonElement>('[data-response]')) {
+    button.addEventListener('click', () => finish(Number(button.dataset.response)))
+  }
+  document.addEventListener('keydown', onKey, true)
+  document.body.appendChild(backdrop)
+  backdrop.querySelector<HTMLButtonElement>(`[data-response="${payload.defaultId}"]`)?.focus()
+}
+
 function showReleaseNotes(release: Release) {
-  document.querySelector('.confirm')?.remove()
+  document.querySelector('.confirm:not(.ui-dialog)')?.remove()
   const backdrop = document.createElement('div')
   backdrop.className = 'confirm release-notes'
   backdrop.innerHTML = `<div class="confirm__dialog release-notes__dialog" role="dialog" aria-modal="true" aria-labelledby="release-notes-title">
@@ -3023,6 +3077,7 @@ window.quadra?.onLiveVar((payload) => {
   pendingAlerts.set(payload.panelId, timers)
 })
 window.quadra?.onMatchEnded(({ panelId }) => onMatchEnded(panelId))
+window.quadra?.onUiDialog(showUiDialog)
 window.quadra?.onLiveMatch((status) => {
   if (!panelById(status.panelId)) return
   if (status.status === 'off') {

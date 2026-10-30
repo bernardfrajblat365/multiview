@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.1.10',
+    label: '1.1.10',
+    notes: [
+      { title: 'Aviso de atualização no visual do Quadra', body: 'O aviso de nova versão e o de "reiniciar e instalar" agora aparecem dentro do Quadra, no mesmo estilo das outras janelas, em vez da caixa padrão do Windows.' },
+    ],
+  },
+  {
     version: '1.1.9',
     label: '1.1.9',
     notes: [

@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.2.2',
+    label: '1.2.2',
+    notes: [
+      { title: 'Cor própria para cada alerta', body: 'A borda do alerta de VAR agora é azul, a do touchdown roxa e a do field goal verde-água, para não confundir com a borda verde do gol.' },
+    ],
+  },
+  {
     version: '1.2.1',
     label: '1.2.1',
     notes: [

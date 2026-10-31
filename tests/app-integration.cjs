@@ -430,6 +430,21 @@ async function run() {
     // No William Hill feed in game-b: the panel links to the 365Scores game named by the player instead.
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__delay')?.title.includes('365Scores: Coritiba x Avaí') === true`)
+    // The ⏱ button opens the app's own list (not the native select); picking an option sets the panel delay.
+    const delayMenu = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.panel[data-slot="1"] .panel__delay').click()
+      const menu = document.querySelector('.delay-menu')
+      const options = [...(menu?.querySelectorAll('[role="option"]') ?? [])].map((option) => option.textContent)
+      menu?.querySelector('[data-live-delay-value="10"]')?.click()
+      const chosen = document.querySelector('.panel[data-slot="1"] .panel__delay-value')?.textContent
+      const closed = !document.querySelector('.delay-menu')
+      document.querySelector('.panel[data-slot="1"] .panel__delay').click()
+      document.querySelector('.delay-menu [data-live-delay-value="default"]')?.click()
+      return JSON.stringify({ options, chosen, closed, hasSelect: Boolean(document.querySelector('.panel__delay select')), reset: !document.querySelector('.panel[data-slot="1"] .panel__delay').classList.contains('is-custom') })
+    })()`)
+    const delayMenuState = JSON.parse(delayMenu)
+    assert.ok(delayMenuState.options[0]?.startsWith('Padrão') && delayMenuState.options.includes('10 s'), `Lista do atraso: ${delayMenu}`)
+    assert.ok(delayMenuState.chosen === '10 s' && delayMenuState.closed && !delayMenuState.hasSelect && delayMenuState.reset, `Escolha do atraso: ${delayMenu}`)
     // The score arrives although the first detail request hung (old timing: 8 s timeout + 6 s backoff).
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.score === '1 – 0'`, 9000).catch(async (error) => {

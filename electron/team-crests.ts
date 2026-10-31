@@ -1,6 +1,6 @@
-import { net } from 'electron'
 import type { Game365, TeamRef365 } from '../src/livescore-365'
-import { crestKey, crestUrl, findCrestTeams, liveTeams, type CrestTeams } from '../src/team-crests'
+import { crestKey, crestTeamsOf, crestUrl, findLinkedGame, liveTeams, type CrestTeams } from '../src/team-crests'
+import { hasImage, loadImage } from './image-cache'
 
 /** Crests as data URLs, in the feed's home/away order; null where a team has none. */
 export type PanelCrests = { panelId: string; home: string | null; away: string | null }
@@ -14,11 +14,6 @@ type PanelEntry = {
 }
 
 const IMAGE_BASE_URL = process.env.QUADRA_365SCORES_IMAGE_URL
-const FETCH_TIMEOUT_MS = 8000
-const MAX_IMAGE_BYTES = 200_000
-const IMAGE_TYPE = /^image\/(?:png|jpeg|webp|gif)$/i
-/** ~3–7 KB each: a few hundred crests stay well under a few MB. */
-const MAX_CACHED = 500
 const PREFETCH_LIMIT = 120
 /** Prefetch runs behind the crests a panel asked for, a few at a time. */
 const PREFETCH_CONCURRENCY = 4
@@ -33,43 +28,23 @@ const MAX_ATTEMPTS = 3
 export function createTeamCrests(options: {
   listGames: () => Promise<Game365[]>
   onCrests: (crests: PanelCrests) => void
+  /** The 365Scores game found for a panel by its William Hill names (`gameId` null: gone), for the info drawer. */
+  onGame?: (game: { panelId: string; gameId: number | null; reversed: boolean }) => void
 }) {
-  const images = new Map<string, Promise<string | null>>()
   const panels = new Map<string, PanelEntry>()
   const prefetchQueue: TeamRef365[] = []
   let prefetching = 0
   let serial = 0
 
-  async function download(team: TeamRef365): Promise<string | null> {
-    const response = await net.fetch(crestUrl(team, IMAGE_BASE_URL), { signal: AbortSignal.timeout(FETCH_TIMEOUT_MS) })
-    // 404: the team has no crest. Kept as null so it isn't asked again.
-    if (response.status === 404) return null
-    if (!response.ok) throw new Error(`HTTP ${response.status}`)
-    const type = (response.headers.get('content-type') ?? '').split(';')[0].trim()
-    if (!IMAGE_TYPE.test(type)) return null
-    const body = Buffer.from(await response.arrayBuffer())
-    if (body.length === 0 || body.length > MAX_IMAGE_BYTES) return null
-    return `data:${type.toLowerCase()};base64,${body.toString('base64')}`
-  }
-
+  /** Crests and player photos share one image cache; a crest is keyed by team and image version. */
   function image(team: TeamRef365): Promise<string | null> {
-    const key = crestKey(team)
-    const cached = images.get(key)
-    if (cached) return cached
-    const pending = download(team).catch(() => {
-      // A network error may pass: forget it so the next ask tries again.
-      images.delete(key)
-      return null
-    })
-    images.set(key, pending)
-    if (images.size > MAX_CACHED) images.delete(images.keys().next().value as string)
-    return pending
+    return loadImage(`crest:${crestKey(team)}`, crestUrl(team, IMAGE_BASE_URL))
   }
 
   function pumpPrefetch() {
     while (prefetching < PREFETCH_CONCURRENCY && prefetchQueue.length > 0) {
       const team = prefetchQueue.shift()!
-      if (images.has(crestKey(team))) continue
+      if (hasImage(`crest:${crestKey(team)}`)) continue
       prefetching += 1
       void image(team).finally(() => {
         prefetching -= 1
@@ -81,7 +56,7 @@ export function createTeamCrests(options: {
   /** Called with every fresh 365Scores games list: downloads the crests of the games being played. */
   function prefetch(games: readonly Game365[]) {
     for (const team of liveTeams(games, PREFETCH_LIMIT)) {
-      if (!images.has(crestKey(team))) prefetchQueue.push(team)
+      if (!hasImage(`crest:${crestKey(team)}`)) prefetchQueue.push(team)
     }
     prefetchQueue.splice(PREFETCH_LIMIT)
     pumpPrefetch()
@@ -104,13 +79,16 @@ export function createTeamCrests(options: {
     const token = entry.token
     entry.attempts += 1
     let teams: CrestTeams | null = null
+    let linked: ReturnType<typeof findLinkedGame> = null
     try {
-      teams = findCrestTeams(home, away, await options.listGames(), Date.now())
+      linked = findLinkedGame(home, away, await options.listGames(), Date.now())
+      teams = linked ? crestTeamsOf(linked) : null
     } catch {
-      teams = null
+      linked = null
     }
     const current = panels.get(panelId)
     if (!current || current.token !== token) return
+    if (linked) options.onGame?.({ panelId, gameId: linked.game.id, reversed: linked.reversed })
     if (teams) {
       await send(panelId, token, teams)
     } else if (current.attempts < MAX_ATTEMPTS) {
@@ -142,6 +120,7 @@ export function createTeamCrests(options: {
     if (!entry) return
     if (entry.retryTimer) clearTimeout(entry.retryTimer)
     panels.delete(panelId)
+    options.onGame?.({ panelId, gameId: null, reversed: false })
     if (notify) options.onCrests({ panelId, home: null, away: null })
   }
 

@@ -31,6 +31,7 @@ import {
 } from './auto-open'
 import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, handleScorerName, onAlertSettingsChange, onAlertShown, onVarReviewStarted, setVarReview, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
+import { createInfoDrawer, updateInfoButton } from './info-drawer'
 import { FIRST_STEPS, markFirstStepsSeen, readFirstStepsSeen, shouldShowFirstSteps } from './first-steps'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
 import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
@@ -154,6 +155,8 @@ let labelRefreshTimer: number | null = null
 let clockTicking = false
 /** 365Scores link of each YouTube panel (and BLL panel without a William Hill feed), as reported by the main process. */
 const panelLive = new Map<PanelId, LiveMatchStatus>()
+/** Panels whose game has info for the drawer (a 365Scores game, or William Hill's own line-up); the 👕 button shows only for these. */
+const matchInfoReady = new Set<PanelId>()
 /** Per-panel delay (s) chosen on a 365Scores-linked panel; memory only, like the rest of the panel state. */
 const panelDelayOverride = new Map<PanelId, number>()
 /** Alerts of 365Scores-linked panels waiting for the video to catch up with the data. */
@@ -187,12 +190,33 @@ let autoOpenSkipped = 0
 /** A panel can't close while the user is organizing, dragging or answering a dialog; it tries again after this. */
 const FINISHED_RETRY_MS = 5000
 
+/** Label order vs feed order: 1 when the title lists the teams the other way round than the feed (crests and the first team follow it). */
+function feedTeamsFlipped(id: PanelId) {
+  const titleLabel = extractMatchLabel(panelTitles.get(id) ?? '')
+  const titleTeams = titleLabel ? splitMatchTeams(titleLabel) : null
+  const feed = panelFeeds.get(id)
+  return Boolean(titleTeams && feed?.home && feed.away && teamsReversed(titleTeams, { home: feed.home, away: feed.away }))
+}
+
+const infoDrawer = createInfoDrawer({
+  panelElement: (id) => app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(id)}"]`),
+  canOpen: (id) => view === 'grid' && !editorOpen && Boolean(panelById(id)?.url) && matchInfoReady.has(id),
+  crests: (id) => {
+    const crests = panelCrests.get(id)
+    return [crests?.home ?? null, crests?.away ?? null]
+  },
+  firstTeam: (id) => (feedTeamsFlipped(id) ? 1 : 0),
+  onChange: () => updateLiveControls(),
+})
+
 function clearPendingAlerts(id: PanelId) {
   for (const timer of pendingAlerts.get(id) ?? []) window.clearTimeout(timer)
   pendingAlerts.delete(id)
 }
 
 function clearPanelMatchState(id: PanelId) {
+  matchInfoReady.delete(id)
+  infoDrawer.forget(id)
   panelLive.delete(id)
   panelDelayOverride.delete(id)
   clearPendingAlerts(id)
@@ -211,6 +235,8 @@ function clearPanelMatchState(id: PanelId) {
 }
 
 function clearAllPanelMatchState() {
+  matchInfoReady.clear()
+  infoDrawer.close()
   for (const id of [...pendingAlerts.keys()]) clearPendingAlerts(id)
   finishedPanels.clear()
   keptFinishedPanels.clear()
@@ -1012,6 +1038,7 @@ function updateLiveControls() {
     const id = panelElement.dataset.panelId ?? ''
     const live = panelById(id)?.url ? panelLive.get(id) : undefined
     updateLiveDelayButton(panelElement, id, live, globalSec)
+    updateInfoButton(panelElement, matchInfoReady.has(id) && Boolean(panelById(id)?.url), infoDrawer.openPanelId() === id)
     let prompt = panelElement.querySelector<HTMLElement>(':scope > .panel__live')
     if (live?.status !== 'ambiguous') {
       prompt?.remove()
@@ -1059,6 +1086,7 @@ app.addEventListener('click', (event) => {
   if (target.closest('[data-halftime-pin]')) pinHalftimeSwap(panelId)
   else if (target.closest('[data-halftime-back]')) releaseHalftimeSwap(panelId)
   if (target.closest('[data-finished-keep]')) keepFinishedPanel(panelId)
+  if (target.closest('[data-info]')) infoDrawer.toggle(panelId)
   const choice = target.closest<HTMLElement>('[data-live-choose]')?.dataset.liveChoose
   if (choice) window.quadra?.chooseLiveMatch(panelId, choice === 'none' ? null : Number(choice))
   const delayButton = target.closest<HTMLElement>('[data-live-delay]')
@@ -1185,6 +1213,7 @@ function removePanel(id: PanelId) {
 }
 
 function setEditor(open: boolean) {
+  if (open) infoDrawer.close()
   captureDrafts()
   editorOpen = open
 
@@ -2497,6 +2526,7 @@ function syncAlertAudio() {
 
 function syncLayout() {
   syncAlertAudio()
+  infoDrawer.sync()
   if (view === 'choose') {
     setChromeInteractive(true)
     window.quadra?.setLayout({ view: 'choose', panelCount: panels.length, mode: layoutMode, panels: [] })
@@ -2661,7 +2691,7 @@ function updateChromeHitTarget(x: number, y: number) {
   }
   updateLabelHover(x, y)
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .organize-panel, .confirm, .delay-menu')))
+  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .organize-panel, .info-drawer, .confirm, .delay-menu')) || infoDrawer.isOverPanel(x, y))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -3232,6 +3262,14 @@ window.quadra?.onLiveMatch((status) => {
   }
   updateLiveControls()
   updatePanelLabels()
+})
+window.quadra?.onMatchInfoReady(({ panelId, ready }) => {
+  if (ready && panelById(panelId)) matchInfoReady.add(panelId)
+  else {
+    matchInfoReady.delete(panelId)
+    infoDrawer.forget(panelId)
+  }
+  updateLiveControls()
 })
 window.quadra?.onPanelVideoRect(({ panelId, rect }) => {
   if (!panelById(panelId)) return

@@ -104,7 +104,7 @@ const LIST_CACHE_MS = 30_000
 const RETRY_MS = 120_000
 const MAX_ATTEMPTS = 5
 
-function apiUrl(path: string, params: Record<string, string>) {
+export function apiUrl(path: string, params: Record<string, string>) {
   const url = new URL(path, BASE_URL)
   url.search = new URLSearchParams({ ...COMMON_PARAMS, ...params }).toString()
   return url.toString()
@@ -121,7 +121,7 @@ function gameCenterUrl(gameId: number) {
 
 class HttpError extends Error {}
 
-async function fetchJson(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<unknown> {
+export async function fetchJson(url: string, timeoutMs = FETCH_TIMEOUT_MS): Promise<unknown> {
   const response = await net.fetch(url, { signal: AbortSignal.timeout(timeoutMs), headers: { Accept: 'application/json' } })
   if (!response.ok) throw new HttpError(`HTTP ${response.status}`)
   return response.json()
@@ -505,7 +505,12 @@ export function createLiveScoreLinker(options: {
     return scorerFromDetail(detail, side, query.minute)
   }
 
-  return { consider, choose, detach, destroyAll, listGames, findScorer, size: () => pollers.size }
+  /** The 365Scores game a panel is linked to (null: none yet). */
+  function gameIdOf(panelId: string) {
+    return links.get(panelId)?.gameId ?? null
+  }
+
+  return { consider, choose, detach, destroyAll, listGames, findScorer, gameIdOf, size: () => pollers.size }
 }
 
 /** Cheap pre-check so pages without "A x B" in the title never hit the API. */

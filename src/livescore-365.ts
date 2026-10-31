@@ -99,7 +99,14 @@ export type LiveState = {
   pbpSeen: Set<number>
   /** VAR alerts already sent, so the same review reported by both feeds alerts once. */
   recentVar: Array<{ team: MatchIncident['team']; minute: number }>
+  /** Goals alerted without a scorer (from the score, or an event the name was not on yet): `nth` goal of `team`, waiting for its name. */
+  unnamedGoals: UnnamedGoal[]
 }
+
+type UnnamedGoal = { id: string; team: 'home' | 'away'; nth: number; minute: number; fromScore: boolean; since: number }
+
+/** The name a goal alert gets after it showed: which alert, and who scored. */
+export type ScorerUpdate = { incidentId: string; player: string }
 
 const MAX_NAME = 80
 /** A busy day's schedule passes 800 games; cutting it lost games further down the list. */
@@ -107,6 +114,10 @@ const MAX_GAMES = 4000
 const MAX_EVENTS = 300
 /** Leagues with events sometimes list a goal late or never (score 1-2, events 1-1): the score alerts it after this. */
 export const GOAL_EVENT_GRACE_MS = 9000
+/** A goal alerted without its scorer keeps looking for the name this long (the alert and its highlight last up to 3 min). */
+export const SCORER_WAIT_MS = 180_000
+/** A goal alerted from the score takes the name of the matching goal event only within these minutes of it. */
+const SCORER_MINUTE_GAP = 3
 /** Both teams must score at least this to link without asking. */
 const LINK_SCORE = 0.85
 /** …and the runner-up must trail by this much. */
@@ -688,8 +699,36 @@ export function createLiveState(): LiveState {
   return {
     seeded: false, seen: new Set(), home: 0, away: 0, homeRed: 0, awayRed: 0,
     alertedGoals: { home: 0, away: 0 }, alertedReds: { home: 0, away: 0 }, scoreAheadSince: { home: 0, away: 0 },
-    pbpSeeded: false, pbpSeen: new Set(), recentVar: [],
+    pbpSeeded: false, pbpSeen: new Set(), recentVar: [], unnamedGoals: [],
   }
+}
+
+function awaitScorer(state: LiveState, goal: Omit<UnnamedGoal, 'since'>, now: number) {
+  state.unnamedGoals = [...state.unnamedGoals.slice(-19), { ...goal, since: now }]
+}
+
+/**
+ * Names for goals already alerted without one. 365Scores often has the score before the goal
+ * event (the alert then comes from the score) or lists the event before its player: the n-th
+ * goal event of that side gives the name once it is there. Each goal is named once; after
+ * `SCORER_WAIT_MS` it stops looking.
+ */
+export function scorerUpdates(state: LiveState, detail: Detail365, now = Date.now()): ScorerUpdate[] {
+  state.unnamedGoals = state.unnamedGoals.filter((goal) => now - goal.since < SCORER_WAIT_MS)
+  if (state.unnamedGoals.length === 0 || !detail.events) return []
+  const nth = { home: 0, away: 0 }
+  const updates: ScorerUpdate[] = []
+  for (const event of detail.events) {
+    const incident = classifyEvent365(event, detail)
+    if (incident?.kind !== 'goal' || incident.team === 'match') continue
+    nth[incident.team] += 1
+    const goal = state.unnamedGoals.find((entry) => entry.team === incident.team && entry.nth === nth[incident.team])
+    if (!goal || !incident.player || incident.ownGoal) continue
+    if (goal.fromScore && goal.minute > 0 && Math.abs(event.gameTime - goal.minute) > SCORER_MINUTE_GAP) continue
+    updates.push({ incidentId: goal.id, player: incident.player })
+    state.unnamedGoals = state.unnamedGoals.filter((entry) => entry !== goal)
+  }
+  return updates
 }
 
 /** Goals and red cards per side in the events list, the way the score counts them (own goals go to the side credited). */
@@ -739,6 +778,7 @@ export function diffDetail(state: LiveState, detail: Detail365, now = Date.now()
         const n = ordinal[counted][incident.team]
         if (n <= alerted[incident.team]) continue
         alerted[incident.team] = n
+        if (counted === 'goal' && !incident.player && !incident.ownGoal) awaitScorer(state, { id: incident.id, team: incident.team, nth: n, minute: incident.minute, fromScore: false }, now)
       }
       fresh.push(incident)
     }
@@ -757,7 +797,10 @@ export function diffDetail(state: LiveState, detail: Detail365, now = Date.now()
       if (score > alerted) {
         if (!state.scoreAheadSince[team]) state.scoreAheadSince[team] = now
         if (!detail.events || now - state.scoreAheadSince[team] >= GOAL_EVENT_GRACE_MS) {
-          for (let goal = alerted + 1; goal <= Math.min(score, alerted + 3); goal += 1) push('goal', team, `score:${team}:${goal}`)
+          for (let goal = alerted + 1; goal <= Math.min(score, alerted + 3); goal += 1) {
+            push('goal', team, `score:${team}:${goal}`)
+            awaitScorer(state, { id: `365:${detail.id}:score:${team}:${goal}`, team, nth: goal, minute: detail.gameTime, fromScore: true }, now)
+          }
           state.alertedGoals[team] = score
           state.scoreAheadSince[team] = 0
         }

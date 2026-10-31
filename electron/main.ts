@@ -305,9 +305,7 @@ const scanners = createScoreboardScanners({
       })
     }
   },
-  onScorer: ({ panelIds, incidentId, player }) => {
-    for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-scorer', { panelId, eventId: incidentId, player })
-  },
+  onScorer: sendMatchScorer,
   onScore: sendMatchScore,
   onClock: sendMatchClock,
   onEnd: sendMatchEnded,
@@ -332,6 +330,7 @@ const liveScores = createLiveScoreLinker({
       })
     }
   },
+  onScorer: sendMatchScorer,
   onScore: sendMatchScore,
   onClock: sendMatchClock,
   onStatus: (status) => {
@@ -350,6 +349,10 @@ const teamCrests = createTeamCrests({
   listGames: () => liveScores.listGames(),
   onCrests: (crests) => overlayWindow?.webContents.send('quadra:match-crests', crests),
 })
+
+function sendMatchScorer({ panelIds, incidentId, player }: { panelIds: string[]; incidentId: string; player: string }) {
+  for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-scorer', { panelId, eventId: incidentId, player })
+}
 
 function sendMatchEnded({ panelIds }: { panelIds: string[] }) {
   for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-ended', { panelId })

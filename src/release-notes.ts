@@ -10,6 +10,8 @@ export const RELEASES: readonly Release[] = [
     label: '1.2.1',
     notes: [
       { title: 'Mais jogos do YouTube reconhecidos', body: 'Siglas como PSG e nomes curtos como "Inter" já bastam para achar o jogo no 365Scores, e quando só um dos times é reconhecido o painel pergunta se é aquele jogo em vez de ficar sem placar.' },
+      { title: 'Nome do artilheiro nos jogos do YouTube', body: 'Nos jogos ligados ao 365Scores, o nome de quem fez o gol entra no selo do gol assim que o 365Scores informa, mesmo quando o gol apareceu antes pelo placar.' },
+      { title: 'Lista do atraso no visual do Quadra', body: 'O botão ⏱ dos painéis ligados ao 365Scores abre a lista de atrasos no mesmo estilo verde do Quadra, em vez da lista padrão do Windows.' },
     ],
   },
   {

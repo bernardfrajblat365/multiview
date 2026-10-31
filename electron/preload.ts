@@ -6,6 +6,8 @@ import type { AlertKind } from '../src/match-events'
 import type { MatchClock } from '../src/match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
 import type { PipCommand, PipState } from '../src/pip'
+import type { LiveMatchStatus, LiveVarPayload, TeamRef365 } from '../src/livescore-365'
+import type { MatchInfoReady, MatchInfoRequest, MatchInfoResult, PhotoRef } from '../src/match-info'
 
 type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
@@ -117,6 +119,14 @@ const quadra = {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchClockPayload) => callback(payload)
     ipcRenderer.on('quadra:match-clock', listener)
     return () => ipcRenderer.removeListener('quadra:match-clock', listener)
+  },
+  getMatchInfo: (request: MatchInfoRequest): Promise<MatchInfoResult> => ipcRenderer.invoke('quadra:match-info', request),
+  getTableCrests: (refs: TeamRef365[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('quadra:table-crests', refs),
+  getAthletePhotos: (refs: PhotoRef[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('quadra:athlete-photos', refs),
+  onMatchInfoReady: (callback: (payload: MatchInfoReady) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: MatchInfoReady) => callback(payload)
+    ipcRenderer.on('quadra:match-info-ready', listener)
+    return () => ipcRenderer.removeListener('quadra:match-info-ready', listener)
   },
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; title: string }) => callback(payload)

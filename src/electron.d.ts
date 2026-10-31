@@ -5,6 +5,8 @@ import type { AlertKind } from './match-events'
 import type { MatchClock } from './match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
 import type { PipCommand, PipState } from './pip'
+import type { LiveMatchStatus, LiveVarPayload, TeamRef365 } from './livescore-365'
+import type { MatchInfoReady, MatchInfoRequest, MatchInfoResult, PhotoRef } from './match-info'
 
 /** A dialog the main process asks the overlay to draw (update prompts); answer with `respondUiDialog`. */
 type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
@@ -50,6 +52,10 @@ type QuadraBridge = {
   onLiveMatch: (callback: (payload: LiveMatchStatus) => void) => () => void
   onLiveVar: (callback: (payload: LiveVarPayload) => void) => () => void
   chooseLiveMatch: (panelId: string, gameId: number | null) => void
+  getMatchInfo: (request: MatchInfoRequest) => Promise<MatchInfoResult>
+  getTableCrests: (refs: TeamRef365[]) => Promise<Record<string, string | null>>
+  getAthletePhotos: (refs: PhotoRef[]) => Promise<Record<string, string | null>>
+  onMatchInfoReady: (callback: (payload: MatchInfoReady) => void) => () => void
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => () => void
   onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => () => void
   sendPipState: (state: PipState) => void

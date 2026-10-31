@@ -22,6 +22,8 @@ const YOUTUBE_SUFFIX_RE = /\s+-\s+YouTube$/i
 const SOUND_EMOJI_RE = /[\u{1F507}-\u{1F50A}\u{1F4E2}\u{1F4E3}]/gu
 /** Sport the BLL puts in front of the name (🏀, 🎾, ⚽, 🏈, 🏐, 🏒): the label shows the teams only. */
 const SPORT_EMOJI_RE = /[\u{1F3C0}\u{1F3BE}\u{26BD}\u{1F3C8}\u{1F3D0}\u{1F3D2}]\u{FE0F}?/gu
+/** "AO VIVO:", "🔴 EN VIVO -", "LIVE |" ahead of the home team: a broadcast tag, not part of the name. */
+const LIVE_PREFIX_RE = /^(?:[\u{1F534}\u{1F7E2}\u{1F535}\u{26AA}\u{25CF}\s]*)(?:(?:ao vivo|en vivo|em direto|live|agora|hoje)(?:\s+e\s+com\s+imagens?|\s+com\s+imagens?)?)\s*(?:[:\-–—|]\s*|\s+(?=\S))/iu
 const MAX_LABEL_LENGTH = 80
 const MIN_FONT_PX = 11
 const MAX_FONT_PX = 22
@@ -89,7 +91,11 @@ export function extractMatchLabel(title: string): string | null {
   for (const segment of candidateSegments(value)) {
     const match = stripSoundMarkers(segment).match(MATCHUP_RE)
     if (!match) continue
-    const home = stripSoundMarkers(match[1] ?? '')
+    let home = stripSoundMarkers(match[1] ?? '')
+    for (let previous = ''; previous !== home; ) {
+      previous = home
+      home = stripSoundMarkers(home.replace(LIVE_PREFIX_RE, ''))
+    }
     const away = stripSoundMarkers(match[2] ?? '')
     if (!validTeamName(home) || !validTeamName(away)) continue
     const label = `${home} x ${away}`

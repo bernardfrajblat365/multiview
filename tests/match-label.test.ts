@@ -59,6 +59,26 @@ test('extrai confronto de títulos YouTube com vs, × e sufixos', () => {
   )
 })
 
+test('remove a tag de transmissão (AO VIVO, EN VIVO, com imagens) antes do time da casa', () => {
+  assert.equal(
+    extractMatchLabel('AO VIVO: CHELSEA X MANCHESTER UNITED | PREMIER LEAGUE'),
+    'CHELSEA x MANCHESTER UNITED',
+  )
+  assert.equal(
+    extractMatchLabel('🔴 EN VIVO - Chelsea vs Manchester United'),
+    'Chelsea x Manchester United',
+  )
+  assert.equal(
+    extractMatchLabel('Ao vivo e com imagens: Flamengo x Palmeiras'),
+    'Flamengo x Palmeiras',
+  )
+  assert.equal(extractMatchLabel('Liverpool x Chelsea'), 'Liverpool x Chelsea')
+  assert.equal(
+    extractMatchLabel('Olympique de Marseille x Lyon'),
+    'Olympique de Marseille x Lyon',
+  )
+})
+
 test('ignora títulos sem confronto e corta rótulos longos', () => {
   assert.equal(extractMatchLabel('Bll'), null)
   assert.equal(extractMatchLabel('YouTube'), null)

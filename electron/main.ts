@@ -370,10 +370,6 @@ function sendMatchScorer({ panelIds, incidentId, player }: { panelIds: string[];
   for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-scorer', { panelId, eventId: incidentId, player })
 }
 
-function sendMatchScorer({ panelIds, incidentId, player }: { panelIds: string[]; incidentId: string; player: string }) {
-  for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-scorer', { panelId, eventId: incidentId, player })
-}
-
 function sendMatchEnded({ panelIds }: { panelIds: string[] }) {
   for (const panelId of panelIds) overlayWindow?.webContents.send('quadra:match-ended', { panelId })
 }

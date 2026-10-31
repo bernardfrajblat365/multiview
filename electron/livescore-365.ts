@@ -11,6 +11,7 @@ import {
   matchGame,
   mergeGameLists,
   scorerFromDetail,
+  scorerUpdates,
   teamSimilarity,
   parseActiveVar,
   parseGameDetail,
@@ -151,6 +152,8 @@ export function createLiveScoreLinker(options: {
   onStatus: (status: LiveMatchStatus) => void
   /** The game is over; reported once, only for a game seen being played. */
   onEnd?: (end: { panelIds: string[] }) => void
+  /** The scorer of a goal already alerted without one. */
+  onScorer?: (update: { panelIds: string[]; incidentId: string; player: string }) => void
   /** A VAR review started or ended (football only). */
   onVar?: (update: LiveVar) => void
   /** Every freshly downloaded football games list (crests of live games are prefetched from it). */
@@ -346,6 +349,10 @@ export function createLiveScoreLinker(options: {
       logScanner(`[${poller.label}] 365Scores ${coverage === 'events' ? 'com lances (gols, cartões, VAR)' : 'sem lances por enquanto (gols pelo placar, vermelhos pela contagem)'}`, '365')
     }
     emit(poller, diffDetail(poller.state, detail, Date.now()))
+    for (const { incidentId, player } of scorerUpdates(poller.state, detail, Date.now())) {
+      logScanner(`[${poller.label}] nome do gol: ${player}`, '365')
+      options.onScorer?.({ panelIds: [...poller.panelIds], incidentId, player })
+    }
     // A VAR review lasts about a minute: the game center is read every detail round (3 s) while the game is live.
     if (detail.statusGroup === 3) void checkVar(poller)
     if (detail.pbpUrl && Date.now() - poller.lastPbpAt >= PBP_POLL_MS) {

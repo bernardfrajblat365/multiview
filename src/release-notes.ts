@@ -6,6 +6,24 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.0',
+    label: '1.3',
+    notes: [
+      { title: 'Janela flutuante', body: 'O botão de janela em cada painel abre aquele jogo numa janelinha por cima das outras janelas, para você trabalhar em outro programa e continuar assistindo, com placar, alertas e botões de mutar, trocar o link, recarregar e atraso. Dá para deixar vários jogos flutuando ao mesmo tempo.' },
+    ],
+  },
+  {
+    version: '1.2.2',
+    label: '1.2.2',
+    notes: [
+      { title: 'Nome do artilheiro nos jogos do YouTube', body: 'Nos jogos ligados ao 365Scores, o nome de quem fez o gol entra no selo do gol assim que o 365Scores informa, mesmo quando o gol apareceu antes pelo placar.' },
+      { title: 'Lista do atraso no visual do Quadra', body: 'O botão ⏱ dos painéis ligados ao 365Scores abre a lista de atrasos no mesmo estilo verde do Quadra, em vez da lista padrão do Windows.' },
+      { title: 'Cor própria para cada alerta', body: 'A borda do alerta de VAR agora é azul, a do touchdown roxa e a do field goal verde-água, para não confundir com a borda verde do gol.' },
+      { title: 'Escalação do jogo', body: 'O botão de camisa nos controles do painel abre a escalação dos dois times com número, foto, posição e nota (e o técnico); nos jogos que o 365Scores não tem, usa a escalação do radar da William Hill.' },
+      { title: 'Tabela do campeonato', body: 'Na mesma gaveta, a aba Tabela mostra a classificação do campeonato com os dois times do jogo em destaque.' },
+    ],
+  },
+  {
     version: '1.2.1',
     label: '1.2.1',
     notes: [

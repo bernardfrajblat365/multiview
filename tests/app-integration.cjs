@@ -97,6 +97,37 @@ async function waitForExpression(target, expression, timeoutMs = 10000) {
   throw new Error(`Timeout aguardando expressão: ${expression}`)
 }
 
+/** 365Scores game detail with line-ups: 11 starters + coach per team. Player 101 has a photo, 102 doesn't (404). */
+function standingsFixture() {
+  const team = (id, name, position, points, destinationNum) => ({ competitor: { id, name, shortName: name, imageVersion: 3 }, position, gamePlayed: 10, gamesWon: 5, gamesEven: 2, gamesLost: 3, ratio: position === 3 ? -2 : 4, points, destinationNum })
+  return { standings: [{ competitionId: 77, seasonNum: 5, stageNum: 1, displayName: 'Brasileirão', destinations: [{ num: 1, name: 'Libertadores', color: '#F5CB25' }, { num: 3, name: 'Rebaixamento', color: '#E61034' }, { num: 9, name: 'Sem uso', color: '#123456' }],
+    rows: [team(5, 'Palmeiras', 1, 30, 1), team(1, 'Coritiba', 2, 25, 1), team(2, 'Avaí', 3, 12, 3), team(6, 'Chapecoense', 4, 10, 3)] }] }
+}
+
+function lineupGame(gameId) {
+  const members = []
+  const side = (competitorId, base, name, positions) => {
+    const lineupMembers = []
+    positions.forEach((position, index) => {
+      const id = base + index
+      members.push({ competitorId, id, athleteId: id === 1001 ? 101 : id === 1002 ? 102 : id, name: `${name} Jogador ${index + 1}`, shortName: `J${index + 1}`, jerseyNumber: index + 1, imageVersion: 5 })
+      lineupMembers.push({ id, status: 1, position: { name: 'Defesa' }, formation: { name: position }, ranking: index === 0 ? 6.5 : index === 1 ? 7.4 : 5.8 })
+    })
+    members.push({ competitorId, id: base + 50, athleteId: base + 50, name: `${name} Técnico`, shortName: 'Téc', jerseyNumber: -1, imageVersion: 5 })
+    lineupMembers.push({ id: base + 50, status: 4 })
+    lineupMembers.push({ id: base + 60, status: 2 })
+    return { status: 'Confirmado', formation: '4-4-2', members: lineupMembers }
+  }
+  const positions = ['Goleiro', 'Lateral Direito', 'Zagueiro Central', 'Zagueiro Central', 'Lateral Esquerdo', 'Volante', 'Meia Central', 'Meia Central', 'Ponta Direita', 'Centroavante', 'Ponta Esquerda']
+  const home = side(1, 1001, 'Coritiba', positions)
+  const away = side(2, 2001, 'Avaí', positions)
+  return { game: {
+    id: gameId, competitionId: 77, seasonNum: 5, stageNum: 1, hasStandings: true, statusGroup: 3, gameTime: 30, events: [], statusId: 6, statusText: 'Primeiro Tempo', hasLineups: true, members,
+    preciseGameTime: { minutes: 29, seconds: 10, autoProgress: true, clockDirection: 1 },
+    homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0, imageVersion: 3, lineups: home }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0, imageVersion: 1, lineups: away },
+  } }
+}
+
 async function run() {
   assert.ok(fs.existsSync(electronPath), 'Electron não encontrado.')
   assert.ok(fs.existsSync(mainPath), 'Bundle main não encontrado; execute npm run build.')
@@ -108,6 +139,7 @@ async function run() {
   let gameCenterRequests = 0
   let finishingDetailRequests = 0
   const crestRequests = []
+  const athleteRequests = []
   let basketballListRequests = 0
   let basketballDetailRequests = 0
   let americanFootballListRequests = 0
@@ -176,6 +208,18 @@ async function run() {
     }
     if (request.url?.startsWith('/image/upload/')) {
       // 365Scores crests: Coritiba (1), Avaí (2), Celtics (5) and Nets (6) have one; any other team answers 404, like the CDN without a default image.
+      if (request.url.includes('/Athletes/')) {
+        // Player photos: every athlete has one except 102.
+        athleteRequests.push(request.url)
+        if (request.url.endsWith('/Athletes/102')) {
+          response.writeHead(404)
+          response.end()
+          return
+        }
+        response.writeHead(200, { 'content-type': 'image/png' })
+        response.end(Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAQAAAC1HAwCAAAAC0lEQVR42mNkYAAAAAYAAjCB0C8AAAAASUVORK5CYII=', 'base64'))
+        return
+      }
       crestRequests.push(request.url)
       if (!/\/Competitors\/[1256]$/.test(request.url)) {
         response.writeHead(404)
@@ -262,16 +306,17 @@ async function run() {
       } }))
       return
     }
+    if (request.url?.startsWith('/web/standings/')) {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify(standingsFixture()))
+      return
+    }
     if (request.url?.startsWith('/web/game/')) {
       // The first detail request hangs, like the API's occasional stall: the app must give up and retry at once.
       detailRequests += 1
       if (detailRequests === 1) return
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
-      response.end(JSON.stringify({ game: {
-        id: 9001, statusGroup: 3, gameTime: 30, events: [], statusId: 6, statusText: 'Primeiro Tempo',
-        preciseGameTime: { minutes: 29, seconds: 10, autoProgress: true, clockDirection: 1 },
-        homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0, imageVersion: 3 }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0, imageVersion: 1 },
-      } }))
+      response.end(JSON.stringify(lineupGame(9001)))
       return
     }
     if (request.url?.startsWith('/scoreboard/')) {
@@ -291,6 +336,7 @@ async function run() {
           setTimeout(() => { period = 'GAME_FINISHED' }, 8000)`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
       response.end(`<!doctype html><title>Scoreboard fixture</title><div>Time W</div><div>1 - 0</div><div>Time Z</div>
+        <div style="display:none"><div class="players_home"><ul><li><div class="box-col1"><span>1</span><span>Herrera, Lautaro</span></div></li><li><div class="box-col1"><span>9</span><span>Silva, Gabriel</span></div></li></ul></div><div class="players_away"><ul></ul></div></div>
         <script>
           ${timeline}
           window.WH = { scoreboard: {
@@ -411,6 +457,32 @@ async function run() {
       'O X do rótulo só pode aparecer com o mouse sobre os nomes dos times.')
     assert.equal(firstBllPlayer.id, firstPlayerId, 'A chegada do título não pode recriar o WebContents do painel.')
 
+    // Picture-in-picture: the page moves to a floating window without reloading, keeps its controls there, and comes back.
+    await evaluate(firstBllPlayer.webSocketDebuggerUrl, `window.__quadraPipMark = 'kept'`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-pip]').click()`)
+    const pipPage = await waitForPageTarget(port, (candidate) => candidate.url.includes('pip.html'))
+    assert.ok(pipPage, 'A janela flutuante não abriu.')
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"]').classList.contains('panel--pip')`)
+    await waitForExpression(pipPage, `document.querySelector('.bar__team')?.textContent === 'Time A'`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel[data-slot="0"] .panel__controls button')].map((button) => button.dataset.drag !== undefined ? 'drag' : button.dataset.remove !== undefined ? 'remove' : button.className)`),
+    ['drag', 'remove'], 'Na grade, o painel flutuante só mantém arrastar e remover.')
+    const mutedBefore = await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="mute"]').getAttribute('aria-pressed')`)
+    await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="mute"]').click()`)
+    await waitForExpression(pipPage, `document.querySelector('[data-cmd="mute"]').getAttribute('aria-pressed') !== '${mutedBefore}'`)
+    await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="mute"]').click()`)
+    await waitForExpression(pipPage, `document.querySelector('[data-cmd="mute"]').getAttribute('aria-pressed') === '${mutedBefore}'`)
+    assert.equal(await evaluate(firstBllPlayer.webSocketDebuggerUrl, `window.__quadraPipMark`), 'kept', 'Abrir a janela flutuante recarregou o player.')
+    await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="return"]').click()`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"]').classList.contains('panel--loaded')`)
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const pages = await fetchJson(`http://127.0.0.1:${port}/json`).catch(() => [])
+      if (!pages.some((candidate) => candidate.url.includes('pip.html'))) break
+      await wait(100)
+    }
+    assert.ok(!(await fetchJson(`http://127.0.0.1:${port}/json`)).some((candidate) => candidate.url.includes('pip.html')), 'A janela flutuante não fechou ao voltar para a grade.')
+    assert.equal(await evaluate(firstBllPlayer.webSocketDebuggerUrl, `window.__quadraPipMark`), 'kept', 'Voltar para a grade recarregou o player.')
+
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-dismiss-label]').click()`)
     await waitForExpression(target, `!document.querySelector('.panel[data-slot="0"] .panel__label')`)
     await evaluate(target.webSocketDebuggerUrl, `(() => {
@@ -430,6 +502,20 @@ async function run() {
     // No William Hill feed in game-b: the panel links to the 365Scores game named by the player instead.
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__delay')?.title.includes('365Scores: Coritiba x Avaí') === true`)
+    // Two panels float at the same time, each in its own window, and both come back.
+    const pipPages = async () => (await fetchJson(`http://127.0.0.1:${port}/json`).catch(() => [])).filter((candidate) => candidate.url.includes('pip.html'))
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-pip]').click()`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] [data-pip]').click()`)
+    for (let attempt = 0; attempt < 50 && (await pipPages()).length < 2; attempt += 1) await wait(100)
+    assert.equal((await pipPages()).length, 2, 'Dois painéis deveriam flutuar ao mesmo tempo, cada um na sua janela.')
+    await waitForExpression(target, `document.querySelectorAll('.panel--pip').length === 2`)
+    for (const page of await pipPages()) {
+      await waitForExpression(page, `Boolean(document.querySelector('[data-cmd="return"]'))`)
+      await evaluate(page.webSocketDebuggerUrl, `document.querySelector('[data-cmd="return"]').click()`)
+    }
+    await waitForExpression(target, `document.querySelectorAll('.panel--pip').length === 0`)
+    for (let attempt = 0; attempt < 50 && (await pipPages()).length > 0; attempt += 1) await wait(100)
+    assert.equal((await pipPages()).length, 0, 'As janelas flutuantes não fecharam ao voltar para a grade.')
     // The ⏱ button opens the app's own list (not the native select); picking an option sets the panel delay.
     const delayMenu = await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('.panel[data-slot="1"] .panel__delay').click()
@@ -458,6 +544,79 @@ async function run() {
       throw new Error(`${error.message}; escudos pedidos: ${JSON.stringify(crestRequests)}`)
     })
     assert.ok(crestRequests.some((url) => url.endsWith('/v3/Competitors/1')), 'O escudo usa a versão de imagem do time.')
+    // The shirt button appears on a panel with a 365Scores game, right before the delay button, and opens the line-up drawer.
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__info') !== null`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const kids = [...document.querySelector('.panel[data-slot="1"] .panel__controls').children]
+      return kids.indexOf(document.querySelector('.panel[data-slot="1"] .panel__info')) === kids.indexOf(document.querySelector('.panel[data-slot="1"] .panel__delay')) - 1
+    })()`), true, 'O botão de escalação vem logo antes do ⏱.')
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] .panel__info') === null`), true, 'Painel sem jogo não mostra o botão de escalação.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__info').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 11`).catch(async (error) => {
+      const html = await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer')?.innerText ?? null`)
+      throw new Error(`${error.message}; gaveta: ${JSON.stringify(html)}`)
+    })
+    const lineupRows = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const row = (index) => document.querySelectorAll('.info-drawer [data-info-row]')[index]
+      const text = (index, selector) => row(index).querySelector(selector).textContent
+      return {
+        number: text(0, '.info-row__number'), name: text(0, '.info-row__name'), pos: text(0, '.info-row__pos'), rating: text(0, '.info-row__rating'),
+        secondRating: text(1, '.info-row__rating'), lateral: text(1, '.info-row__pos'),
+        secondHigh: row(1).querySelector('.info-row__rating').className.includes('--high'), thirdLow: row(2).querySelector('.info-row__rating').className.includes('--low'),
+        coach: document.querySelector('.info-drawer [data-info-coach] .info-row__name')?.textContent,
+        note: document.querySelector('.info-drawer [data-info-note]').textContent, team: document.querySelector('.info-drawer .info-team.is-selected').textContent,
+      }
+    })()`)
+    assert.deepEqual(lineupRows, {
+      number: '1', name: 'Coritiba Jogador 1', pos: 'GOL', rating: '6,5', secondRating: '7,4', lateral: 'LD', secondHigh: true, thirdLow: true,
+      coach: 'Coritiba Técnico', note: 'Escalação confirmada', team: 'Coritiba',
+    })
+    // Photos follow the text; the player without one keeps the initials.
+    await waitForExpression(target, `document.querySelector('.info-drawer [data-photo="101:5"] img') !== null`).catch((error) => {
+      throw new Error(`${error.message}; fotos pedidas: ${JSON.stringify(athleteRequests)}`)
+    })
+    await waitForExpression(target, `document.querySelector('.info-drawer [data-photo="102:5"]') !== null && !document.querySelector('.info-drawer [data-photo="102:5"] img')`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-photo="102:5"]').textContent`), 'CJ', 'Sem foto, aparecem as iniciais.')
+    assert.ok(athleteRequests.some((url) => url.includes('/v5/Athletes/101')), 'A foto usa a versão da imagem do atleta.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-team="1"]').click()`)
+    await waitForExpression(target, `document.querySelector('.info-drawer [data-info-row] .info-row__name')?.textContent === 'Avaí Jogador 1'`)
+    // Esc closes the drawer; the shirt button opens it again and the × closes it.
+    await evaluate(target.webSocketDebuggerUrl, `document.dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', bubbles: true }))`)
+    await waitForExpression(target, `!document.querySelector('.info-drawer')`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__info').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 11`)
+    // The coach comes right after the players, and the drawer is only as tall as its content (up to the panel).
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const drawer = document.querySelector('.info-drawer').getBoundingClientRect()
+      const panel = document.querySelector('.panel[data-slot="1"]').getBoundingClientRect()
+      const coach = document.querySelector('.info-drawer [data-info-coach]')
+      return { afterList: coach.previousElementSibling?.matches('[data-info-list]') ?? false, label: coach.querySelector('.info-coach__label')?.textContent, fits: drawer.bottom <= panel.bottom + 1 }
+    })()`), { afterList: true, label: 'Técnico', fits: true })
+    // The Tabela tab shows the championship table with the two teams of the game highlighted; Escalação brings the line-up back.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-tab="standings"]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-standing]').length === 4`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `(() => ({
+      highlighted: [...document.querySelectorAll('.info-drawer [data-highlighted] .info-standing__name')].map((node) => node.textContent),
+      title: document.querySelector('.info-drawer [data-info-note]').textContent,
+      first: [...document.querySelector('.info-drawer [data-info-standing]').children].map((node) => node.textContent.trim()).filter(Boolean),
+      legend: [...document.querySelectorAll('.info-drawer [data-info-legend] li')].map((node) => node.textContent.trim()),
+      selected: document.querySelector('.info-drawer .info-tab.is-selected').textContent,
+    }))()`), { highlighted: ['Coritiba', 'Avaí'], title: 'Brasileirão', first: ['1', 'Palmeiras', '10', '5', '2', '3', '+4', '30'], legend: ['Libertadores', 'Rebaixamento'], selected: 'Tabela' })
+    await waitForExpression(target, `document.querySelector('.info-drawer .info-standing__crest img') !== null`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-tab="lineup"]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 11`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-close]').click()`)
+    await waitForExpression(target, `!document.querySelector('.info-drawer')`)
+    // A click on the panel outside the drawer closes it.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__info').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 11`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const panel = document.querySelector('.panel[data-slot="1"]').getBoundingClientRect()
+      const x = panel.left + 12
+      const y = panel.bottom - 12
+      document.elementFromPoint(x, y).dispatchEvent(new MouseEvent('mousedown', { clientX: x, clientY: y, button: 0, bubbles: true }))
+    })()`)
+    await waitForExpression(target, `!document.querySelector('.info-drawer')`)
     // Match clock from 365Scores (preciseGameTime): a box after the names, ticking every second.
     await waitForExpression(target, `/^1T (29|30):\\d\\d$/.test(document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.clock ?? '')`, 9000).catch(async (error) => {
       const label = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ ...document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset })`)
@@ -1073,7 +1232,19 @@ async function run() {
       throw new Error(`${error.message}; alerta: ${JSON.stringify(alert)}`)
     })
     assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__alert')?.textContent ?? ''`), /GOL · Time W · 51' · 1 - 0 · Gabriel Silva/)
-    process.stdout.write(JSON.stringify({ scorerName: true, chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    // A William Hill game that 365Scores doesn't have: the drawer shows William Hill's own line-up (starters only, names formatted).
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__info') !== null`, 15000)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__info').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 2`, 10000)
+    const whLineup = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({
+      names: [...document.querySelectorAll('.info-drawer .info-row__name')].map((node) => node.textContent),
+      note: document.querySelector('.info-drawer [data-info-note]').textContent,
+      ratingShown: getComputedStyle(document.querySelector('.info-drawer .info-row__rating')).display !== 'none',
+      coach: document.querySelector('.info-drawer [data-info-coach]') !== null,
+    })`)
+    assert.deepEqual(JSON.parse(whLineup), { names: ['Lautaro Herrera', 'Gabriel Silva'], note: 'Fonte: William Hill', ratingShown: false, coach: false })
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-close]').click()`)
+    process.stdout.write(JSON.stringify({ lineupDrawer: true, scorerName: true, chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

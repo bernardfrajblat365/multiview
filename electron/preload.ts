@@ -4,7 +4,9 @@ import type { YoutubeChannelResult, YoutubeLivesResult } from '../src/youtube-li
 import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
 import type { MatchClock } from '../src/match-clock'
-import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
+import type { PipCommand, PipState } from '../src/pip'
+import type { LiveMatchStatus, LiveVarPayload, TeamRef365 } from '../src/livescore-365'
+import type { MatchInfoReady, MatchInfoRequest, MatchInfoResult, PhotoRef } from '../src/match-info'
 
 type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
@@ -117,10 +119,34 @@ const quadra = {
     ipcRenderer.on('quadra:match-clock', listener)
     return () => ipcRenderer.removeListener('quadra:match-clock', listener)
   },
+  getMatchInfo: (request: MatchInfoRequest): Promise<MatchInfoResult> => ipcRenderer.invoke('quadra:match-info', request),
+  getTableCrests: (refs: TeamRef365[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('quadra:table-crests', refs),
+  getAthletePhotos: (refs: PhotoRef[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('quadra:athlete-photos', refs),
+  onMatchInfoReady: (callback: (payload: MatchInfoReady) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: MatchInfoReady) => callback(payload)
+    ipcRenderer.on('quadra:match-info-ready', listener)
+    return () => ipcRenderer.removeListener('quadra:match-info-ready', listener)
+  },
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; title: string }) => callback(payload)
     ipcRenderer.on('quadra:panel-title', listener)
     return () => ipcRenderer.removeListener('quadra:panel-title', listener)
+  },
+  sendPipState: (state: PipState) => ipcRenderer.send('quadra:pip-state', state),
+  onPipCommand: (callback: (payload: { panelId: string; command: PipCommand }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; command: PipCommand }) => callback(payload)
+    ipcRenderer.on('quadra:pip-command', listener)
+    return () => ipcRenderer.removeListener('quadra:pip-command', listener)
+  },
+  onPipClosed: (callback: (payload: { panelId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string }) => callback(payload)
+    ipcRenderer.on('quadra:pip-closed', listener)
+    return () => ipcRenderer.removeListener('quadra:pip-closed', listener)
+  },
+  onPipRequestState: (callback: (payload: { panelId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string }) => callback(payload)
+    ipcRenderer.on('quadra:pip-request-state', listener)
+    return () => ipcRenderer.removeListener('quadra:pip-request-state', listener)
   },
   onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => {
     const listener = (

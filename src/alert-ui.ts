@@ -300,8 +300,30 @@ function applyVarState(panelElement: HTMLElement) {
   }
 }
 
+const stateListeners = new Set<() => void>()
+
+/** Lets the floating window follow every change of the alert and VAR state. */
+export function onAlertStatesChange(listener: () => void) {
+  stateListeners.add(listener)
+  return () => stateListeners.delete(listener)
+}
+
+/** The alert on screen for a panel, read-only (the floating window draws its own). */
+export function alertView(panelId: string) {
+  const alert = active.get(panelId)
+  if (!alert) return null
+  return { kind: alert.kind, text: alert.text, scorer: alert.scorer, player: alert.player ? formatPlayerName(alert.player) : '' }
+}
+
+/** The VAR review in progress for a panel, as icon and text. */
+export function varReviewView(panelId: string) {
+  const review = varReviews.get(panelId)
+  return review ? { icon: VAR_REVIEW_ICON[review.kind], text: varReviewText(review) } : null
+}
+
 /** Idempotent: re-applies the ring/badge to panels, also after the grid re-renders. */
 export function applyAlertStates(root: ParentNode) {
+  for (const listener of stateListeners) listener()
   for (const panelElement of root.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
     applyVarState(panelElement)
     const alert = active.get(panelElement.dataset.panelId ?? '')

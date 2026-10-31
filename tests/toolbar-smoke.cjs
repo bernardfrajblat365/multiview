@@ -577,6 +577,10 @@ async function worker() {
       return (await Promise.all(all.map((page) => page.executeJavaScript("Boolean(document.querySelector('video') && !document.querySelector('video').paused && document.querySelector('video').srcObject?.active)").catch(() => false)))).every(Boolean)
     }, `${count} playing videos`)
     const ids = pages().map((page) => page.id).sort()
+    // Waiting for many videos can outlast the 5 s toolbar idle timeout; restart it so
+    // the check below is about video focus, not about how long the players took.
+    overlay.webContents.sendInputEvent({ type: 'mouseMove', x: 20, y: 20 })
+    await ui("document.dispatchEvent(new MouseEvent('mousemove', { clientX: 20, clientY: 20, bubbles: true }))")
     pages()[0].focus()
     pages()[0].sendInputEvent({ type: 'mouseDown', x: 100, y: 100, button: 'left', clickCount: 1 })
     pages()[0].sendInputEvent({ type: 'mouseUp', x: 100, y: 100, button: 'left', clickCount: 1 })

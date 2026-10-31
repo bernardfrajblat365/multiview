@@ -24,19 +24,34 @@ function bestSimilarity(name: string, variants: readonly string[]) {
 }
 
 /**
+ * The 365Scores game that clearly has both teams named by another feed (William Hill). `reversed`: the feed's
+ * home team is the away team in 365Scores. Unclear → null: no game beats the wrong one.
+ */
+export function findLinkedGame(home: string, away: string, games: readonly Game365[], now: number): { game: Game365; reversed: boolean } | null {
+  if (!home || !away) return null
+  const result = matchGame(`${home} x ${away}`, games, now)
+  if (result.status !== 'matched') return null
+  const game = result.game
+  const straight = Math.min(bestSimilarity(home, game.homeNames), bestSimilarity(away, game.awayNames))
+  const reversed = Math.min(bestSimilarity(home, game.awayNames), bestSimilarity(away, game.homeNames))
+  return { game, reversed: reversed > straight }
+}
+
+/** Crests of a linked game, in the feed's home/away order; null when the API left out a team's ids. */
+export function crestTeamsOf(linked: { game: Game365; reversed: boolean }): CrestTeams | null {
+  const { homeTeam, awayTeam } = linked.game
+  if (!homeTeam || !awayTeam) return null
+  return linked.reversed ? { home: awayTeam, away: homeTeam } : { home: homeTeam, away: awayTeam }
+}
+
+/**
  * Crests for a game named by another feed (William Hill): the 365Scores game that
  * clearly has both teams, returned in the feed's home/away order. Unclear → null:
  * no crest beats the wrong one.
  */
 export function findCrestTeams(home: string, away: string, games: readonly Game365[], now: number): CrestTeams | null {
-  if (!home || !away) return null
-  const result = matchGame(`${home} x ${away}`, games, now)
-  if (result.status !== 'matched') return null
-  const game = result.game
-  if (!game.homeTeam || !game.awayTeam) return null
-  const straight = Math.min(bestSimilarity(home, game.homeNames), bestSimilarity(away, game.awayNames))
-  const reversed = Math.min(bestSimilarity(home, game.awayNames), bestSimilarity(away, game.homeNames))
-  return reversed > straight ? { home: game.awayTeam, away: game.homeTeam } : { home: game.homeTeam, away: game.awayTeam }
+  const linked = findLinkedGame(home, away, games, now)
+  return linked ? crestTeamsOf(linked) : null
 }
 
 /** Teams of the games being played now, most likely to be opened next; each crest once, up to `limit`. */

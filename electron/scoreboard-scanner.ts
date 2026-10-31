@@ -12,6 +12,7 @@ import {
 import { logScanner } from './scanner-log'
 import { clockElapsedAt, HALF_TIME_INCIDENTS, isRunningPeriod, normalizeElapsed, sameClock, whClockPeriod, type MatchClock } from '../src/match-clock'
 import type { CrestTeams } from '../src/team-crests'
+import { parseWhLineup, type LineupTeam } from '../src/match-info'
 
 export type ScannerEvent = {
   eventId: string
@@ -47,6 +48,7 @@ export type ScannerScore = {
 }
 
 /** Match clock for the label; null when there's none to show (not started, over). */
+export type ScannerLineup = { panelIds: string[]; lineup: [LineupTeam, LineupTeam] }
 export type ScannerClock = { panelIds: string[]; clock: MatchClock | null }
 
 type Scanner = {
@@ -63,6 +65,9 @@ type Scanner = {
   clock: MatchClock | null
   /** Last clock sent to the UI; small drifts of a running clock aren't sent again. */
   sentClock: MatchClock | null
+  /** Starting players of both teams read from the page (shirt and name only), and the last one sent. */
+  lineup: [LineupTeam, LineupTeam] | null
+  sentLineupKey: string
   hooked: boolean
   connected: boolean
   loadedAt: number
@@ -176,6 +181,17 @@ const hookScript = `(() => {
       } catch (e) {}
       return original.apply(this, arguments)
     }
+    // The starting players of each team (shirt and name), kept as they arrive; the drain falls back to the page's own list.
+    if (typeof lineups.diffusionHandler === 'function') {
+      const handler = lineups.diffusionHandler
+      window.__quadraLineups = window.__quadraLineups || {}
+      lineups.diffusionHandler = function (team, players) {
+        try {
+          if (Array.isArray(players) && players.length) window.__quadraLineups[String(team).toUpperCase()] = players.map((p) => ({ number: p && p.number, name: p && p.name }))
+        } catch (e) {}
+        return handler.apply(this, arguments)
+      }
+    }
     lineups.__quadraWrapped = true
   }
   if (wrapped > 0) window.__quadraHooked = true
@@ -200,6 +216,15 @@ const scorerScript = (items: Array<{ id: string; team: string; shirt: number }>)
 })(${JSON.stringify(items)})`
 
 const drainScript = `(() => {
+  const lineupOf = (side) => {
+    const kept = window.__quadraLineups && window.__quadraLineups[side]
+    if (kept && kept.length) return kept.map((p) => ({ number: p.number, name: String(p.name || '').slice(0, 80) }))
+    const rows = document.querySelectorAll('.players_' + side.toLowerCase() + ' li .box-col1')
+    return Array.from(rows).slice(0, 20).map((row) => {
+      const cells = row.querySelectorAll('span')
+      return { number: cells[0] ? cells[0].textContent.trim() : '', name: cells[1] ? cells[1].textContent.trim().slice(0, 80) : '' }
+    })
+  }
   const queue = window.__quadraQueue || []
   window.__quadraQueue = []
   const lines = (document.body ? document.body.innerText : '').split('\\n').map((line) => line.trim()).filter(Boolean)
@@ -219,6 +244,7 @@ const drainScript = `(() => {
     breakAt: Number(window.__quadraBreakAt) || 0,
     now: Date.now(),
     queue,
+    lineups: { home: lineupOf('HOME'), away: lineupOf('AWAY') },
     home: scoreIndex > 0 ? lines[scoreIndex - 1].slice(0, 80) : '',
     away: scoreIndex >= 0 && lines[scoreIndex + 1] ? lines[scoreIndex + 1].slice(0, 80) : '',
     score: scoreIndex >= 0 ? lines[scoreIndex].replace(/\\s+/g, ' ') : '',
@@ -254,6 +280,8 @@ export function createScoreboardScanners(options: {
   onEvent: (event: ScannerEvent) => void
   onScore?: (score: ScannerScore) => void
   onClock?: (clock: ScannerClock) => void
+  /** Starting players read from the scoreboard page (William Hill's own line-up), for the info drawer. */
+  onLineup?: (lineup: ScannerLineup) => void
   /** The feed says the match is over; reported once per match. */
   onEnd?: (end: ScannerEnd) => void
   /** Fallback for goals the line-up gives no name for (365Scores). Null when it can't tell. */
@@ -288,6 +316,15 @@ export function createScoreboardScanners(options: {
     if (!force && key === scanner.sentKey) return
     scanner.sentKey = key
     options.onScore?.({ panelIds, home: scanner.home, away: scanner.away, score: scanner.score })
+  }
+
+  /** The line-up read from the feed's page, sent when it changes (a new panel joining gets it at once). */
+  function publishLineup(scanner: Scanner, panelIds: string[] = [...scanner.panelIds], force = false) {
+    if (!scanner.lineup || panelIds.length === 0) return
+    const key = JSON.stringify(scanner.lineup)
+    if (!force && key === scanner.sentLineupKey) return
+    scanner.sentLineupKey = key
+    options.onLineup?.({ panelIds, lineup: scanner.lineup })
   }
 
   function publishClock(scanner: Scanner, panelIds: string[] = [...scanner.panelIds], force = false) {
@@ -354,6 +391,7 @@ export function createScoreboardScanners(options: {
       breakAt?: number
       now?: number
       queue?: RawIncident[]
+      lineups?: unknown
       home?: string
       away?: string
       score?: string
@@ -364,6 +402,8 @@ export function createScoreboardScanners(options: {
     if (result.away) scanner.away = result.away
     if (result.score) scanner.score = result.score
     publishScore(scanner)
+    scanner.lineup = parseWhLineup(result.lineups, scanner.home, scanner.away)
+    publishLineup(scanner)
     scanner.clock = readClock(scanner, result)
     publishClock(scanner)
     // Any feed update counts as alive, not only alert types, so quiet spells don't force reloads.
@@ -503,6 +543,8 @@ export function createScoreboardScanners(options: {
       sentKey: '',
       clock: null,
       sentClock: null,
+      lineup: null,
+      sentLineupKey: '',
       hooked: false,
       connected: false,
       loadedAt: Date.now(),
@@ -559,6 +601,7 @@ export function createScoreboardScanners(options: {
     // A panel joining a running scanner gets the current score right away.
     publishScore(scanner, [panelId], true)
     publishClock(scanner, [panelId], true)
+    publishLineup(scanner, [panelId], true)
     logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (WH ${eventId})`, 'wh')
   }
 

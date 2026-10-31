@@ -13,6 +13,15 @@ export const RELEASES: readonly Release[] = [
     ],
   },
   {
+    version: '1.2.2',
+    label: '1.2.2',
+    notes: [
+      { title: 'Nome do artilheiro nos jogos do YouTube', body: 'Nos jogos ligados ao 365Scores, o nome de quem fez o gol entra no selo do gol assim que o 365Scores informa, mesmo quando o gol apareceu antes pelo placar.' },
+      { title: 'Lista do atraso no visual do Quadra', body: 'O botão ⏱ dos painéis ligados ao 365Scores abre a lista de atrasos no mesmo estilo verde do Quadra, em vez da lista padrão do Windows.' },
+      { title: 'Cor própria para cada alerta', body: 'A borda do alerta de VAR agora é azul, a do touchdown roxa e a do field goal verde-água, para não confundir com a borda verde do gol.' },
+    ],
+  },
+  {
     version: '1.2.1',
     label: '1.2.1',
     notes: [

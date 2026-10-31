@@ -918,21 +918,100 @@ function updateLiveDelayButton(panelElement: HTMLElement, id: PanelId, live: Liv
   const key = `${live.label}|${live.coverage}|${live.sport}|${own ?? 'default'}|${globalSec}`
   if (button?.dataset.key === key) return
   if (!button) {
-    button = document.createElement('label')
+    button = document.createElement('button')
+    button.setAttribute('type', 'button')
     button.className = 'btn btn--ghost panel__delay'
+    button.dataset.liveDelay = ''
+    button.setAttribute('aria-haspopup', 'listbox')
     controls.insertBefore(button, controls.querySelector(':scope > .panel__alerts') ?? controls.querySelector(':scope > .panel__remove'))
   }
   button.dataset.key = key
   const effective = own ?? globalSec ?? 0
-  const defaultLabel = globalSec === null ? 'Padrão (placar oculto, alertas na hora)' : `Padrão (${liveDelayLabel(globalSec)})`
   const coverage = live.sport === 'basketball' ? ' · basquete, só placar' : live.sport === 'american-football' ? ' · futebol americano, touchdowns e field goals' : live.coverage === 'score' ? ' · só placar' : ''
   button.title = `Atraso do placar e dos alertas deste painel — 365Scores: ${live.label ?? ''}${coverage}`
+  button.setAttribute('aria-label', `Atraso do placar e dos alertas deste painel: ${own === undefined ? 'padrão' : liveDelayLabel(own)}`)
+  button.setAttribute('aria-expanded', String(liveDelayMenuPanel === id))
   button.classList.toggle('is-custom', own !== undefined)
-  button.innerHTML = `<svg class="panel__delay-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9" r="5.5" /><path d="M8 6.2V9l1.8 1.3M6.3 1.8h3.4" /></svg><span class="panel__delay-value" aria-hidden="true">${effective} s</span><select data-live-delay aria-label="Atraso do placar e dos alertas deste painel">
-      <option value="default"${own === undefined ? ' selected' : ''}>${escapeHtml(defaultLabel)}</option>
-      ${LIVE_DELAY_OPTIONS.map((value) => `<option value="${value}"${own === value ? ' selected' : ''}>${liveDelayLabel(value)}</option>`).join('')}
-    </select>`
+  button.innerHTML = `<svg class="panel__delay-icon" viewBox="0 0 16 16" aria-hidden="true"><circle cx="8" cy="9" r="5.5" /><path d="M8 6.2V9l1.8 1.3M6.3 1.8h3.4" /></svg><span class="panel__delay-value" aria-hidden="true">${effective} s</span>`
 }
+
+// The delay list lives on the body, not in the panel, so a small panel
+// never clips it; it is placed under the ⏱ button and closes on any outside click.
+let liveDelayMenuPanel: PanelId | null = null
+
+function closeLiveDelayMenu(focusButton = false) {
+  const id = liveDelayMenuPanel
+  document.querySelector('.delay-menu')?.remove()
+  liveDelayMenuPanel = null
+  if (!id) return
+  const button = app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(id)}"] .panel__delay`)
+  button?.setAttribute('aria-expanded', 'false')
+  if (focusButton) button?.focus()
+}
+
+function openLiveDelayMenu(id: PanelId, button: HTMLElement) {
+  closeLiveDelayMenu()
+  const globalSec = getAlertSettings().scoreDelaySec
+  const own = panelDelayOverride.get(id)
+  const defaultLabel = globalSec === null ? 'Padrão (placar oculto, alertas na hora)' : `Padrão (${liveDelayLabel(globalSec)})`
+  const options: Array<{ value: string, label: string, selected: boolean }> = [
+    { value: 'default', label: defaultLabel, selected: own === undefined },
+    ...LIVE_DELAY_OPTIONS.map((value) => ({ value: String(value), label: liveDelayLabel(value), selected: own === value })),
+  ]
+  const menu = document.createElement('ul')
+  menu.className = 'delay-menu'
+  menu.setAttribute('role', 'listbox')
+  menu.setAttribute('aria-label', 'Atraso do placar e dos alertas deste painel')
+  menu.innerHTML = `<li class="delay-menu__title" role="presentation">Atraso deste painel</li>${options.map((option) =>
+    `<li role="option" tabindex="-1" data-live-delay-value="${option.value}" aria-selected="${option.selected}">${escapeHtml(option.label)}</li>`).join('')}`
+  document.body.append(menu)
+  liveDelayMenuPanel = id
+  button.setAttribute('aria-expanded', 'true')
+  const rect = button.getBoundingClientRect()
+  const width = menu.offsetWidth
+  const height = menu.offsetHeight
+  const left = Math.max(8, Math.min(rect.left, window.innerWidth - width - 8))
+  const below = rect.bottom + 4
+  const top = below + height <= window.innerHeight - 8 ? below : Math.max(8, rect.top - height - 4)
+  menu.style.left = `${left}px`
+  menu.style.top = `${top}px`
+  ;(menu.querySelector<HTMLElement>('[aria-selected="true"]') ?? menu.querySelector<HTMLElement>('[role="option"]'))?.focus()
+}
+
+function chooseLiveDelay(value: string) {
+  const id = liveDelayMenuPanel
+  closeLiveDelayMenu(true)
+  if (!id || !panelById(id)) return
+  if (value === 'default') panelDelayOverride.delete(id)
+  else panelDelayOverride.set(id, Number(value))
+  updateLiveControls()
+  updatePanelLabels()
+}
+
+document.addEventListener('pointerdown', (event) => {
+  if (!liveDelayMenuPanel) return
+  const target = event.target as HTMLElement
+  if (!target.closest('.delay-menu, .panel__delay')) closeLiveDelayMenu()
+}, true)
+document.addEventListener('click', (event) => {
+  const option = (event.target as HTMLElement).closest<HTMLElement>('.delay-menu [data-live-delay-value]')
+  if (option) chooseLiveDelay(option.dataset.liveDelayValue ?? 'default')
+})
+document.addEventListener('keydown', (event) => {
+  const menu = document.querySelector<HTMLElement>('.delay-menu')
+  if (!menu) return
+  const options = [...menu.querySelectorAll<HTMLElement>('[role="option"]')]
+  const index = options.indexOf(document.activeElement as HTMLElement)
+  if (event.key === 'Escape') closeLiveDelayMenu(true)
+  else if (event.key === 'ArrowDown') options[Math.min(options.length - 1, index + 1)]?.focus()
+  else if (event.key === 'ArrowUp') options[Math.max(0, index - 1)]?.focus()
+  else if ((event.key === 'Enter' || event.key === ' ') && index >= 0) chooseLiveDelay(options[index].dataset.liveDelayValue ?? 'default')
+  else return
+  event.preventDefault()
+  event.stopPropagation()
+}, true)
+window.addEventListener('resize', () => closeLiveDelayMenu())
+window.addEventListener('blur', () => closeLiveDelayMenu())
 
 /** Prompt to pick the game of an ambiguous title (YouTube, or BLL without a William Hill feed), and the delay button of a linked one. Idempotent, like the auto controls. */
 function updateLiveControls() {
@@ -957,6 +1036,7 @@ function updateLiveControls() {
     prompt.innerHTML = `<span class="panel__live-title">Qual jogo é este? (365Scores)</span>${(live.candidates ?? []).map((candidate) =>
       `<button type="button" class="btn btn--load" data-live-choose="${candidate.id}" title="${escapeHtml(candidate.detail)}">${escapeHtml(candidate.label)}</button>`).join('')}<button type="button" class="btn btn--ghost" data-live-choose="none">Nenhum</button>`
   }
+  if (liveDelayMenuPanel && !app.querySelector(`.panel[data-panel-id="${CSS.escape(liveDelayMenuPanel)}"] .panel__delay`)) closeLiveDelayMenu()
 }
 
 /** The panel's own alert and score delay: 'default' follows the global setting. */
@@ -998,14 +1078,12 @@ app.addEventListener('click', (event) => {
   if (target.closest('[data-finished-keep]')) keepFinishedPanel(panelId)
   const choice = target.closest<HTMLElement>('[data-live-choose]')?.dataset.liveChoose
   if (choice) window.quadra?.chooseLiveMatch(panelId, choice === 'none' ? null : Number(choice))
+  const delayButton = target.closest<HTMLElement>('[data-live-delay]')
+  if (delayButton) {
+    if (liveDelayMenuPanel === panelId) closeLiveDelayMenu()
+    else openLiveDelayMenu(panelId, delayButton)
+  }
 })
-app.addEventListener('change', (event) => {
-  const select = (event.target as HTMLElement).closest<HTMLSelectElement>('[data-live-delay]')
-  const panelId = select?.closest<HTMLElement>('.panel')?.dataset.panelId
-  if (!select || !panelId) return
-  setPanelDelay(panelId, select.value === 'default' ? 'default' : Number(select.value))
-})
-
 function undo() {
   const previous = history.at(-1)
   if (!previous) return
@@ -2562,7 +2640,8 @@ function setChromeInteractive(interactive: boolean) {
   if (lastChromeInteractive === interactive) return
   lastChromeInteractive = interactive
   const active = document.activeElement
-  const editing = active instanceof HTMLElement && active.matches('input, textarea, select, [contenteditable]')
+  // An open delay list also keeps the focus: handing it to the players would blur the overlay and close the list.
+  const editing = (active instanceof HTMLElement && active.matches('input, textarea, select, [contenteditable]')) || liveDelayMenuPanel !== null
   window.quadra?.setChromeInteractive(interactive, !interactive && !editing)
 }
 
@@ -2747,7 +2826,7 @@ function updateChromeHitTarget(x: number, y: number) {
   }
   updateLabelHover(x, y)
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .panel--pip, .organize-panel, .confirm')))
+  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .panel--pip, .organize-panel, .confirm, .delay-menu')))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -2775,7 +2854,7 @@ function scheduleToolbarHide() {
   toolbarHideTimer = window.setTimeout(() => {
     toolbarHideTimer = null
     const protectedUiOpen = Boolean(document.querySelector(
-      '.toolbar:hover, .toolbar__menu:not([hidden]), .organize-panel, .confirm',
+      '.toolbar:hover, .toolbar__menu:not([hidden]), .organize-panel, .confirm, .delay-menu',
     ))
     if (protectedUiOpen) {
       scheduleToolbarHide()

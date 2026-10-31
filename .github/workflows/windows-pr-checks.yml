@@ -2,16 +2,55 @@ name: Windows PR checks
 
 on:
   pull_request:
+  # After a merge the full suite (toolbar included) runs on main, so a layout
+  # regression skipped by the PR filter still shows up before the next tag.
+  push:
+    branches: [main]
 
 permissions:
   contents: read
 
 concurrency:
-  group: windows-pr-${{ github.event.pull_request.number }}
+  group: windows-pr-${{ github.event.pull_request.number || github.sha }}
   cancel-in-progress: true
 
 jobs:
-  checks:
+  # Decides what the change needs: docs-only PRs skip the Windows jobs, and the
+  # toolbar smoke (~6.5 min) only runs when layout code or its test changes.
+  changes:
+    runs-on: ubuntu-latest
+    outputs:
+      code: ${{ steps.filter.outputs.code }}
+      layout: ${{ steps.filter.outputs.layout }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Classify changed files
+        id: filter
+        shell: bash
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha }}
+        run: |
+          if [ "${{ github.event_name }}" != "pull_request" ]; then
+            echo "code=true" >> "$GITHUB_OUTPUT"
+            echo "layout=true" >> "$GITHUB_OUTPUT"
+            exit 0
+          fi
+          files=$(git diff --name-only "$BASE_SHA" HEAD)
+          echo "$files"
+          code=false
+          layout=false
+          if echo "$files" | grep -qvE '^(docs/|.*\.md$|\.claude/|artifacts/)'; then code=true; fi
+          if echo "$files" | grep -qE '^(src/(layout|video-layout|organizer|match-label)\.ts|src/style\.css|electron/main\.ts|tests/toolbar-smoke\.cjs|tests/fixtures/video-layout-reference\.json|package(-lock)?\.json|\.github/workflows/)'; then layout=true; fi
+          echo "code=$code" >> "$GITHUB_OUTPUT"
+          echo "layout=$layout" >> "$GITHUB_OUTPUT"
+
+  fast:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
     runs-on: windows-latest
     steps:
       - name: Checkout
@@ -47,20 +86,11 @@ jobs:
       - name: Verify development signature preservation hook
         run: npm run test:drm-poc
 
-      - name: Build application
-        run: npm run build
-
       - name: Build isolated ECS POC package without EVS secrets
         run: npm run dist:drm-poc
 
       - name: Renderer smoke
         run: npm run test:renderer
-
-      - name: Toolbar smoke
-        run: npm run test:toolbar
-
-      - name: Application integration smoke
-        run: npm run test:app
 
       - name: Window close smoke
         run: npm run test:close
@@ -69,3 +99,64 @@ jobs:
         env:
           QUADRA_PACKAGED_EXE: release-drm-poc/win-unpacked/Quadra.exe
         run: npm run test:packaged
+
+  app:
+    needs: changes
+    if: needs.changes.outputs.code == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies and ECS
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Application integration smoke
+        run: npm run test:app
+
+  toolbar:
+    needs: changes
+    if: needs.changes.outputs.layout == 'true'
+    runs-on: windows-latest
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Configure Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: Install dependencies and ECS
+        run: npm ci
+
+      - name: Build application
+        run: npm run build
+
+      - name: Toolbar smoke
+        run: npm run test:toolbar
+
+  # Single required status for branch protection: passes when every job that had
+  # to run passed, and when the filter skipped them.
+  checks:
+    needs: [changes, fast, app, toolbar]
+    if: always()
+    runs-on: ubuntu-latest
+    steps:
+      - name: Summarize
+        shell: bash
+        run: |
+          echo "changes=${{ needs.changes.result }} fast=${{ needs.fast.result }} app=${{ needs.app.result }} toolbar=${{ needs.toolbar.result }}"
+          for result in "${{ needs.changes.result }}" "${{ needs.fast.result }}" "${{ needs.app.result }}" "${{ needs.toolbar.result }}"; do
+            if [ "$result" != "success" ] && [ "$result" != "skipped" ]; then exit 1; fi
+          done

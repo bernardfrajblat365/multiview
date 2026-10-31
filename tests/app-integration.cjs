@@ -470,6 +470,21 @@ async function run() {
     await waitForExpression(target, `document.querySelectorAll('.panel--pip').length === 0`)
     for (let attempt = 0; attempt < 50 && (await pipPages()).length > 0; attempt += 1) await wait(100)
     assert.equal((await pipPages()).length, 0, 'As janelas flutuantes não fecharam ao voltar para a grade.')
+    // The ⏱ button opens the app's own list (not the native select); picking an option sets the panel delay.
+    const delayMenu = await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.panel[data-slot="1"] .panel__delay').click()
+      const menu = document.querySelector('.delay-menu')
+      const options = [...(menu?.querySelectorAll('[role="option"]') ?? [])].map((option) => option.textContent)
+      menu?.querySelector('[data-live-delay-value="10"]')?.click()
+      const chosen = document.querySelector('.panel[data-slot="1"] .panel__delay-value')?.textContent
+      const closed = !document.querySelector('.delay-menu')
+      document.querySelector('.panel[data-slot="1"] .panel__delay').click()
+      document.querySelector('.delay-menu [data-live-delay-value="default"]')?.click()
+      return JSON.stringify({ options, chosen, closed, hasSelect: Boolean(document.querySelector('.panel__delay select')), reset: !document.querySelector('.panel[data-slot="1"] .panel__delay').classList.contains('is-custom') })
+    })()`)
+    const delayMenuState = JSON.parse(delayMenu)
+    assert.ok(delayMenuState.options[0]?.startsWith('Padrão') && delayMenuState.options.includes('10 s'), `Lista do atraso: ${delayMenu}`)
+    assert.ok(delayMenuState.chosen === '10 s' && delayMenuState.closed && !delayMenuState.hasSelect && delayMenuState.reset, `Escolha do atraso: ${delayMenu}`)
     // The score arrives although the first detail request hung (old timing: 8 s timeout + 6 s backoff).
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__label')?.dataset.score === '1 – 0'`, 9000).catch(async (error) => {

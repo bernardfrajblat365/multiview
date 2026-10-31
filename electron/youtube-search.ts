@@ -1,6 +1,7 @@
 import { app, net } from 'electron'
+import { readFileSync } from 'node:fs'
 import { readFile } from 'node:fs/promises'
-import { dirname, join } from 'node:path'
+import { dirname, join, resolve } from 'node:path'
 import {
   chooseYoutubeApiKey,
   isValidYoutubeApiKey,
@@ -37,11 +38,23 @@ class ApiError extends Error {
   }
 }
 
-/** `.env` next to the project in dev; next to the installed exe or in userData once packaged. Never bundled into the build. */
+/** In a git worktree `.git` is a file ("gitdir: <main>/.git/worktrees/<name>"); the main checkout is three levels up from that. */
+function mainCheckoutRoot(projectDir: string) {
+  try {
+    const text = readFileSync(join(projectDir, '.git'), 'utf8')
+    const gitDir = /^gitdir:\s*(.+)$/m.exec(text)?.[1]?.trim()
+    return gitDir ? resolve(projectDir, gitDir, '..', '..', '..') : null
+  } catch {
+    return null
+  }
+}
+
+/** `.env` next to the project in dev (or in the main checkout when running from a worktree); next to the installed exe or in userData once packaged. Never bundled into the build. */
 function envFileCandidates() {
-  return app.isPackaged
-    ? [join(dirname(process.execPath), '.env'), join(app.getPath('userData'), '.env')]
-    : [join(app.getAppPath(), '.env'), join(process.cwd(), '.env')]
+  if (app.isPackaged) return [join(dirname(process.execPath), '.env'), join(app.getPath('userData'), '.env')]
+  const projectDir = app.getAppPath()
+  const main = mainCheckoutRoot(projectDir)
+  return [join(projectDir, '.env'), join(process.cwd(), '.env'), ...(main ? [join(main, '.env')] : [])]
 }
 
 /** Read on every request so editing `.env` does not need a restart. The key is never logged nor sent to the renderer. */

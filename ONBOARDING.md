@@ -88,6 +88,9 @@ Não existe REST, GraphQL, tRPC ou servidor local de negócio. A API interna é 
 | `quadra:open-bllsport` | renderer → main | abre catálogo BLL para um painel |
 | `quadra:set-bllsport-target` | renderer → main | seleciona o painel destino |
 | `quadra:request-layout` | main → renderer | pede recálculo de bounds |
+| `quadra:pip-state` | renderer → main | estado do painel flutuante (placar, alertas, botões) para a janelinha |
+| `quadra:pip-command` / `quadra:pip-closed` / `quadra:pip-request-state` | main → renderer | comando da janelinha, janela fechada pelo sistema, pedido de estado |
+| `quadra-pip:state` / `quadra-pip:command` / `quadra-pip:bar-height` / `quadra-pip:ready` | main ↔ janelinha | ponte própria `window.quadraPip` (só a janelinha flutuante) |
 | `quadra:fullscreen-changed` | main → renderer | informa mudança de fullscreen |
 | `quadra:bllsport-player-opened` | main → renderer | entrega URL do player ao painel escolhido |
 | `quadra:bllsport-target-required` | main → renderer | informa que falta escolher um painel |

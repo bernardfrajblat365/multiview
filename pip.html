@@ -1,0 +1,28 @@
+<!doctype html>
+<html lang="pt-BR">
+  <head>
+    <meta charset="UTF-8" />
+    <meta
+      http-equiv="Content-Security-Policy"
+      content="default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' ws: http://localhost:43123"
+    />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Quadra — Janela flutuante</title>
+  </head>
+  <body>
+    <div id="frame">
+      <header id="bar">
+        <div class="bar__row">
+          <span class="bar__grip" aria-hidden="true">⠿</span>
+          <span id="match" class="bar__match"></span>
+          <span id="clock" class="bar__clock" hidden></span>
+          <span id="controls" class="bar__controls"></span>
+        </div>
+        <div id="editor" class="bar__extra" hidden></div>
+        <div id="prompt" class="bar__extra" hidden></div>
+        <div id="finished" class="bar__extra" hidden></div>
+      </header>
+    </div>
+    <script type="module" src="/src/pip/pip-page.ts"></script>
+  </body>
+</html>

@@ -2640,8 +2640,29 @@ function setBackVisible(visible: boolean) {
     const r = el.getBoundingClientRect()
     return r.left <= 4 && r.top <= 4 && r.right > 4 && r.bottom > 4
   }) : null
-  shell.querySelectorAll('.panel.has-back-button').forEach((el) => { if (el !== corner) el.classList.remove('has-back-button') })
-  corner?.classList.add('has-back-button')
+  shell.querySelectorAll<HTMLElement>('.panel.has-back-button').forEach((el) => {
+    el.classList.remove('has-back-button')
+    el.style.removeProperty('--back-shift')
+  })
+  const backButton = shell.querySelector<HTMLElement>('.back-corner')
+  const controls = corner?.querySelector<HTMLElement>('.panel__controls')
+  const first = controls?.querySelector<HTMLElement>('.btn')
+  if (!corner || !backButton || !controls || !first) {
+    backButton?.style.removeProperty('top')
+    backButton?.style.removeProperty('left')
+    backButton?.style.removeProperty('height')
+    backButton?.style.removeProperty('font-size')
+    return
+  }
+  // The button takes the first slot of the panel's own control row: same top, same height, and the row slides right by its width.
+  const r = first.getBoundingClientRect()
+  backButton.style.top = `${r.top}px`
+  backButton.style.left = `${r.left}px`
+  backButton.style.height = `${r.height}px`
+  backButton.style.fontSize = `${Math.max(9, r.height * 0.46)}px`
+  const gap = parseFloat(getComputedStyle(controls).columnGap) || 0
+  corner.style.setProperty('--back-shift', `${backButton.offsetWidth + gap}px`)
+  corner.classList.add('has-back-button')
 }
 
 function scheduleBackHide() {

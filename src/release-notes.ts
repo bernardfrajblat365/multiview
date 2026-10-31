@@ -10,6 +10,7 @@ export const RELEASES: readonly Release[] = [
     label: '1.2.2',
     notes: [
       { title: 'Escalação do jogo', body: 'O botão de camisa nos controles do painel abre a escalação dos dois times com número, foto, posição e nota (e o técnico); nos jogos que o 365Scores não tem, usa a escalação do radar da William Hill.' },
+      { title: 'Tabela do campeonato', body: 'Na mesma gaveta, a aba Tabela mostra a classificação do campeonato com os dois times do jogo em destaque.' },
     ],
   },
   {

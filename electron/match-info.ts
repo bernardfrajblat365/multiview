@@ -1,11 +1,14 @@
-import { athletePhotoUrl, parseLineups, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
+import { athletePhotoUrl, parseLineups, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
 import { apiUrl, fetchJson } from './livescore-365'
 import { loadImage } from './image-cache'
+import { crestKey, crestUrl } from '../src/team-crests'
+import type { TeamRef365 } from '../src/livescore-365'
 
 type PanelGame = { gameId: number; reversed: boolean }
 type Lineup = [LineupTeam, LineupTeam]
 
 const CACHE_MS = 30_000
+const STANDINGS_CACHE_MS = 60_000
 const PHOTO_CONCURRENCY = 6
 const IMAGE_BASE_URL = process.env.QUADRA_365SCORES_IMAGE_URL
 
@@ -19,6 +22,8 @@ export function createMatchInfo(options: {
   onReady: (update: MatchInfoReady) => void
   /** Troque nos testes; por padrão, `/web/game/` do 365Scores. */
   fetchGame?: (gameId: number) => Promise<unknown>
+  /** Troque nos testes; por padrão, `/web/standings/` do 365Scores. */
+  fetchStandings?: (competitionId: number, seasonNum: number, stageNum: number) => Promise<unknown>
 }) {
   const linked = new Map<string, number>()
   const resolved = new Map<string, PanelGame>()
@@ -26,7 +31,10 @@ export function createMatchInfo(options: {
   /** O que a UI já sabe do painel (jogo ou só a escalação WH): só avisa quando muda. */
   const announced = new Map<string, string>()
   const games = new Map<number, { at: number; raw: Promise<unknown> }>()
+  const tables = new Map<string, { at: number; raw: Promise<unknown> }>()
   const fetchGame = options.fetchGame ?? ((gameId: number) => fetchJson(apiUrl('/web/game/', { gameId: String(gameId) })))
+
+  const fetchStandings = options.fetchStandings ?? ((competitionId: number, seasonNum: number, stageNum: number) => fetchJson(apiUrl('/web/standings/', { competitions: String(competitionId), seasonNum: String(seasonNum), stageNum: String(stageNum) })))
 
   function gameOf(panelId: string): PanelGame | null {
     const gameId = linked.get(panelId)
@@ -79,6 +87,7 @@ export function createMatchInfo(options: {
   function reset() {
     for (const panelId of [...announced.keys()]) clear(panelId)
     games.clear()
+    tables.clear()
   }
 
   /** Um pedido por vez por jogo: pedidos simultâneos compartilham a mesma resposta, que vale 30 s. */
@@ -93,6 +102,36 @@ export function createMatchInfo(options: {
     })
     if (games.size > 40) games.delete(games.keys().next().value as number)
     return raw
+  }
+
+  /** A tabela muda a cada gol, mas a resposta é grande (~150 KB): um pedido por competição e fase por minuto. */
+  function rawStandings(competitionId: number, seasonNum: number, stageNum: number) {
+    const key = `${competitionId}:${seasonNum}:${stageNum}`
+    const cached = tables.get(key)
+    if (cached && Date.now() - cached.at < STANDINGS_CACHE_MS) return cached.raw
+    const raw = fetchStandings(competitionId, seasonNum, stageNum)
+    const entry = { at: Date.now(), raw }
+    tables.set(key, entry)
+    raw.catch(() => {
+      if (tables.get(key) === entry) tables.delete(key)
+    })
+    if (tables.size > 20) tables.delete(tables.keys().next().value as string)
+    return raw
+  }
+
+  async function loadStandings(panelId: string): Promise<MatchInfoResult> {
+    const game = gameOf(panelId)
+    // Painel só com a escalação do radar William Hill: não se sabe de que campeonato é.
+    if (!game) return whLineups.has(panelId) ? { status: 'none' } : { status: 'no-game' }
+    try {
+      const target = parseStandingsTarget(await rawGame(game.gameId), game.gameId)
+      if (!target) return { status: 'error' }
+      if (!target.hasStandings) return { status: 'none' }
+      const table = parseStandings(await rawStandings(target.competitionId, target.seasonNum, target.stageNum), target)
+      return table ? { status: 'ok', tab: 'standings', table, highlight: target.teamIds, live: target.live } : { status: 'none' }
+    } catch {
+      return { status: 'error' }
+    }
   }
 
   async function loadLineup(panelId: string): Promise<MatchInfoResult> {
@@ -120,6 +159,8 @@ export function createMatchInfo(options: {
     switch (request.tab) {
       case 'lineup':
         return loadLineup(request.panelId)
+      case 'standings':
+        return loadStandings(request.panelId)
       default:
         return { status: 'error' }
     }
@@ -136,6 +177,20 @@ export async function loadAthletePhotos(refs: readonly PhotoRef[]): Promise<Reco
     while (next < refs.length) {
       const ref = refs[next++]
       result[photoKey(ref)] = await loadImage(`athlete:${photoKey(ref)}`, athletePhotoUrl(ref, IMAGE_BASE_URL))
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(PHOTO_CONCURRENCY, refs.length) }, worker))
+  return result
+}
+
+/** Escudos da tabela como data URLs, 6 por vez, pela chave `id:versão`; `null`: sem escudo. */
+export async function loadTableCrests(refs: readonly TeamRef365[]): Promise<Record<string, string | null>> {
+  const result: Record<string, string | null> = {}
+  let next = 0
+  const worker = async () => {
+    while (next < refs.length) {
+      const ref = refs[next++]
+      result[crestKey(ref)] = await loadImage(`crest:${crestKey(ref)}`, crestUrl(ref, IMAGE_BASE_URL))
     }
   }
   await Promise.all(Array.from({ length: Math.min(PHOTO_CONCURRENCY, refs.length) }, worker))

@@ -98,6 +98,12 @@ async function waitForExpression(target, expression, timeoutMs = 10000) {
 }
 
 /** 365Scores game detail with line-ups: 11 starters + coach per team. Player 101 has a photo, 102 doesn't (404). */
+function standingsFixture() {
+  const team = (id, name, position, points, destinationNum) => ({ competitor: { id, name, shortName: name, imageVersion: 3 }, position, gamePlayed: 10, gamesWon: 5, gamesEven: 2, gamesLost: 3, ratio: position === 3 ? -2 : 4, points, destinationNum })
+  return { standings: [{ competitionId: 77, seasonNum: 5, stageNum: 1, displayName: 'Brasileirão', destinations: [{ num: 1, name: 'Libertadores', color: '#F5CB25' }, { num: 3, name: 'Rebaixamento', color: '#E61034' }, { num: 9, name: 'Sem uso', color: '#123456' }],
+    rows: [team(5, 'Palmeiras', 1, 30, 1), team(1, 'Coritiba', 2, 25, 1), team(2, 'Avaí', 3, 12, 3), team(6, 'Chapecoense', 4, 10, 3)] }] }
+}
+
 function lineupGame(gameId) {
   const members = []
   const side = (competitorId, base, name, positions) => {
@@ -116,7 +122,7 @@ function lineupGame(gameId) {
   const home = side(1, 1001, 'Coritiba', positions)
   const away = side(2, 2001, 'Avaí', positions)
   return { game: {
-    id: gameId, statusGroup: 3, gameTime: 30, events: [], statusId: 6, statusText: 'Primeiro Tempo', hasLineups: true, members,
+    id: gameId, competitionId: 77, seasonNum: 5, stageNum: 1, hasStandings: true, statusGroup: 3, gameTime: 30, events: [], statusId: 6, statusText: 'Primeiro Tempo', hasLineups: true, members,
     preciseGameTime: { minutes: 29, seconds: 10, autoProgress: true, clockDirection: 1 },
     homeCompetitor: { id: 1, name: 'Coritiba', score: 1, redCards: 0, imageVersion: 3, lineups: home }, awayCompetitor: { id: 2, name: 'Avaí', score: 0, redCards: 0, imageVersion: 1, lineups: away },
   } }
@@ -298,6 +304,11 @@ async function run() {
         id: 9002, statusGroup: finishingDetailRequests <= 2 ? 3 : 4, gameTime: 90, events: [],
         homeCompetitor: { id: 3, name: 'Bahia', score: 2, redCards: 0 }, awayCompetitor: { id: 4, name: 'Vitória', score: 1, redCards: 0 },
       } }))
+      return
+    }
+    if (request.url?.startsWith('/web/standings/')) {
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify(standingsFixture()))
       return
     }
     if (request.url?.startsWith('/web/game/')) {
@@ -526,6 +537,19 @@ async function run() {
       const coach = document.querySelector('.info-drawer [data-info-coach]')
       return { afterList: coach.previousElementSibling?.matches('[data-info-list]') ?? false, label: coach.querySelector('.info-coach__label')?.textContent, fits: drawer.bottom <= panel.bottom + 1 }
     })()`), { afterList: true, label: 'Técnico', fits: true })
+    // The Tabela tab shows the championship table with the two teams of the game highlighted; Escalação brings the line-up back.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-tab="standings"]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-standing]').length === 4`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `(() => ({
+      highlighted: [...document.querySelectorAll('.info-drawer [data-highlighted] .info-standing__name')].map((node) => node.textContent),
+      title: document.querySelector('.info-drawer [data-info-note]').textContent,
+      first: [...document.querySelector('.info-drawer [data-info-standing]').children].map((node) => node.textContent.trim()).filter(Boolean),
+      legend: [...document.querySelectorAll('.info-drawer [data-info-legend] li')].map((node) => node.textContent.trim()),
+      selected: document.querySelector('.info-drawer .info-tab.is-selected').textContent,
+    }))()`), { highlighted: ['Coritiba', 'Avaí'], title: 'Brasileirão', first: ['1', 'Palmeiras', '10', '5', '2', '3', '+4', '30'], legend: ['Libertadores', 'Rebaixamento'], selected: 'Tabela' })
+    await waitForExpression(target, `document.querySelector('.info-drawer .info-standing__crest img') !== null`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-tab="lineup"]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 11`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-close]').click()`)
     await waitForExpression(target, `!document.querySelector('.info-drawer')`)
     // A click on the panel outside the drawer closes it.

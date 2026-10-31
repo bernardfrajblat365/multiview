@@ -3,14 +3,19 @@ import test from 'node:test'
 import type { Game365 } from '../src/livescore-365.ts'
 import {
   athletePhotoUrl,
+  crestKeyOf,
   formatRating,
   initialsOf,
   parseLineups,
   parsePhotoRefs,
+  parseStandings,
+  parseStandingsTarget,
+  parseTeamRefs,
   parseWhLineup,
   photoKey,
   positionShort,
   ratingTone,
+  type StandingsTarget,
 } from '../src/match-info.ts'
 import { crestTeamsOf, findCrestTeams, findLinkedGame } from '../src/team-crests.ts'
 
@@ -385,4 +390,237 @@ test('crestTeamsOf e findCrestTeams devolvem os times na ordem do feed', () => {
 
   const reversed = findCrestTeams('Galatasaray', 'Lille', [lille], NOW)
   assert.deepEqual(reversed, { home: lille.awayTeam, away: lille.homeTeam })
+})
+
+function targetRaw(over: Raw = {}): Raw {
+  return {
+    game: {
+      id: GAME_ID,
+      competitionId: 77,
+      seasonNum: 2026,
+      stageNum: 5,
+      statusGroup: 3,
+      homeCompetitor: { id: 10, name: 'Casa' },
+      awayCompetitor: { id: 20, name: 'Fora' },
+      ...over,
+    },
+  }
+}
+
+test('parseStandingsTarget: lê competição, temporada, fase, grupo, times e estado do jogo', () => {
+  assert.deepEqual(parseStandingsTarget(targetRaw({ groupNum: 2 }), GAME_ID), {
+    competitionId: 77,
+    seasonNum: 2026,
+    stageNum: 5,
+    groupNum: 2,
+    teamIds: [10, 20],
+    hasStandings: true,
+    live: true,
+  })
+})
+
+test('parseStandingsTarget: null para outro jogo, sem objeto game ou sem competição, temporada ou fase', () => {
+  assert.equal(parseStandingsTarget(targetRaw(), GAME_ID + 1), null)
+  assert.equal(parseStandingsTarget(targetRaw({ competitionId: undefined }), GAME_ID), null)
+  assert.equal(parseStandingsTarget(targetRaw({ seasonNum: 0 }), GAME_ID), null)
+  assert.equal(parseStandingsTarget(targetRaw({ stageNum: '5' }), GAME_ID), null)
+  assert.equal(parseStandingsTarget({}, GAME_ID), null)
+  assert.equal(parseStandingsTarget(null, GAME_ID), null)
+})
+
+test('parseStandingsTarget: hasStandings só é false quando a API diz false; live só com statusGroup 3', () => {
+  assert.equal(parseStandingsTarget(targetRaw({ hasStandings: false }), GAME_ID)?.hasStandings, false)
+  assert.equal(parseStandingsTarget(targetRaw({ hasStandings: undefined }), GAME_ID)?.hasStandings, true)
+  assert.equal(parseStandingsTarget(targetRaw(), GAME_ID)?.hasStandings, true)
+  assert.equal(parseStandingsTarget(targetRaw({ statusGroup: 4 }), GAME_ID)?.live, false)
+})
+
+test('parseStandingsTarget: groupNum ausente vira null e time sem id fica fora de teamIds', () => {
+  const target = parseStandingsTarget(targetRaw({ homeCompetitor: { name: 'Casa' } }), GAME_ID)
+  assert.ok(target)
+  assert.deepEqual(target.teamIds, [20])
+  assert.equal(target.groupNum, null)
+})
+
+const TARGET: StandingsTarget = {
+  competitionId: 77,
+  seasonNum: 2026,
+  stageNum: 5,
+  groupNum: null,
+  teamIds: [10, 20],
+  hasStandings: true,
+  live: true,
+}
+
+function standingRow(over: Raw = {}): Raw {
+  return {
+    position: 1,
+    points: 0,
+    ratio: 0,
+    gamePlayed: 0,
+    gamesWon: 0,
+    gamesEven: 0,
+    gamesLost: 0,
+    destinationNum: null,
+    competitor: { id: 1, name: 'Time', imageVersion: 1 },
+    ...over,
+  }
+}
+
+function standingsRaw(rows: Raw[], over: Raw = {}): Raw {
+  return {
+    standings: [
+      {
+        competitionId: 77,
+        stageNum: 5,
+        displayName: 'Liga Teste',
+        destinations: [
+          { num: 1, name: 'Libertadores', color: '#00ff00' },
+          { num: 2, name: 'Rebaixamento', color: '#ff0000' },
+          { num: 3, name: 'Sem linha', color: '#123456' },
+        ],
+        rows,
+        ...over,
+      },
+    ],
+  }
+}
+
+test('parseStandings: linhas em ordem de posição, shortName ou name, zonas só as usadas', () => {
+  const raw = standingsRaw([
+    standingRow({ position: 2, points: 7, ratio: 3, gamePlayed: 3, gamesWon: 2, gamesEven: 1, destinationNum: 1, competitor: { id: 10, name: 'Casa Futebol Clube', shortName: 'Casa', imageVersion: 4 } }),
+    standingRow({ position: 1, points: 9, ratio: 5, gamePlayed: 3, gamesWon: 3, destinationNum: 1, competitor: { id: 30, name: 'Lider Esporte', shortName: '', imageVersion: 0 } }),
+    standingRow({ position: 3, points: 4, ratio: -1, gamePlayed: 3, gamesWon: 1, gamesLost: 2, competitor: { id: 20, name: 'Fora', imageVersion: 7 } }),
+    standingRow({ position: 4, points: 1, ratio: -7, gamePlayed: 3, gamesLost: 3, destinationNum: 2, competitor: { id: 40, name: 'Ultimo', imageVersion: 2 } }),
+  ])
+  assert.deepEqual(parseStandings(raw, TARGET), {
+    title: 'Liga Teste',
+    group: '',
+    rows: [
+      { position: 1, name: 'Lider Esporte', competitorId: 30, crestRef: { id: 30, imageVersion: 0 }, played: 3, won: 3, drawn: 0, lost: 0, diff: 5, points: 9, zone: 1 },
+      { position: 2, name: 'Casa', competitorId: 10, crestRef: { id: 10, imageVersion: 4 }, played: 3, won: 2, drawn: 1, lost: 0, diff: 3, points: 7, zone: 1 },
+      { position: 3, name: 'Fora', competitorId: 20, crestRef: { id: 20, imageVersion: 7 }, played: 3, won: 1, drawn: 0, lost: 2, diff: -1, points: 4, zone: null },
+      { position: 4, name: 'Ultimo', competitorId: 40, crestRef: { id: 40, imageVersion: 2 }, played: 3, won: 0, drawn: 0, lost: 3, diff: -7, points: 1, zone: 2 },
+    ],
+    zones: [
+      { num: 1, name: 'Libertadores', color: '#00ff00' },
+      { num: 2, name: 'Rebaixamento', color: '#ff0000' },
+    ],
+  })
+})
+
+test('parseStandings: cor inválida de zona cai para #9bbdad', () => {
+  const raw = {
+    standings: [
+      {
+        competitionId: 77,
+        stageNum: 5,
+        displayName: 'Liga',
+        destinations: [
+          { num: 1, name: 'Verde curto', color: '#fff' },
+          { num: 2, name: 'Nome', color: 'verde' },
+        ],
+        rows: [
+          standingRow({ position: 1, destinationNum: 1, competitor: { id: 10, name: 'Casa', imageVersion: 4 } }),
+          standingRow({ position: 2, destinationNum: 2, competitor: { id: 20, name: 'Fora', imageVersion: 7 } }),
+        ],
+      },
+    ],
+  }
+  const table = parseStandings(raw, TARGET)
+  assert.ok(table)
+  assert.deepEqual(table.zones.map((zone) => zone.color), ['#9bbdad', '#9bbdad'])
+})
+
+test('parseStandings: escolhe a entrada da fase do jogo', () => {
+  const raw = {
+    standings: [
+      { competitionId: 77, stageNum: 4, displayName: 'Fase 1', rows: [standingRow({ competitor: { id: 10, name: 'Casa', imageVersion: 4 } })] },
+      { competitionId: 77, stageNum: 5, displayName: 'Fase 2', rows: [standingRow({ competitor: { id: 20, name: 'Fora', imageVersion: 7 } })] },
+    ],
+  }
+  const table = parseStandings(raw, TARGET)
+  assert.equal(table?.title, 'Fase 2')
+  assert.deepEqual(table?.rows.map((row) => row.competitorId), [20])
+})
+
+test('parseStandings: em competição com grupos, mantém só o grupo do time do jogo', () => {
+  const raw = standingsRaw([
+    standingRow({ position: 1, groupNum: 1, competitor: { id: 99, name: 'Outro G1', imageVersion: 1 } }),
+    standingRow({ position: 2, groupNum: 1, competitor: { id: 10, name: 'Casa', imageVersion: 4 } }),
+    standingRow({ position: 1, groupNum: 2, competitor: { id: 50, name: 'Outro G2', imageVersion: 1 } }),
+    standingRow({ position: 2, groupNum: 2, competitor: { id: 60, name: 'Outro G2b', imageVersion: 1 } }),
+  ])
+  const table = parseStandings(raw, TARGET)
+  assert.ok(table)
+  assert.equal(table.group, 'Grupo 1')
+  assert.deepEqual(table.rows.map((row) => row.competitorId), [99, 10])
+})
+
+test('parseStandings: groupNum do alvo tem prioridade sobre o grupo das linhas', () => {
+  const raw = standingsRaw([
+    standingRow({ position: 1, groupNum: 1, competitor: { id: 99, name: 'Outro G1', imageVersion: 1 } }),
+    standingRow({ position: 2, groupNum: 2, competitor: { id: 10, name: 'Casa', imageVersion: 4 } }),
+    standingRow({ position: 1, groupNum: 2, competitor: { id: 50, name: 'Outro G2', imageVersion: 1 } }),
+  ])
+  const table = parseStandings(raw, { ...TARGET, groupNum: 2 })
+  assert.ok(table)
+  assert.equal(table.group, 'Grupo 2')
+  assert.deepEqual(table.rows.map((row) => row.competitorId), [50, 10])
+})
+
+test('parseStandings: null sem lista de standings, sem linhas úteis ou com linhas sem time', () => {
+  assert.equal(parseStandings(null, TARGET), null)
+  assert.equal(parseStandings({}, TARGET), null)
+  assert.equal(parseStandings({ standings: 'x' }, TARGET), null)
+  assert.equal(parseStandings(standingsRaw([]), TARGET), null)
+  assert.equal(parseStandings(standingsRaw([standingRow({ competitor: { id: 10, name: '', imageVersion: 1 } })]), TARGET), null)
+  assert.equal(parseStandings(standingsRaw([standingRow({ competitor: { name: 'Sem id', imageVersion: 1 } })]), TARGET), null)
+})
+
+test('parseStandings: no máximo 40 linhas', () => {
+  const rows = Array.from({ length: 45 }, (_, index) => standingRow({ position: index + 1, competitor: { id: index + 1, name: `Time ${index + 1}`, imageVersion: 1 } }))
+  const table = parseStandings(standingsRaw(rows), TARGET)
+  assert.equal(table?.rows.length, 40)
+})
+
+test('parseStandings: fase sem entrada própria não deve mostrar tabela de outra competição', () => {
+  const raw = { standings: [{ competitionId: 99, stageNum: 1, rows: [standingRow({ competitor: { id: 10, name: 'Casa', imageVersion: 4 } })] }] }
+  assert.equal(parseStandings(raw, TARGET), null)
+})
+
+test('parseTeamRefs: lista válida, versão 0 aceita e limite de 40 itens', () => {
+  assert.deepEqual(parseTeamRefs([{ id: 5, imageVersion: 0 }, { id: 7, imageVersion: 12 }]), [
+    { id: 5, imageVersion: 0 },
+    { id: 7, imageVersion: 12 },
+  ])
+  assert.deepEqual(parseTeamRefs([]), [])
+  const forty = Array.from({ length: 40 }, (_, index) => ({ id: index + 1, imageVersion: 1 }))
+  assert.equal(parseTeamRefs(forty)?.length, 40)
+  const fortyOne = Array.from({ length: 41 }, (_, index) => ({ id: index + 1, imageVersion: 1 }))
+  assert.equal(parseTeamRefs(fortyOne), null)
+})
+
+test('parseTeamRefs: rejeita formato errado, id inválido e versão negativa, fracionada ou ausente', () => {
+  assert.equal(parseTeamRefs({ id: 1, imageVersion: 1 }), null)
+  assert.equal(parseTeamRefs('7'), null)
+  assert.equal(parseTeamRefs(undefined), null)
+  assert.equal(parseTeamRefs([null]), null)
+  assert.equal(parseTeamRefs(['7']), null)
+  assert.equal(parseTeamRefs([{ id: 0, imageVersion: 1 }]), null)
+  assert.equal(parseTeamRefs([{ id: -3, imageVersion: 1 }]), null)
+  assert.equal(parseTeamRefs([{ id: 1.5, imageVersion: 1 }]), null)
+  assert.equal(parseTeamRefs([{ id: '7', imageVersion: 1 }]), null)
+  assert.equal(parseTeamRefs([{ id: 1, imageVersion: -1 }]), null)
+  assert.equal(parseTeamRefs([{ id: 1, imageVersion: 1.5 }]), null)
+  assert.equal(parseTeamRefs([{ id: 1 }]), null)
+})
+
+test('parseTeamRefs: versão null não deve virar 0', () => {
+  assert.equal(parseTeamRefs([{ id: 1, imageVersion: null }]), null)
+})
+
+test('crestKeyOf é id:versão', () => {
+  assert.equal(crestKeyOf({ id: 10, imageVersion: 4 }), '10:4')
+  assert.equal(crestKeyOf({ id: 10, imageVersion: 0 }), '10:0')
 })

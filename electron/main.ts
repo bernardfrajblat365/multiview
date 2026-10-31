@@ -11,8 +11,8 @@ import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
 import { createTeamCrests } from './team-crests'
-import { createMatchInfo, loadAthletePhotos } from './match-info'
-import { parsePhotoRefs, type InfoTabId } from '../src/match-info'
+import { createMatchInfo, loadAthletePhotos, loadTableCrests } from './match-info'
+import { parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
 import { createScoreboardScanners, type ScannerClock, type ScannerScore } from './scoreboard-scanner'
 import {
   createLoadPacer,
@@ -1275,13 +1275,17 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:match-info', async (event, request: unknown) => {
     if (!isUiSender(event)) return { status: 'error' }
     const row = request && typeof request === 'object' ? request as { panelId?: unknown; tab?: unknown } : null
-    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : null
+    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : row?.tab === 'standings' ? 'standings' : null
     if (!row || typeof row.panelId !== 'string' || row.panelId.length > 64 || !tab) return { status: 'error' }
     return matchInfo.load({ panelId: row.panelId, tab })
   })
   ipcMain.handle('quadra:athlete-photos', async (event, refs: unknown) => {
     const valid = isUiSender(event) ? parsePhotoRefs(refs) : null
     return valid ? loadAthletePhotos(valid) : {}
+  })
+  ipcMain.handle('quadra:table-crests', async (event, refs: unknown) => {
+    const valid = isUiSender(event) ? parseTeamRefs(refs) : null
+    return valid ? loadTableCrests(valid) : {}
   })
   ipcMain.on('quadra:open-monitor', (event) => {
     if (isUiSender(event)) openMonitorWindow()

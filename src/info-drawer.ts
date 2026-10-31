@@ -1,5 +1,6 @@
 import {
   INFO_TABS,
+  crestKeyOf,
   formatRating,
   initialsOf,
   photoKey,
@@ -10,6 +11,8 @@ import {
   type LineupTeam,
   type MatchInfoResult,
   type PhotoRef,
+  type StandingRow,
+  type StandingsTable,
 } from './match-info'
 
 /** O que a gaveta precisa saber do resto do app. */
@@ -64,6 +67,8 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
   let panelId: string | null = null
   let tab: InfoTabId = 'lineup'
   let state: LoadState = { kind: 'loading' }
+  /** O último resultado de cada aba: trocar de aba mostra o que já se sabe enquanto a busca nova roda. */
+  const results = new Map<InfoTabId, MatchInfoResult>()
   let element: HTMLElement | null = null
   let requestToken = 0
   let refreshTimer: number | null = null
@@ -71,6 +76,8 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
   /** Fotos já resolvidas (null: o jogador não tem foto). Ficam na memória: reabrir a gaveta é instantâneo. */
   const photos = new Map<string, string | null>()
   const photoRequested = new Set<string>()
+  const tableCrests = new Map<string, string | null>()
+  const crestRequested = new Set<string>()
 
   function selectedTeam(id: string): 0 | 1 {
     return teamChoice.get(id) ?? deps.firstTeam(id)
@@ -108,14 +115,44 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     return `<button type="button" role="tab" class="info-team${selected ? ' is-selected' : ''}" aria-selected="${selected}" data-info-team="${index}" title="${esc(team.name)}">${crest ? `<img src="${esc(crest)}" alt="" />` : ''}<span>${esc(team.name)}</span></button>`
   }
 
+  function standingsRowHtml(row: StandingRow, table: StandingsTable, highlight: ReadonlySet<number>, showDraws: boolean, showPoints: boolean) {
+    const zone = row.zone === null ? undefined : table.zones.find((item) => item.num === row.zone)
+    const crestKey = row.crestRef ? crestKeyOf(row.crestRef) : ''
+    const crest = crestKey ? tableCrests.get(crestKey) : null
+    const marked = highlight.has(row.competitorId)
+    const sign = row.diff > 0 ? '+' : ''
+    return `<li class="info-standing${marked ? ' is-highlighted' : ''}" data-info-standing${marked ? ' data-highlighted' : ''}>
+      <span class="info-standing__pos"${zone ? ` style="--zone:${zone.color}" title="${esc(zone.name)}"` : ''}>${row.position}</span>
+      <span class="info-standing__team"><span class="info-standing__crest"${crestKey ? ` data-crest="${esc(crestKey)}"` : ''}>${crest ? `<img src="${esc(crest)}" alt="" />` : ''}</span><span class="info-standing__name" title="${esc(row.name)}">${esc(row.name)}</span></span>
+      <span class="info-standing__num">${row.played}</span>
+      <span class="info-standing__num info-standing__opt">${row.won}</span>
+      ${showDraws ? `<span class="info-standing__num info-standing__opt">${row.drawn}</span>` : ''}
+      <span class="info-standing__num info-standing__opt">${row.lost}</span>
+      <span class="info-standing__num info-standing__opt">${sign}${row.diff}</span>
+      ${showPoints ? `<span class="info-standing__num info-standing__pts">${row.points ?? '–'}</span>` : ''}
+    </li>`
+  }
+
+  function standingsHtml(table: StandingsTable, highlight: readonly number[]) {
+    const marked = new Set(highlight)
+    const showDraws = table.rows.some((row) => row.drawn > 0)
+    const showPoints = table.rows.some((row) => (row.points ?? 0) > 0)
+    const head = `<div class="info-standing info-standing--head" aria-hidden="true"><span class="info-standing__pos">#</span><span class="info-standing__team">Time</span><span class="info-standing__num">J</span><span class="info-standing__num info-standing__opt">V</span>${showDraws ? '<span class="info-standing__num info-standing__opt">E</span>' : ''}<span class="info-standing__num info-standing__opt">D</span><span class="info-standing__num info-standing__opt">SG</span>${showPoints ? '<span class="info-standing__num info-standing__pts">P</span>' : ''}</div>`
+    const title = [table.title, table.group].filter(Boolean).join(' · ')
+    const legend = table.zones.length ? `<ul class="info-legend" data-info-legend>${table.zones.map((zone) => `<li style="--zone:${zone.color}"><span class="info-legend__dot"></span>${esc(zone.name)}</li>`).join('')}</ul>` : ''
+    const rows = table.rows.map((row) => standingsRowHtml(row, table, marked, showDraws, showPoints)).join('')
+    return `${title ? `<p class="info-note" data-info-note>${esc(title)}</p>` : ''}${head}<ol class="info-list info-table${showDraws ? '' : ' no-draws'}${showPoints ? '' : ' no-points'}" data-info-list>${rows}</ol>${legend}`
+  }
+
   function bodyHtml(id: string) {
     if (state.kind === 'loading') {
       return `<div class="info-skeleton" aria-busy="true">${'<div class="info-skeleton__row"></div>'.repeat(SKELETON_ROWS)}</div>`
     }
     const result = state.result
-    if (result.status === 'none') return '<p class="info-message" data-info-message>Escalação ainda não divulgada</p>'
+    if (result.status === 'none') return `<p class="info-message" data-info-message>${tab === 'standings' ? 'Este jogo não tem tabela de campeonato' : 'Escalação ainda não divulgada'}</p>`
     if (result.status === 'error') return '<p class="info-message" data-info-message>Não foi possível carregar o 365Scores</p><button type="button" class="btn btn--load info-retry" data-info-retry>Tentar de novo</button>'
     if (result.status !== 'ok') return ''
+    if (result.tab === 'standings') return standingsHtml(result.table, result.highlight)
     const index = selectedTeam(id)
     const team = result.teams[index]
     const note = result.source === 'wh' ? 'Fonte: William Hill' : team.confirmed ? 'Escalação confirmada' : 'Escalação provável'
@@ -137,12 +174,40 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     if (body) body.innerHTML = bodyHtml(panelId)
     const restored = element.querySelector<HTMLElement>('[data-info-list]')
     if (restored) restored.scrollTop = scroll
+    if (restored && tab === 'standings' && !list) scrollToHighlighted(restored)
     loadPhotos()
+    loadCrests()
+  }
+
+  /** A tabela abre mostrando os times do jogo, mesmo numa competição com muitos times. */
+  function scrollToHighlighted(list: HTMLElement) {
+    const first = list.querySelector<HTMLElement>('[data-highlighted]')
+    if (!first) return
+    list.scrollTop = Math.max(0, first.offsetTop - list.offsetTop - (list.clientHeight - first.offsetHeight) / 2)
+  }
+
+  /** Os escudos da tabela chegam depois do texto, como as fotos da escalação. */
+  function loadCrests() {
+    if (state.kind !== 'result' || state.result.status !== 'ok' || state.result.tab !== 'standings') return
+    const refs = state.result.table.rows.flatMap((row) => row.crestRef ?? []).filter((ref) => !crestRequested.has(crestKeyOf(ref)))
+    if (refs.length === 0) return
+    for (const ref of refs) crestRequested.add(crestKeyOf(ref))
+    void window.quadra?.getTableCrests(refs).then((found) => {
+      for (const ref of refs) {
+        const key = crestKeyOf(ref)
+        const url = found[key] ?? null
+        tableCrests.set(key, url)
+        if (!url) continue
+        for (const slot of element?.querySelectorAll<HTMLElement>(`[data-crest="${key}"]`) ?? []) slot.innerHTML = `<img src="${esc(url)}" alt="" />`
+      }
+    }).catch(() => {
+      for (const ref of refs) crestRequested.delete(crestKeyOf(ref))
+    })
   }
 
   /** As fotos chegam depois do texto: o time escolhido primeiro, depois o outro. */
   function loadPhotos() {
-    if (state.kind !== 'result' || state.result.status !== 'ok' || !panelId) return
+    if (state.kind !== 'result' || state.result.status !== 'ok' || state.result.tab !== 'lineup' || !panelId) return
     const result = state.result
     const first = selectedTeam(panelId)
     for (const team of [result.teams[first], result.teams[first === 0 ? 1 : 0]]) {
@@ -175,23 +240,26 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
 
   async function fetchInfo(id: string, showLoading: boolean) {
     const token = ++requestToken
+    const requested = tab
     if (showLoading) {
       state = { kind: 'loading' }
       render()
     }
     let result: MatchInfoResult
     try {
-      result = window.quadra ? await window.quadra.getMatchInfo({ panelId: id, tab }) : { status: 'error' }
+      result = window.quadra ? await window.quadra.getMatchInfo({ panelId: id, tab: requested }) : { status: 'error' }
     } catch {
       result = { status: 'error' }
     }
-    if (token !== requestToken || panelId !== id) return
+    if (token !== requestToken || panelId !== id || tab !== requested) return
     if (result.status === 'no-game') {
       close()
       return
     }
     // Uma atualização que falhou não apaga a escalação que já está na tela.
     if (!(result.status === 'error' && state.kind === 'result' && state.result.status === 'ok')) state = { kind: 'result', result }
+    if (result.status === 'ok') results.set(requested, result)
+    else results.delete(requested)
     render()
     scheduleRefresh()
   }
@@ -246,6 +314,7 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     }
     panelId = id
     tab = 'lineup'
+    results.clear()
     element.dataset.panelId = id
     const tabs = element.querySelector<HTMLElement>('[data-info-tabs]')
     if (tabs) tabs.innerHTML = tabsHtml()
@@ -264,6 +333,7 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     element?.remove()
     element = null
     panelId = null
+    results.clear()
     state = { kind: 'loading' }
     deps.onChange()
   }
@@ -273,6 +343,17 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     else open(id)
   }
 
+  function selectTab(next: InfoTabId) {
+    if (!panelId || !element) return
+    tab = next
+    const known = results.get(next)
+    state = known ? { kind: 'result', result: known } : { kind: 'loading' }
+    const tabs = element.querySelector<HTMLElement>('[data-info-tabs]')
+    if (tabs) tabs.innerHTML = tabsHtml()
+    render()
+    void fetchInfo(panelId, false)
+  }
+
   function onClick(event: MouseEvent) {
     const target = event.target as HTMLElement
     if (target.closest('[data-info-close]')) {
@@ -280,6 +361,11 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
       return
     }
     if (!panelId) return
+    const tabId = target.closest<HTMLElement>('[data-info-tab]')?.dataset.infoTab
+    if (tabId && tabId !== tab && INFO_TABS.some((item) => item.id === tabId)) {
+      selectTab(tabId as InfoTabId)
+      return
+    }
     const team = target.closest<HTMLElement>('[data-info-team]')?.dataset.infoTeam
     if (team === '0' || team === '1') {
       teamChoice.set(panelId, team === '1' ? 1 : 0)

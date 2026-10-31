@@ -4,7 +4,7 @@ import type { YoutubeChannelResult, YoutubeLivesResult } from '../src/youtube-li
 import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
 import type { MatchClock } from '../src/match-clock'
-import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
+import type { LiveMatchStatus, LiveVarPayload, TeamRef365 } from '../src/livescore-365'
 import type { MatchInfoReady, MatchInfoRequest, MatchInfoResult, PhotoRef } from '../src/match-info'
 
 type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
@@ -119,6 +119,7 @@ const quadra = {
     return () => ipcRenderer.removeListener('quadra:match-clock', listener)
   },
   getMatchInfo: (request: MatchInfoRequest): Promise<MatchInfoResult> => ipcRenderer.invoke('quadra:match-info', request),
+  getTableCrests: (refs: TeamRef365[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('quadra:table-crests', refs),
   getAthletePhotos: (refs: PhotoRef[]): Promise<Record<string, string | null>> => ipcRenderer.invoke('quadra:athlete-photos', refs),
   onMatchInfoReady: (callback: (payload: MatchInfoReady) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, payload: MatchInfoReady) => callback(payload)

@@ -3,7 +3,7 @@ import type { YoutubeChannelResult, YoutubeLivesResult } from './youtube-lives'
 import type { LayoutPayload } from './layout'
 import type { AlertKind } from './match-events'
 import type { MatchClock } from './match-clock'
-import type { LiveMatchStatus, LiveVarPayload } from './livescore-365'
+import type { LiveMatchStatus, LiveVarPayload, TeamRef365 } from './livescore-365'
 import type { MatchInfoReady, MatchInfoRequest, MatchInfoResult, PhotoRef } from './match-info'
 
 /** A dialog the main process asks the overlay to draw (update prompts); answer with `respondUiDialog`. */
@@ -51,6 +51,7 @@ type QuadraBridge = {
   onLiveVar: (callback: (payload: LiveVarPayload) => void) => () => void
   chooseLiveMatch: (panelId: string, gameId: number | null) => void
   getMatchInfo: (request: MatchInfoRequest) => Promise<MatchInfoResult>
+  getTableCrests: (refs: TeamRef365[]) => Promise<Record<string, string | null>>
   getAthletePhotos: (refs: PhotoRef[]) => Promise<Record<string, string | null>>
   onMatchInfoReady: (callback: (payload: MatchInfoReady) => void) => () => void
   onPanelTitle: (callback: (payload: { panelId: string; title: string }) => void) => () => void

@@ -1,10 +1,13 @@
 import type { TeamRef365 } from './livescore-365.ts'
 import { formatPlayerName } from './match-events.ts'
 
-/** Abas da gaveta de informações do jogo. Por enquanto só a escalação aparece; as outras já estão previstas no tipo. */
+/** Abas da gaveta de informações do jogo. Escalação e tabela aparecem; as outras já estão previstas no tipo. */
 export type InfoTabId = 'lineup' | 'standings' | 'odds' | 'games'
 
-export const INFO_TABS: readonly { id: InfoTabId; label: string }[] = [{ id: 'lineup', label: 'Escalação' }]
+export const INFO_TABS: readonly { id: InfoTabId; label: string }[] = [
+  { id: 'lineup', label: 'Escalação' },
+  { id: 'standings', label: 'Tabela' },
+]
 
 /** Foto de um atleta no CDN do 365Scores: o id e a versão bastam para montar a URL. */
 export type PhotoRef = { athleteId: number; imageVersion: number }
@@ -40,9 +43,37 @@ export type LineupSource = '365' | 'wh'
 /** Pedido da UI ao main (`quadra:match-info`). */
 export type MatchInfoRequest = { panelId: string; tab: InfoTabId }
 
+/** Uma linha da tabela do campeonato. */
+export type StandingRow = {
+  position: number
+  name: string
+  competitorId: number
+  crestRef: TeamRef365 | null
+  played: number
+  won: number
+  drawn: number
+  lost: number
+  /** Saldo de gols (ou de pontos, nos esportes sem gol). */
+  diff: number
+  points: number | null
+  /** Zona da tabela (`StandingsTable.zones[n].num`), ou null no meio da tabela. */
+  zone: number | null
+}
+
+export type StandingsZone = { num: number; name: string; color: string }
+
+export type StandingsTable = {
+  title: string
+  /** Fase/grupo mostrado ("Grupo 2"); vazio quando a competição tem uma tabela só. */
+  group: string
+  rows: StandingRow[]
+  zones: StandingsZone[]
+}
+
 /** Resposta do main; os times vêm na ordem do feed do painel. */
 export type MatchInfoResult =
   | { status: 'ok'; tab: 'lineup'; teams: [LineupTeam, LineupTeam]; live: boolean; source: LineupSource }
+  | { status: 'ok'; tab: 'standings'; table: StandingsTable; /** Ids dos times do jogo, destacados na tabela. */ highlight: number[]; live: boolean }
   | { status: 'none' }
   | { status: 'no-game' }
   | { status: 'error' }
@@ -122,6 +153,10 @@ export function initialsOf(name: string) {
   return (first + last).toUpperCase()
 }
 
+export function crestKeyOf(ref: TeamRef365) {
+  return `${ref.id}:${ref.imageVersion}`
+}
+
 export function photoKey(ref: PhotoRef) {
   return `${ref.athleteId}:${ref.imageVersion}`
 }
@@ -146,6 +181,20 @@ export function parsePhotoRefs(value: unknown): PhotoRef[] | null {
     const imageVersion = row ? positiveInt(row.imageVersion) : null
     if (athleteId === null || imageVersion === null) return null
     refs.push({ athleteId, imageVersion })
+  }
+  return refs
+}
+
+/** Valida o pedido de escudos da tabela: até 40 times, ids inteiros seguros; a versão da imagem pode ser 0. */
+export function parseTeamRefs(value: unknown): TeamRef365[] | null {
+  if (!Array.isArray(value) || value.length > MAX_TABLE_ROWS) return null
+  const refs: TeamRef365[] = []
+  for (const item of value) {
+    const row = record(item)
+    const id = row ? positiveInt(row.id) : null
+    const version = row && typeof row.imageVersion === 'number' ? row.imageVersion : NaN
+    if (id === null || !Number.isSafeInteger(version) || version < 0) return null
+    refs.push({ id, imageVersion: version })
   }
   return refs
 }
@@ -270,4 +319,88 @@ export function parseWhLineup(raw: unknown, homeName: string, awayName: string):
   const home = whTeam(text(homeName), row.home, row.homeCoach)
   const away = whTeam(text(awayName), row.away, row.awayCoach)
   return home.players.length === 0 && away.players.length === 0 ? null : [home, away]
+}
+
+/** Onde fica a tabela do campeonato de um jogo (resposta de `/web/game/`). */
+export type StandingsTarget = { competitionId: number; seasonNum: number; stageNum: number; groupNum: number | null; teamIds: number[]; hasStandings: boolean; live: boolean }
+
+export function parseStandingsTarget(raw: unknown, gameId: number): StandingsTarget | null {
+  const game = record(record(raw)?.game)
+  if (!game || Number(game.id) !== gameId) return null
+  const competitionId = positiveInt(game.competitionId)
+  const seasonNum = positiveInt(game.seasonNum)
+  const stageNum = positiveInt(game.stageNum)
+  if (competitionId === null || seasonNum === null || stageNum === null) return null
+  const teamIds = [record(game.homeCompetitor)?.id, record(game.awayCompetitor)?.id].map(positiveInt).filter((id): id is number => id !== null)
+  return {
+    competitionId, seasonNum, stageNum,
+    groupNum: positiveInt(game.groupNum),
+    teamIds,
+    hasStandings: game.hasStandings !== false,
+    live: Number(game.statusGroup) === 3,
+  }
+}
+
+const MAX_TABLE_ROWS = 40
+
+function count(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : 0
+}
+
+function color(value: unknown) {
+  return typeof value === 'string' && /^#[0-9a-f]{6}$/i.test(value) ? value : '#9bbdad'
+}
+
+/**
+ * Tabela de uma resposta de `/web/standings/`: a da fase do jogo, e, em competição com grupos, só o grupo dos times
+ * (o do jogo, ou o de uma das linhas dos dois times). Null quando a resposta não traz uma tabela utilizável.
+ */
+export function parseStandings(raw: unknown, target: StandingsTarget): StandingsTable | null {
+  const list = record(raw)?.standings
+  if (!Array.isArray(list)) return null
+  const entry = list.map(record).find((item) => item && Number(item.competitionId) === target.competitionId && Number(item.stageNum) === target.stageNum)
+  if (!entry || !Array.isArray(entry.rows)) return null
+  const all = entry.rows.map(record).filter((row): row is Record<string, unknown> => row !== null)
+  const groupOf = (row: Record<string, unknown>) => positiveInt(row.groupNum)
+  const own = all.find((row) => target.teamIds.includes(Number(record(row.competitor)?.id)))
+  const groupNum = target.groupNum ?? (own ? groupOf(own) : null)
+  const groups = new Set(all.map(groupOf))
+  const rows = (groups.size > 1 && groupNum !== null ? all.filter((row) => groupOf(row) === groupNum) : all).slice(0, MAX_TABLE_ROWS)
+  const zones = (Array.isArray(entry.destinations) ? entry.destinations : []).flatMap((item): StandingsZone[] => {
+    const row = record(item)
+    const num = row ? positiveInt(row.num) : null
+    const name = row ? text(row.name) : ''
+    return row && num !== null && name ? [{ num, name, color: color(row.color) }] : []
+  })
+  const parsed: StandingRow[] = []
+  for (const row of rows) {
+    const competitor = record(row.competitor)
+    const competitorId = competitor ? positiveInt(competitor.id) : null
+    const name = competitor ? text(competitor.shortName) || text(competitor.name) : ''
+    if (!competitor || competitorId === null || !name) continue
+    const points = Number(row.points)
+    parsed.push({
+      position: positiveInt(row.position) ?? parsed.length + 1,
+      name,
+      competitorId,
+      crestRef: { id: competitorId, imageVersion: Number.isSafeInteger(Number(competitor.imageVersion)) ? Number(competitor.imageVersion) : 0 },
+      played: count(row.gamePlayed),
+      won: count(row.gamesWon),
+      drawn: count(row.gamesEven),
+      lost: count(row.gamesLost),
+      diff: Number.isFinite(Number(row.ratio)) ? Math.trunc(Number(row.ratio)) : 0,
+      points: Number.isFinite(points) && points >= 0 ? Math.trunc(points) : null,
+      zone: positiveInt(row.destinationNum),
+    })
+  }
+  if (parsed.length === 0) return null
+  parsed.sort((a, b) => a.position - b.position)
+  const usedZones = zones.filter((zone) => parsed.some((row) => row.zone === zone.num))
+  return {
+    title: text(entry.displayName),
+    group: groupNum !== null && groups.size > 1 ? `Grupo ${groupNum}` : '',
+    rows: parsed,
+    zones: usedZones,
+  }
 }

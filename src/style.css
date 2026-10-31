@@ -772,3 +772,29 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .info-skeleton__row { height: 1.75rem; border-radius: 0.4rem; background: linear-gradient(90deg, var(--bg-mid), rgba(11, 61, 46, 0.4), var(--bg-mid)); background-size: 200% 100%; animation: info-skeleton 1.2s linear infinite; }
 @keyframes info-skeleton { from { background-position: 200% 0; } to { background-position: -200% 0; } }
 @media (prefers-reduced-motion: reduce) { .info-skeleton__row { animation: none; } }
+/* Aba Tabela da gaveta: o mesmo verde da escalação; os dois times do jogo ficam em destaque. */
+.info-drawer__body { container-type: inline-size; }
+.info-standing { display: grid; grid-template-columns: 1.5rem minmax(0, 1fr) repeat(5, 1.6rem) 1.9rem; align-items: center; gap: 0.2rem; padding: 0.2rem 0.3rem; border-bottom: 1px solid rgba(11, 61, 46, 0.7); font-size: 0.78rem; }
+.info-table.no-draws .info-standing, .info-standing--head:has(+ .info-table.no-draws) { grid-template-columns: 1.5rem minmax(0, 1fr) repeat(4, 1.6rem) 1.9rem; }
+.info-table.no-points .info-standing { grid-template-columns: 1.5rem minmax(0, 1fr) repeat(5, 1.6rem); }
+.info-table.no-draws.no-points .info-standing { grid-template-columns: 1.5rem minmax(0, 1fr) repeat(4, 1.6rem); }
+.info-standing--head { flex: none; border-bottom-color: var(--bg-mid); color: var(--ink-muted); font-size: 0.68rem; font-weight: 700; text-transform: uppercase; }
+.info-standing__pos { position: relative; padding-left: 0.3rem; text-align: right; color: var(--ink-muted); font-variant-numeric: tabular-nums; font-weight: 700; }
+.info-standing__pos[style]::before { content: ''; position: absolute; left: 0; top: 0.1rem; bottom: 0.1rem; width: 3px; border-radius: 2px; background: var(--zone); }
+.info-standing__team { display: flex; align-items: center; gap: 0.35rem; min-width: 0; }
+.info-standing__crest { display: grid; place-items: center; flex: none; width: 1.2rem; height: 1.2rem; }
+.info-standing__crest img { width: 100%; height: 100%; object-fit: contain; }
+.info-standing__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.info-standing__num { text-align: center; color: var(--ink-muted); font-variant-numeric: tabular-nums; }
+.info-standing__pts { color: var(--ink); font-weight: 700; }
+.info-standing.is-highlighted { border-radius: 0.4rem; background: var(--accent); color: var(--accent-ink); }
+.info-standing.is-highlighted .info-standing__pos, .info-standing.is-highlighted .info-standing__num { color: var(--accent-ink); }
+.info-standing.is-highlighted .info-standing__pos[style]::before { background: var(--accent-ink); }
+.info-legend { display: flex; flex-wrap: wrap; gap: 0.2rem 0.7rem; flex: none; margin: 0.1rem 0 0; padding: 0; list-style: none; color: var(--ink-muted); font-size: 0.66rem; }
+.info-legend li { display: flex; align-items: center; gap: 0.3rem; }
+.info-legend__dot { width: 0.5rem; height: 0.5rem; border-radius: 50%; background: var(--zone); }
+/* Gaveta estreita: só posição, time, jogos e pontos. */
+@container (max-width: 17rem) {
+  .info-standing { grid-template-columns: 1.5rem minmax(0, 1fr) 1.6rem 1.9rem !important; }
+  .info-standing__opt { display: none; }
+}

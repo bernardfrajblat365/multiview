@@ -261,7 +261,7 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
   .panel__label-roll-strip,
   .panel__label-crest--new { animation: none; }
 }
-.panel__controls { position: absolute; top: 0.45rem; left: 0.45rem; z-index: 22; display: flex; gap: 0.3rem; opacity: 0; pointer-events: none; transition: opacity 0.16s ease; }
+.panel__controls { position: absolute; top: 0.45rem; left: 0.45rem; z-index: 22; display: flex; flex-wrap: wrap; max-width: calc(100% - 0.9rem); gap: 0.3rem; opacity: 0; pointer-events: none; transition: opacity 0.16s ease; }
 .panel__controls .btn { width: 1.85rem; min-width: 1.85rem; height: 1.85rem; font-size: 0.95rem; background: rgba(7,26,20,0.9); }
 .panel__controls .panel__mute, .panel__controls .panel__delay { width: auto; padding: 0 0.5rem; font-size: 0.75rem; white-space: nowrap; }
 .panel__controls .panel__remove { font-size: 0.9rem; }

@@ -261,7 +261,7 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
   .panel__label-roll-strip,
   .panel__label-crest--new { animation: none; }
 }
-.panel__controls { position: absolute; top: 0.45rem; left: 0.45rem; z-index: 22; display: flex; gap: 0.3rem; opacity: 0; pointer-events: none; transition: opacity 0.16s ease; }
+.panel__controls { position: absolute; top: 0.45rem; left: 0.45rem; z-index: 22; display: flex; flex-wrap: wrap; max-width: calc(100% - 0.9rem); gap: 0.3rem; opacity: 0; pointer-events: none; transition: opacity 0.16s ease; }
 .panel__controls .btn { width: 1.85rem; min-width: 1.85rem; height: 1.85rem; font-size: 0.95rem; background: rgba(7,26,20,0.9); }
 .panel__controls .panel__mute, .panel__controls .panel__delay { width: auto; padding: 0 0.5rem; font-size: 0.75rem; white-space: nowrap; }
 .panel__controls .panel__remove { font-size: 0.9rem; }
@@ -740,6 +740,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .panel__alerts-icon { display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
 .panel__controls .panel__alerts[aria-pressed="true"] { color: #ffb0a8; border-color: rgba(255, 126, 116, 0.72); }
 
+/* Panel living in the floating window: a quiet placeholder, no alert ring of its own. */
+.panel--pip { z-index: 4; display: grid; place-items: center; pointer-events: auto; background: repeating-linear-gradient(45deg, rgba(10,42,32,0.9) 0 14px, rgba(8,34,26,0.9) 14px 28px); }
+.panel--pip .panel__alert, .panel--pip .panel__var { display: none; }
+.panel__pip-note { display: grid; justify-items: center; gap: 0.5rem; padding: 0.5rem; text-align: center; }
+.panel__pip svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
+.panel__pip .panel__pip-fill { fill: currentColor; }
 /* Botão de camisa nos controles do painel e gaveta com a escalação do jogo. */
 .panel__info-icon { width: 1.1em; height: 1.1em; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
 .panel__controls .panel__info.is-open { color: var(--accent); border-color: var(--accent); }

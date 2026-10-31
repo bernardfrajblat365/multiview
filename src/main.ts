@@ -29,8 +29,9 @@ import {
   type CompetitionMode,
   type CompetitionRule,
 } from './auto-open'
-import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, handleScorerName, onAlertSettingsChange, onAlertShown, onVarReviewStarted, setVarReview, type MatchEventPayload } from './alert-ui'
+import { alertControlsHtml, applyAlertStates, bindAlertControls, clearAlert, clearVarReview, getAlertSettings, handleMatchEvent, handleScorerName, alertView, onAlertSettingsChange, onAlertShown, onAlertStatesChange, onVarReviewStarted, setVarReview, varReviewView, type MatchEventPayload } from './alert-ui'
 import { LIVE_DELAY_OPTIONS } from './alert-settings'
+import type { PipCommand, PipState } from './pip'
 import { createInfoDrawer, updateInfoButton } from './info-drawer'
 import { FIRST_STEPS, markFirstStepsSeen, readFirstStepsSeen, shouldShowFirstSteps } from './first-steps'
 import { RELEASES, markVersionSeen, readLastSeenVersion, releaseHistory, releaseToShow, type Release } from './release-notes'
@@ -115,10 +116,16 @@ let organizerNotice = ''
 let history: LayoutSnapshot[] = []
 let nativeFullscreen = false
 let layoutSyncFrame: number | null = null
+let layoutSyncTimer: number | null = null
 let layoutResizeFrame: number | null = null
 let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
+/** The panels living in their own floating windows (picture-in-picture), memory only. */
+const pipPanels = new Set<PanelId>()
+/** What each floating window was last sent, to send again only what changed. */
+const pipStateJson = new Map<PanelId, string>()
+let pipTimer: number | null = null
 let showMatchLabels = true
 const forceReloadIds = new Set<PanelId>()
 /** Panels promoted to highlights by a goal; they return to the user's layout after the chosen time. */
@@ -748,7 +755,8 @@ function tickAuto() {
 /** `reason: 'var'`: a VAR review, highlighted until it ends (capped by `VAR_MAX_MS`). */
 function startAutoGoal(panelId: PanelId, reason?: 'var') {
   const alertSettings = getAlertSettings()
-  if (view !== 'grid' || panels.length < AUTO_MIN_PANELS || !alertSettings.autoHighlight) return
+  // A panel in the floating window has no place in the grid to highlight; its alert still shows there.
+  if (view !== 'grid' || pipPanels.has(panelId) || panels.length < AUTO_MIN_PANELS || !alertSettings.autoHighlight) return
   if (!autoBaseline) {
     autoBaseline = { highlighted: [...highlighted], mode: layoutMode, position: highlightPosition, variant: compositionVariant }
   }
@@ -796,7 +804,7 @@ function swapPanelInfo(panel: Panel, now: number): SwapPanelInfo {
     elapsed: clock?.elapsed ?? null,
     score: feed ? visibleScore(feed.timeline, now, delay) : null,
     mainTeam,
-    alertsOff: panel.alertsOff,
+    alertsOff: panel.alertsOff || pipPanels.has(panel.id),
   }
 }
 
@@ -1036,7 +1044,7 @@ function updateLiveControls() {
   const globalSec = getAlertSettings().scoreDelaySec
   for (const panelElement of app.querySelectorAll<HTMLElement>('.panel[data-panel-id]')) {
     const id = panelElement.dataset.panelId ?? ''
-    const live = panelById(id)?.url ? panelLive.get(id) : undefined
+    const live = panelById(id)?.url && !pipPanels.has(id) ? panelLive.get(id) : undefined
     updateLiveDelayButton(panelElement, id, live, globalSec)
     updateInfoButton(panelElement, matchInfoReady.has(id) && Boolean(panelById(id)?.url), infoDrawer.openPanelId() === id)
     let prompt = panelElement.querySelector<HTMLElement>(':scope > .panel__live')
@@ -1056,6 +1064,15 @@ function updateLiveControls() {
       `<button type="button" class="btn btn--load" data-live-choose="${candidate.id}" title="${escapeHtml(candidate.detail)}">${escapeHtml(candidate.label)}</button>`).join('')}<button type="button" class="btn btn--ghost" data-live-choose="none">Nenhum</button>`
   }
   if (liveDelayMenuPanel && !app.querySelector(`.panel[data-panel-id="${CSS.escape(liveDelayMenuPanel)}"] .panel__delay`)) closeLiveDelayMenu()
+}
+
+/** The panel's own alert and score delay: 'default' follows the global setting. */
+function setPanelDelay(id: PanelId, value: 'default' | number) {
+  if (value === 'default') panelDelayOverride.delete(id)
+  else panelDelayOverride.set(id, value)
+  updateLiveControls()
+  updatePanelLabels()
+  syncPipState()
 }
 
 /** Shows or ends a VAR review now; its end leaves the highlight a few more seconds for the decision. */
@@ -1864,10 +1881,10 @@ function applyAutoOpen() {
   }
   // Oldest Auto panels last, in the order they were opened: the first to give way to a main-team game.
   const ordered = [
-    ...panels.filter((panel) => !autoOpenPanels.has(panel.id)),
-    ...[...autoOpenPanels.keys()].map((id) => panelById(id)).filter((panel): panel is Panel => Boolean(panel)),
+    ...panels.filter((panel) => !autoOpenPanels.has(panel.id) || pipPanels.has(panel.id)),
+    ...[...autoOpenPanels.keys()].filter((id) => !pipPanels.has(id)).map((id) => panelById(id)).filter((panel): panel is Panel => Boolean(panel)),
   ]
-  const plan = planAutoOpen(ordered.map((panel) => ({ id: panel.id, url: panel.url, auto: autoOpenPanels.has(panel.id), mainTeam: autoOpenPanels.get(panel.id)?.mainTeam ?? false })), candidates, MAX_PANELS)
+  const plan = planAutoOpen(ordered.map((panel) => ({ id: panel.id, url: panel.url, auto: autoOpenPanels.has(panel.id) && !pipPanels.has(panel.id), mainTeam: autoOpenPanels.get(panel.id)?.mainTeam ?? false })), candidates, MAX_PANELS)
   autoOpenSkipped = plan.skipped
   if (plan.fill.length + plan.extra.length + plan.replace.length > 0) {
     for (const { panelId, url } of [...plan.fill, ...plan.replace]) {
@@ -2151,6 +2168,119 @@ function togglePanelAlerts(id: PanelId) {
   button.title = label
 }
 
+function stopPipTimerIfIdle() {
+  if (pipPanels.size > 0 || pipTimer === null) return
+  window.clearInterval(pipTimer)
+  pipTimer = null
+}
+
+/** Opens the panel in its own floating window; any number of panels can float at the same time. */
+function openPip(id: PanelId) {
+  if (pipPanels.has(id)) return
+  if (!window.quadra || view !== 'grid' || !panelById(id)?.url) return
+  pipPanels.add(id)
+  pipStateJson.delete(id)
+  if (pipTimer === null) pipTimer = window.setInterval(syncPipState, 1000)
+  renderGrid()
+  syncLayout()
+  syncPipState()
+}
+
+/** Brings the panel back to the grid; the next layout moves its view out of the floating window. */
+function returnPip(id: PanelId) {
+  if (!pipPanels.delete(id)) return
+  pipStateJson.delete(id)
+  stopPipTimerIfIdle()
+  renderGrid()
+  syncLayout()
+}
+
+/** The floating window is gone (closed by the system, or its panel left the grid). */
+function endPip(id: PanelId) {
+  if (!pipPanels.delete(id)) return
+  pipStateJson.delete(id)
+  stopPipTimerIfIdle()
+  renderGrid()
+}
+
+function buildPipState(id: PanelId, now: number): PipState | null {
+  const panel = panelById(id)
+  if (!panel) return null
+  const match = panelMatch(id, now)
+  const live = panelLive.get(id)
+  const globalSec = getAlertSettings().scoreDelaySec
+  const own = panelDelayOverride.get(id)
+  const finished = finishedPanels.get(id)
+  const coverage = live?.sport === 'basketball' ? ' · basquete, só placar' : live?.sport === 'american-football' ? ' · futebol americano, touchdowns e field goals' : live?.coverage === 'score' ? ' · só placar' : ''
+  return {
+    panelId: id,
+    index: panelIndex(id),
+    url: panel.url,
+    muted: panel.muted,
+    alertsOff: panel.alertsOff,
+    title: panelTitles.get(id) ?? '',
+    match: match
+      ? {
+        home: match.home,
+        away: match.away,
+        score: match.score,
+        crests: { home: match.crests.home, away: match.crests.away },
+        clock: match.clock ? { text: `${match.clock.tag} ${match.clock.time}`.trim(), halftime: match.clock.paused } : null,
+      }
+      : null,
+    alert: alertView(id),
+    varReview: varReviewView(id),
+    delay: live?.status === 'linked'
+      ? {
+        effective: own ?? globalSec ?? 0,
+        own: own ?? null,
+        defaultLabel: globalSec === null ? 'Padrão (placar oculto, alertas na hora)' : `Padrão (${liveDelayLabel(globalSec)})`,
+        title: `Atraso do placar e dos alertas deste painel — 365Scores: ${live.label ?? ''}${coverage}`,
+        options: [...LIVE_DELAY_OPTIONS],
+      }
+      : null,
+    prompt: live?.status === 'ambiguous'
+      ? { candidates: (live.candidates ?? []).map((candidate) => ({ id: candidate.id, label: candidate.label, detail: candidate.detail })) }
+      : null,
+    finished: finished && now >= finished.showAt ? { secondsLeft: Math.max(0, Math.ceil((finished.closeAt - now) / 1000)) } : null,
+    bllTarget: bllsportTargetId === id,
+  }
+}
+
+/** Sends each floating window what it shows, only when it changed. */
+function syncPipState() {
+  if (pipPanels.size === 0 || !window.quadra) return
+  const now = Date.now()
+  for (const id of pipPanels) {
+    const state = buildPipState(id, now)
+    if (!state) continue
+    const json = JSON.stringify(state)
+    if (json === pipStateJson.get(id)) continue
+    pipStateJson.set(id, json)
+    window.quadra.sendPipState(state)
+  }
+}
+
+/** A button of a floating window: it does what the same button on the panel does. */
+function handlePipCommand(id: PanelId, command: PipCommand) {
+  const panel = pipPanels.has(id) ? panelById(id) : undefined
+  if (!panel) return
+  switch (command.type) {
+    case 'mute': togglePanelMute(id); break
+    case 'alerts': togglePanelAlerts(id); break
+    case 'reload': if (panel.url) applyPanelUrl(id, panel.url); break
+    case 'delay': setPanelDelay(id, command.value); break
+    case 'url': applyPanelUrl(id, normalizeUrl(command.url)); break
+    case 'bllsport': openBllsport(id); break
+    case 'youtube': openBatch('youtube', id); break
+    case 'zapping': openZapping(id); break
+    case 'choose-match': window.quadra?.chooseLiveMatch(id, command.gameId); break
+    case 'keep-open': keepFinishedPanel(id); break
+    case 'return': returnPip(id); break
+  }
+  syncPipState()
+}
+
 function toggleAllMuted() {
   const muted = !allPanelsMuted()
   for (const panel of panels) panel.muted = muted
@@ -2202,6 +2332,13 @@ function panelActionsHtml(panel: Panel): string {
   const removeLabel = canRemove
     ? `Remover tela ${panelIndex(panel.id) + 1}`
     : 'É necessário manter pelo menos uma tela'
+  if (pipPanels.has(panel.id)) {
+    return `
+    <div class="panel__controls" aria-label="Ações do jogo ${panelIndex(panel.id) + 1}">
+      ${panels.length > 1 ? `<button type="button" class="btn btn--ghost btn--icon panel__drag" data-drag aria-label="Arrastar jogo ${panelIndex(panel.id) + 1} para trocar de posição" title="Arrastar para trocar de posição">⠿</button>` : ''}
+      <button type="button" class="btn btn--ghost btn--icon panel__remove" data-remove aria-label="${removeLabel}" title="${removeLabel}"${canRemove ? '' : ' disabled'}><img src="./trash-icon.png" alt="" aria-hidden="true" /></button>
+    </div>`
+  }
   return `
     <div class="panel__controls" aria-label="Ações do jogo ${panelIndex(panel.id) + 1}">
       ${panels.length > 1 ? `<button type="button" class="btn btn--ghost btn--icon panel__drag" data-drag aria-label="Arrastar jogo ${panelIndex(panel.id) + 1} para trocar de posição" title="Arrastar para trocar de posição">⠿</button>` : ''}
@@ -2210,12 +2347,22 @@ function panelActionsHtml(panel: Panel): string {
       ${panel.url ? '<button type="button" class="btn btn--ghost btn--icon" data-edit aria-label="Editar URL" title="Editar URL">✎</button>' : ''}
       ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__reload" data-reload aria-label="Recarregar jogo ${panelIndex(panel.id) + 1}" title="Recarregar página"><img src="./reload-icon.png" alt="" aria-hidden="true" /></button>` : ''}
       ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__alerts" data-alerts aria-pressed="${panel.alertsOff}" aria-label="${panelAlertsLabel(panel)}" title="${panelAlertsLabel(panel)}">${panelAlertsIconHtml(panel.alertsOff)}</button>` : ''}
+      ${panel.url && window.quadra ? `<button type="button" class="btn btn--ghost btn--icon panel__pip" data-pip aria-label="Abrir jogo ${panelIndex(panel.id) + 1} em janela flutuante" title="Abrir em janela flutuante (fica por cima das outras janelas)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><rect x="8" y="8" width="5" height="3.5" rx="0.6" class="panel__pip-fill" /></svg></button>` : ''}
       <button type="button" class="btn btn--ghost btn--icon panel__remove" data-remove aria-label="${removeLabel}" title="${removeLabel}"${canRemove ? '' : ' disabled'}><img src="./trash-icon.png" alt="" aria-hidden="true" /></button>
     </div>
   `
 }
 
 function panelInnerHtml(panel: Panel): string {
+  if (pipPanels.has(panel.id)) {
+    return `
+      ${panelActionsHtml(panel)}
+      <div class="panel__pip-note">
+        <p class="panel__slot">Jogo ${panelIndex(panel.id) + 1} na janela flutuante</p>
+        <button type="button" class="btn btn--load" data-pip-return>Trazer de volta</button>
+      </div>
+    `
+  }
   if (!panel.url) {
     return `
       ${panelActionsHtml(panel)}
@@ -2298,6 +2445,14 @@ function bindPanelForm(panelElement: HTMLElement) {
     event.stopPropagation()
     const panel = panelById(id)
     if (panel?.url) applyPanelUrl(id, panel.url)
+  })
+  panelElement.querySelector('[data-pip]')?.addEventListener('click', (event) => {
+    event.stopPropagation()
+    openPip(id)
+  })
+  panelElement.querySelector('[data-pip-return]')?.addEventListener('click', (event) => {
+    event.stopPropagation()
+    returnPip(id)
   })
   panelElement.querySelector('[data-alerts]')?.addEventListener('click', (event) => {
     event.stopPropagation()
@@ -2526,6 +2681,8 @@ function syncAlertAudio() {
 
 function syncLayout() {
   syncAlertAudio()
+  // A floating window only lives while its panel has a game in the grid.
+  for (const id of [...pipPanels]) if (view !== 'grid' || !panelById(id)?.url) endPip(id)
   infoDrawer.sync()
   if (view === 'choose') {
     setChromeInteractive(true)
@@ -2545,6 +2702,7 @@ function syncLayout() {
       muted: panel.muted,
       editing: panelElement.classList.contains('is-editing'),
       forceReload,
+      pip: pipPanels.has(panel.id),
       bounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
     }]
   })
@@ -2553,11 +2711,18 @@ function syncLayout() {
 
 function scheduleSyncLayout() {
   if (layoutSyncFrame !== null) cancelAnimationFrame(layoutSyncFrame)
-  layoutSyncFrame = requestAnimationFrame(() => {
+  if (layoutSyncTimer !== null) window.clearTimeout(layoutSyncTimer)
+  layoutSyncFrame = null
+  layoutSyncTimer = null
+  const run = () => {
     layoutSyncFrame = null
+    layoutSyncTimer = null
     syncLayout()
     updatePanelLabels()
-  })
+  }
+  // With the main window minimized the overlay is hidden and animation frames stop; the floating window still sends commands.
+  if (document.visibilityState === 'hidden') layoutSyncTimer = window.setTimeout(run, 0)
+  else layoutSyncFrame = requestAnimationFrame(run)
 }
 
 function panelAtPoint(x: number, y: number): PanelId | null {
@@ -2691,7 +2856,7 @@ function updateChromeHitTarget(x: number, y: number) {
   }
   updateLabelHover(x, y)
   const target = document.elementFromPoint(x, y)
-  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .organize-panel, .info-drawer, .confirm, .delay-menu')) || infoDrawer.isOverPanel(x, y))
+  setChromeInteractive(Boolean(target?.closest('.toolbar,.back-corner, .panel__controls, .panel__auto-controls, .panel__overlay, .panel__live, .panel__label-dismiss, .panel--empty, .panel--pip, .organize-panel, .info-drawer, .confirm, .delay-menu')) || infoDrawer.isOverPanel(x, y))
 }
 
 let toolbarAbort: AbortController | null = null
@@ -3105,7 +3270,7 @@ function renderGrid() {
       </div>
     </div>
     <div class="layout-stage grid grid--${panels.length}${editorOpen ? ' is-editing' : ''}" id="layout-stage" data-layout-mode="${layoutMode}">
-      ${panels.map((panel, index) => `<div class="panel${panel.url ? ' panel--loaded' : ' panel--empty'}${highlighted.has(panel.id) ? ' is-highlighted' : ''}" data-panel-id="${escapeHtml(panel.id)}" data-slot="${index}">${panelInnerHtml(panel)}</div>`).join('')}
+      ${panels.map((panel, index) => `<div class="panel${pipPanels.has(panel.id) ? ' panel--pip' : panel.url ? ' panel--loaded' : ' panel--empty'}${highlighted.has(panel.id) ? ' is-highlighted' : ''}" data-panel-id="${escapeHtml(panel.id)}" data-slot="${index}">${panelInnerHtml(panel)}</div>`).join('')}
     </div>
     ${editorOpen ? organizePanelHtml() : ''}
   </div>`
@@ -3212,6 +3377,13 @@ onAlertShown((panelId, payload) => {
   if (payload.kind === 'goal' || payload.kind === 'touchdown') startAutoGoal(panelId)
 })
 onVarReviewStarted((panelId) => startAutoGoal(panelId, 'var'))
+onAlertStatesChange(syncPipState)
+window.quadra?.onPipCommand(({ panelId, command }) => handlePipCommand(panelId, command))
+window.quadra?.onPipClosed(({ panelId }) => endPip(panelId))
+window.quadra?.onPipRequestState(({ panelId }) => {
+  pipStateJson.delete(panelId)
+  syncPipState()
+})
 window.quadra?.onMatchEvent((payload) => {
   if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
   // 365Scores-linked panels trail the data: hold the alert as long as the panel's score is held.

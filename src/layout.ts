@@ -17,6 +17,8 @@ export type PanelPayload = {
   muted: boolean
   editing: boolean
   forceReload: boolean
+  /** The panel's view lives in the floating window; `bounds` (the grid placeholder) is ignored. */
+  pip: boolean
   bounds: Bounds
 }
 export type LayoutPayload = { view: 'choose' | 'grid'; panelCount: number; mode: LayoutMode; panels: PanelPayload[] }

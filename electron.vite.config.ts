@@ -23,6 +23,7 @@ export default defineConfig({
         input: {
           preload: resolve(projectRoot, 'electron/preload.ts'),
           'monitor-preload': resolve(projectRoot, 'electron/monitor-preload.ts'),
+          'pip-preload': resolve(projectRoot, 'electron/pip-preload.ts'),
         },
       },
     },
@@ -41,7 +42,10 @@ export default defineConfig({
     },
     build: {
       rollupOptions: {
-        input: resolve(projectRoot, 'index.html'),
+        input: {
+          index: resolve(projectRoot, 'index.html'),
+          pip: resolve(projectRoot, 'pip.html'),
+        },
       },
     },
   },

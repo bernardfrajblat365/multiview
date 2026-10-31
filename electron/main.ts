@@ -28,6 +28,8 @@ import { isYoutubeWatchUrl, YOUTUBE_AD_URL_PATTERNS, YOUTUBE_WORLD, youtubeAdSki
 import { createAutoUpdateController } from './update'
 import { fetchGitHubReleaseNotes } from './release-notes'
 import { createUiMessageBox } from './ui-dialog'
+import { createPipWindowController } from './pip-window'
+import { isValidPipState, parsePipCommand } from '../src/pip'
 import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
 
 const { autoUpdater } = electronUpdater
@@ -43,8 +45,11 @@ type SlotViewState = {
   loadTimer?: ReturnType<typeof setTimeout>
   playbackTimer?: ReturnType<typeof setInterval>
   playbackRetries: number
+  /** Window holding the view: the grid, or the picture-in-picture floating window. */
+  host: 'main' | 'pip'
 }
 
+const PIP_WINDOW_TITLE = 'Quadra — Janela flutuante'
 const VIDEO_RECT_POLL_MS = 1500
 const VIDEO_RECT_WORLD = 1002
 const MAX_PANEL_TITLE_LENGTH = 160
@@ -382,6 +387,26 @@ function sendMatchScore({ panelIds, home, away, score, teams }: ScannerScore) {
 const testUserDataPath = process.env.QUADRA_TEST_USER_DATA
 if (testUserDataPath) app.setPath('userData', testUserDataPath)
 
+/** The floating window of the panel in picture-in-picture; its view keeps loading while it moves between windows. */
+const pipWindow = createPipWindowController({
+  preloadPath: join(__dirname, '../preload/pip-preload.mjs'),
+  icon: appIconPath,
+  getMainWindow: () => mainWindow,
+  loadPage: (contents) => isDev
+    ? contents.loadURL(new URL('pip.html', process.env.ELECTRON_RENDERER_URL).toString())
+    : contents.loadFile(join(__dirname, '../renderer/pip.html')),
+  onClosed: (panelId, view) => {
+    // Closed by the system: the page goes back to the grid and the overlay learns the panel is no longer floating.
+    const state = slotViews.get(panelId)
+    if (state && state.view === view) {
+      state.host = 'main'
+      if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.addChildView(view)
+      void syncSlotCursor(state)
+    }
+    overlayWindow?.webContents.send('quadra:pip-closed', { panelId })
+  },
+})
+
 function isAllowedRemoteUrl(url: string) {
   return /^https?:\/\//i.test(url) && url.length <= 4096
 }
@@ -402,7 +427,10 @@ function reconcileFullscreenPriority() {
   fullscreenPrioritySyncPending = false
   const keepPriority = shouldKeepFullscreenPriority()
   const windows = [mainWindow, overlayWindow].filter((window): window is BaseWindow | BrowserWindow => Boolean(window && !window.isDestroyed()))
-  if (!windows.some((window) => window.isAlwaysOnTop() !== keepPriority)) return
+  if (!windows.some((window) => window.isAlwaysOnTop() !== keepPriority)) {
+    pipWindow.raise()
+    return
+  }
   // Windows can restore the owned overlay's priority without restoring its parent.
   if (keepPriority && overlayWindow && !overlayWindow.isDestroyed()) {
     overlayWindow.setAlwaysOnTop(false, 'screen-saver')
@@ -411,6 +439,7 @@ function reconcileFullscreenPriority() {
     if (window.isAlwaysOnTop() === keepPriority) continue
     window.setAlwaysOnTop(keepPriority, 'screen-saver')
   }
+  pipWindow.raise()
 }
 
 function scheduleFullscreenPrioritySync() {
@@ -437,7 +466,12 @@ function setNativeFullscreen(on: boolean) {
 /** Overlay or panel players: where Ctrl + / Ctrl - / Ctrl + wheel zoom the overlay UI. */
 function isUiZoomSource(contents: Electron.WebContents) {
   if (overlayWindow && !overlayWindow.isDestroyed() && contents === overlayWindow.webContents) return true
-  for (const state of slotViews.values()) if (state.view.webContents === contents) return true
+  for (const state of slotViews.values()) if (state.host === 'main' && state.view.webContents === contents) return true
+  return false
+}
+
+function isPipPanelContents(contents: Electron.WebContents) {
+  for (const state of slotViews.values()) if (state.host === 'pip' && state.view.webContents === contents) return true
   return false
 }
 
@@ -462,7 +496,13 @@ function zoomOverlayByWheel(direction: 'in' | 'out') {
 // menu with the zoom-in accelerator; with panels open the keys reach the focused player.
 function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
   const command = zoomCommandOf(input)
-  if (!command || !isUiZoomSource(contents)) return false
+  if (!command) return false
+  // In the floating window the zoom keys do nothing: the grid's zoom is not its business.
+  if (isPipPanelContents(contents)) {
+    event.preventDefault()
+    return true
+  }
+  if (!isUiZoomSource(contents)) return false
   event.preventDefault()
   zoomOverlay(command)
   return true
@@ -996,7 +1036,8 @@ function destroySlotView(id: string) {
   stopVideoRectPolling(state)
   stopPlaybackWatch(state)
   if (state.loadTimer) clearTimeout(state.loadTimer)
-  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
+  if (state.host === 'pip') pipWindow.release(id)
+  else if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
   if (!state.view.webContents.isDestroyed()) state.view.webContents.close()
   slotViews.delete(id)
 }
@@ -1011,7 +1052,7 @@ async function syncSlotCursor(state: SlotViewState) {
   if (state.view.webContents.isDestroyed()) return
   // Keep guest cursor under Quadra control. Sites like Zapping set cursor:none on the
   // player; with click-through that makes the system pointer vanish over the panel.
-  const css = cursorHidden
+  const css = cursorHidden && state.host === 'main'
     ? '* { cursor: none !important; }'
     : '* { cursor: auto !important; }'
   const key = await state.view.webContents.insertCSS(css).catch(() => '')
@@ -1079,6 +1120,7 @@ function closeOwnedWindows() {
   stopBllEndWatch()
   if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
   destroyAllSlotViews()
+  pipWindow.releaseAll()
   closeBllListWindow()
   for (const catalog of Object.values(sportsCatalogs)) {
     if (catalog.window && !catalog.window.isDestroyed()) catalog.window.close()
@@ -1098,7 +1140,7 @@ function installAutoUpdater() {
   void autoUpdateController.check()
 }
 
-function createSlotView(id: string, url: string, muted: boolean) {
+function createSlotView(id: string, url: string, muted: boolean, pip = false, title = '') {
   const view = new WebContentsView({
     webPreferences: {
       session: quadraSession!,
@@ -1111,10 +1153,17 @@ function createSlotView(id: string, url: string, muted: boolean) {
   })
   configureRemoteContents(view.webContents, id)
   // Ctrl + wheel over a player zooms the overlay UI, as over the buttons (Electron never zooms the page itself).
-  view.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
+  view.webContents.on('zoom-changed', (_event, direction) => {
+    if (!isPipPanelContents(view.webContents)) zoomOverlayByWheel(direction)
+  })
   view.webContents.setAudioMuted(muted)
-  mainWindow?.contentView.addChildView(view)
-  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0 }
+  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0, host: 'main' }
+  if (pip) {
+    state.host = 'pip'
+    pipWindow.show(id, view, title)
+  } else {
+    mainWindow?.contentView.addChildView(view)
+  }
   slotViews.set(id, state)
   startVideoRectPolling(state, id)
   void syncSlotCursor(state)
@@ -1148,7 +1197,7 @@ function isValidLayoutPayload(value: unknown): value is LayoutPayload {
     ids.add(candidate.id)
     return typeof candidate.url === 'string' && candidate.url.length <= 4096 &&
       typeof candidate.muted === 'boolean' && typeof candidate.editing === 'boolean' &&
-      typeof candidate.forceReload === 'boolean' &&
+      typeof candidate.forceReload === 'boolean' && typeof candidate.pip === 'boolean' &&
       Boolean(candidate.bounds) && isValidBounds(candidate.bounds as Bounds)
   })
 }
@@ -1165,6 +1214,15 @@ function raiseOverlay() {
   overlayWindow.moveTop()
 }
 
+/** Gives a floating panel's view back to the main window; the next layout sets its bounds. */
+function returnSlotToGrid(id: string, state: SlotViewState) {
+  if (state.host !== 'pip') return
+  pipWindow.release(id)
+  state.host = 'main'
+  if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.addChildView(state.view)
+  void syncSlotCursor(state)
+}
+
 function applyLayout(payload: LayoutPayload) {
   if (!mainWindow) return
   visiblePanelIds = new Set(payload.panels.map((panel) => panel.id))
@@ -1178,15 +1236,26 @@ function applyLayout(payload: LayoutPayload) {
     return
   }
   const visibleSlots = new Set<string>()
+  // Panels leaving their floating window go first, so the grid gets their views back before the other bounds are set.
   for (const panel of payload.panels) {
-    if (!panel.url || !isAllowedRemoteUrl(panel.url) || !isValidBounds(panel.bounds)) {
+    const leaving = slotViews.get(panel.id)
+    if (leaving?.host === 'pip' && !panel.pip) returnSlotToGrid(panel.id, leaving)
+  }
+  for (const panel of payload.panels) {
+    const floating = Boolean(panel.pip && panel.url && isAllowedRemoteUrl(panel.url))
+    if (!panel.url || !isAllowedRemoteUrl(panel.url) || (!floating && !isValidBounds(panel.bounds))) {
+      // A minimized main window reports empty bounds; a panel that is only hidden must not lose its page.
+      if (panel.url && isAllowedRemoteUrl(panel.url) && slotViews.get(panel.id)?.url === panel.url) {
+        visibleSlots.add(panel.id)
+        continue
+      }
       destroySlotView(panel.id)
       continue
     }
     visibleSlots.add(panel.id)
     let state = slotViews.get(panel.id)
     if (!state) {
-      state = createSlotView(panel.id, panel.url, panel.muted)
+      state = createSlotView(panel.id, panel.url, panel.muted, floating, PIP_WINDOW_TITLE)
     } else if (state.url !== panel.url || panel.forceReload) {
       state.url = panel.url
       state.cursorCssKey = undefined
@@ -1194,6 +1263,17 @@ function applyLayout(payload: LayoutPayload) {
       loadSlotUrl(state, panel.url)
     }
     state.view.webContents.setAudioMuted(panel.muted)
+    if (floating) {
+      if (state.host === 'main') {
+        if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
+        state.host = 'pip'
+        pipWindow.show(panel.id, state.view, PIP_WINDOW_TITLE)
+        void syncSlotCursor(state)
+      }
+      state.view.setVisible(true)
+      void measureSlotVideoRect(state, panel.id)
+      continue
+    }
     const zoom = overlayWindow && !overlayWindow.isDestroyed() ? overlayWindow.webContents.getZoomFactor() : 1
     state.view.setBounds({
       x: Math.round(panel.bounds.x * zoom),
@@ -1274,6 +1354,30 @@ function installIpcHandlers() {
   ipcMain.on('quadra:choose-live-match', (event, panelId: unknown, gameId: unknown) => {
     if (!isUiSender(event) || typeof panelId !== 'string') return
     if (gameId === null || (typeof gameId === 'number' && Number.isSafeInteger(gameId) && gameId > 0)) liveScores.choose(panelId, gameId)
+  })
+  ipcMain.on('quadra:pip-state', (event, state: unknown) => {
+    const panelId = (state as { panelId?: unknown } | null)?.panelId
+    if (!isUiSender(event) || typeof panelId !== 'string' || !pipWindow.has(panelId) || !isValidPipState(state, panelId)) return
+    pipWindow.send(panelId, 'quadra-pip:state', state)
+  })
+  ipcMain.on('quadra-pip:ready', (event) => {
+    const panelId = pipWindow.panelIdOf(event.sender)
+    if (panelId) overlayWindow?.webContents.send('quadra:pip-request-state', { panelId })
+  })
+  ipcMain.on('quadra-pip:bar-height', (event, height: unknown) => {
+    if (typeof height !== 'number' || !Number.isFinite(height)) return
+    pipWindow.setBarHeight(event.sender, height)
+  })
+  ipcMain.on('quadra-pip:command', (event, value: unknown) => {
+    const panelId = pipWindow.panelIdOf(event.sender)
+    const command = parsePipCommand(value)
+    if (!panelId || !command) return
+    // The YouTube list opens over the grid, so the main window comes forward for it.
+    if (command.type === 'youtube' && mainWindow && !mainWindow.isDestroyed()) {
+      if (mainWindow.isMinimized()) mainWindow.restore()
+      mainWindow.show()
+    }
+    overlayWindow?.webContents.send('quadra:pip-command', { panelId, command })
   })
   ipcMain.handle('quadra:match-info', async (event, request: unknown) => {
     if (!isUiSender(event)) return { status: 'error' }
@@ -1406,6 +1510,7 @@ function createWindow() {
   matchInfo.reset()
     if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
     destroyAllSlotViews()
+    pipWindow.releaseAll()
     scheduleFullscreenPrioritySync()
   })
   mainWindow.maximize()

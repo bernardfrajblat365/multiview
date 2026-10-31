@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.0',
+    label: '1.3',
+    notes: [
+      { title: 'Janela flutuante', body: 'O botão de janela em cada painel abre aquele jogo numa janelinha por cima das outras janelas, para você trabalhar em outro programa e continuar assistindo, com placar, alertas e botões de mutar, trocar o link, recarregar e atraso. Dá para deixar vários jogos flutuando ao mesmo tempo.' },
+    ],
+  },
+  {
     version: '1.2.2',
     label: '1.2.2',
     notes: [

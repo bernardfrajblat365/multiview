@@ -457,6 +457,32 @@ async function run() {
       'O X do rótulo só pode aparecer com o mouse sobre os nomes dos times.')
     assert.equal(firstBllPlayer.id, firstPlayerId, 'A chegada do título não pode recriar o WebContents do painel.')
 
+    // Picture-in-picture: the page moves to a floating window without reloading, keeps its controls there, and comes back.
+    await evaluate(firstBllPlayer.webSocketDebuggerUrl, `window.__quadraPipMark = 'kept'`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-pip]').click()`)
+    const pipPage = await waitForPageTarget(port, (candidate) => candidate.url.includes('pip.html'))
+    assert.ok(pipPage, 'A janela flutuante não abriu.')
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"]').classList.contains('panel--pip')`)
+    await waitForExpression(pipPage, `document.querySelector('.bar__team')?.textContent === 'Time A'`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
+      `[...document.querySelectorAll('.panel[data-slot="0"] .panel__controls button')].map((button) => button.dataset.drag !== undefined ? 'drag' : button.dataset.remove !== undefined ? 'remove' : button.className)`),
+    ['drag', 'remove'], 'Na grade, o painel flutuante só mantém arrastar e remover.')
+    const mutedBefore = await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="mute"]').getAttribute('aria-pressed')`)
+    await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="mute"]').click()`)
+    await waitForExpression(pipPage, `document.querySelector('[data-cmd="mute"]').getAttribute('aria-pressed') !== '${mutedBefore}'`)
+    await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="mute"]').click()`)
+    await waitForExpression(pipPage, `document.querySelector('[data-cmd="mute"]').getAttribute('aria-pressed') === '${mutedBefore}'`)
+    assert.equal(await evaluate(firstBllPlayer.webSocketDebuggerUrl, `window.__quadraPipMark`), 'kept', 'Abrir a janela flutuante recarregou o player.')
+    await evaluate(pipPage.webSocketDebuggerUrl, `document.querySelector('[data-cmd="return"]').click()`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="0"]').classList.contains('panel--loaded')`)
+    for (let attempt = 0; attempt < 40; attempt += 1) {
+      const pages = await fetchJson(`http://127.0.0.1:${port}/json`).catch(() => [])
+      if (!pages.some((candidate) => candidate.url.includes('pip.html'))) break
+      await wait(100)
+    }
+    assert.ok(!(await fetchJson(`http://127.0.0.1:${port}/json`)).some((candidate) => candidate.url.includes('pip.html')), 'A janela flutuante não fechou ao voltar para a grade.')
+    assert.equal(await evaluate(firstBllPlayer.webSocketDebuggerUrl, `window.__quadraPipMark`), 'kept', 'Voltar para a grade recarregou o player.')
+
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-dismiss-label]').click()`)
     await waitForExpression(target, `!document.querySelector('.panel[data-slot="0"] .panel__label')`)
     await evaluate(target.webSocketDebuggerUrl, `(() => {
@@ -476,6 +502,20 @@ async function run() {
     // No William Hill feed in game-b: the panel links to the 365Scores game named by the player instead.
     await waitForExpression(target,
       `document.querySelector('.panel[data-slot="1"] .panel__delay')?.title.includes('365Scores: Coritiba x Avaí') === true`)
+    // Two panels float at the same time, each in its own window, and both come back.
+    const pipPages = async () => (await fetchJson(`http://127.0.0.1:${port}/json`).catch(() => [])).filter((candidate) => candidate.url.includes('pip.html'))
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] [data-pip]').click()`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] [data-pip]').click()`)
+    for (let attempt = 0; attempt < 50 && (await pipPages()).length < 2; attempt += 1) await wait(100)
+    assert.equal((await pipPages()).length, 2, 'Dois painéis deveriam flutuar ao mesmo tempo, cada um na sua janela.')
+    await waitForExpression(target, `document.querySelectorAll('.panel--pip').length === 2`)
+    for (const page of await pipPages()) {
+      await waitForExpression(page, `Boolean(document.querySelector('[data-cmd="return"]'))`)
+      await evaluate(page.webSocketDebuggerUrl, `document.querySelector('[data-cmd="return"]').click()`)
+    }
+    await waitForExpression(target, `document.querySelectorAll('.panel--pip').length === 0`)
+    for (let attempt = 0; attempt < 50 && (await pipPages()).length > 0; attempt += 1) await wait(100)
+    assert.equal((await pipPages()).length, 0, 'As janelas flutuantes não fecharam ao voltar para a grade.')
     // The ⏱ button opens the app's own list (not the native select); picking an option sets the panel delay.
     const delayMenu = await evaluate(target.webSocketDebuggerUrl, `(() => {
       document.querySelector('.panel[data-slot="1"] .panel__delay').click()

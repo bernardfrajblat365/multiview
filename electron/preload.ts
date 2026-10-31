@@ -4,7 +4,6 @@ import type { YoutubeChannelResult, YoutubeLivesResult } from '../src/youtube-li
 import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
 import type { MatchClock } from '../src/match-clock'
-import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
 import type { PipCommand, PipState } from '../src/pip'
 import type { LiveMatchStatus, LiveVarPayload, TeamRef365 } from '../src/livescore-365'
 import type { MatchInfoReady, MatchInfoRequest, MatchInfoResult, PhotoRef } from '../src/match-info'

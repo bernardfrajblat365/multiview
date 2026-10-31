@@ -493,9 +493,14 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .back-corner {
   position: fixed; top: 0.45rem; left: 0.45rem; z-index: 61;
   box-sizing: border-box; height: 1.85rem; display: inline-flex; align-items: center; line-height: 1;
-  padding: 0 0.6rem; font-size: 0.85rem; border-radius: 9px; white-space: nowrap; background: rgba(7,26,20,0.97); box-shadow: 0 8px 22px rgba(0,0,0,0.4);
+  gap: 0.4em; min-width: 6.4em; padding: 0 0.9em 0 0.2em; font-size: 0.85rem; font-weight: 700; border-radius: 9px; white-space: nowrap; background: rgba(7,26,20,0.97); box-shadow: 0 8px 22px rgba(0,0,0,0.4);
   opacity: 0; visibility: hidden; pointer-events: none;
   transition: opacity 0.15s ease, visibility 0s linear 0.15s;
+}
+/* Glossy green arrow tile (the image has a white margin, so it is cropped by oversizing). */
+.back-corner::before {
+  content: ''; flex: none; height: 100%; aspect-ratio: 1;
+  background: url('./assets/back-button.webp') center / 140% no-repeat;
 }
 .grid-shell.is-back-visible .back-corner { opacity: 1; visibility: visible; pointer-events: auto; transition-delay: 0s; }
 /* First slot of the corner panel's control row; main.ts sets top/left/height/font-size to match the row's buttons. */

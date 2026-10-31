@@ -3244,7 +3244,7 @@ function renderGrid() {
   document.body.classList.add('is-grid')
   const canUndo = history.length > 0
   app.innerHTML = `<div class="grid-shell is-toolbar-visible${editorOpen ? ' is-editor-open' : ''}">
-    <button type="button" class="btn btn--ghost back-corner" id="btn-layout" aria-label="Voltar à escolha de telas">← Voltar</button>
+    <button type="button" class="btn btn--ghost back-corner" id="btn-layout" aria-label="Voltar à escolha de telas">Voltar</button>
     <div class="toolbar" role="toolbar" aria-label="Controles">
       <button type="button" class="btn btn--load" id="btn-open-all">Abrir todos</button>
       <button type="button" class="btn btn--ghost" id="btn-mute-all" aria-pressed="${allPanelsMuted()}">${allPanelsMuted() ? 'Ativar som de todos' : 'Mutar todos'}</button>

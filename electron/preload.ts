@@ -5,6 +5,7 @@ import type { LayoutPayload } from '../src/layout'
 import type { AlertKind } from '../src/match-events'
 import type { MatchClock } from '../src/match-clock'
 import type { LiveMatchStatus, LiveVarPayload } from '../src/livescore-365'
+import type { PipCommand, PipState } from '../src/pip'
 
 type UiDialogPayload = { id: number; title: string; message: string; detail: string; buttons: string[]; defaultId: number; cancelId: number }
 type MatchScorePayload = { panelId: string; home: string; away: string; score: string }
@@ -121,6 +122,22 @@ const quadra = {
     const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; title: string }) => callback(payload)
     ipcRenderer.on('quadra:panel-title', listener)
     return () => ipcRenderer.removeListener('quadra:panel-title', listener)
+  },
+  sendPipState: (state: PipState) => ipcRenderer.send('quadra:pip-state', state),
+  onPipCommand: (callback: (payload: { panelId: string; command: PipCommand }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; command: PipCommand }) => callback(payload)
+    ipcRenderer.on('quadra:pip-command', listener)
+    return () => ipcRenderer.removeListener('quadra:pip-command', listener)
+  },
+  onPipClosed: (callback: (payload: { panelId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string }) => callback(payload)
+    ipcRenderer.on('quadra:pip-closed', listener)
+    return () => ipcRenderer.removeListener('quadra:pip-closed', listener)
+  },
+  onPipRequestState: (callback: (payload: { panelId: string }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string }) => callback(payload)
+    ipcRenderer.on('quadra:pip-request-state', listener)
+    return () => ipcRenderer.removeListener('quadra:pip-request-state', listener)
   },
   onPanelVideoRect: (callback: (payload: { panelId: string; rect: { x: number; y: number; width: number; height: number } | null }) => void) => {
     const listener = (

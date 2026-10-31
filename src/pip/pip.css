@@ -1,0 +1,67 @@
+:root {
+  --ink: #e8f7ee;
+  --ink-muted: #9bbdad;
+  --accent: #c8f560;
+  --bar-bg: #08150f;
+  --alert-color: #b8ff4d;
+  --var-color: #5fb4ff;
+  color-scheme: dark;
+  font-family: 'Figtree', 'Segoe UI', sans-serif;
+  font-size: 13px;
+  line-height: 1.3;
+  color: var(--ink);
+}
+
+*, *::before, *::after { box-sizing: border-box; }
+html, body { margin: 0; height: 100%; overflow: hidden; background: #000; user-select: none; }
+
+/* The frame around the video is the alert: the page background changes color with the alert. */
+#frame { height: 100%; background: #000; }
+body.alert-goal #frame, body.alert-touchdown #frame { background: var(--alert-color); }
+body.alert-penalty #frame { --alert-color: #ff9a3d; background: var(--alert-color); }
+body.alert-red #frame { --alert-color: #ff4d4d; background: var(--alert-color); }
+body.alert-yellow #frame { --alert-color: #ffd84d; background: var(--alert-color); }
+body.alert-var #frame, body.alert-field-goal #frame { background: var(--alert-color); }
+body.alert #frame { animation: frame-pulse 0.6s ease-in-out 3; }
+body.var:not(.alert) #frame { background: repeating-linear-gradient(45deg, var(--var-color) 0 6px, #04223f 6px 12px); }
+@keyframes frame-pulse { 50% { filter: brightness(1.6); } }
+@media (prefers-reduced-motion: reduce) { body.alert #frame { animation: none; } }
+
+#bar { background: var(--bar-bg); -webkit-app-region: drag; }
+.bar__row { display: flex; align-items: center; gap: 0.5rem; min-height: 28px; padding: 0 0.4rem; }
+.bar__grip { color: var(--ink-muted); font-size: 1rem; }
+.bar__match { flex: 0 1 auto; min-width: 0; display: flex; align-items: center; gap: 0.35rem; overflow: hidden; white-space: nowrap; font-weight: 700; }
+.bar__title { overflow: hidden; text-overflow: ellipsis; color: var(--ink-muted); font-weight: 600; }
+.bar__team { overflow: hidden; text-overflow: ellipsis; }
+.bar__score { flex: 0 0 auto; padding: 0 0.3rem; border-radius: 0.3rem; background: rgba(200, 245, 96, 0.14); color: var(--accent); font-variant-numeric: tabular-nums; }
+.bar__crest { width: 18px; height: 18px; object-fit: contain; flex: 0 0 auto; }
+.bar__clock { flex: 0 0 auto; padding: 0.05rem 0.4rem; border-radius: 999px; background: rgba(255, 255, 255, 0.1); font-weight: 700; font-variant-numeric: tabular-nums; }
+.bar__clock--halftime { color: #ffd166; box-shadow: inset 0 0 0 1px rgba(255, 209, 102, 0.45); }
+
+.bar__badge { display: inline-flex; align-items: center; min-width: 0; padding: 0.05rem 0.6rem; border-radius: 999px; background: var(--alert-color); color: #101a0c; font-weight: 800; overflow: hidden; text-overflow: ellipsis; }
+.bar__badge--var { background: var(--var-color); color: #04223f; }
+.bar__badge-score--scored { margin: 0 0.1em; padding: 0 0.25em; border-radius: 0.3em; background: #101a0c; color: var(--alert-color); }
+
+.bar__controls { flex: 0 0 auto; display: flex; align-items: center; gap: 0.25rem; margin-left: 0.25rem; }
+.btn { -webkit-app-region: no-drag; display: inline-flex; align-items: center; justify-content: center; gap: 0.25rem; min-width: 26px; height: 24px; padding: 0 0.5rem; border: 1px solid rgba(255, 255, 255, 0.18); border-radius: 0.4rem; background: rgba(255, 255, 255, 0.06); color: var(--ink); font: inherit; font-weight: 600; cursor: pointer; }
+.btn:hover { background: rgba(255, 255, 255, 0.16); }
+.btn:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.btn[aria-pressed='true'] { border-color: rgba(255, 99, 99, 0.6); }
+.btn--primary { background: var(--accent); border-color: var(--accent); color: #102418; }
+.btn img { width: 14px; height: 14px; }
+.btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.btn--delay { position: relative; }
+.btn--delay select { position: absolute; inset: 0; width: 100%; opacity: 0; cursor: pointer; }
+.btn--delay.is-custom { border-color: var(--accent); }
+
+.bar__extra { -webkit-app-region: no-drag; display: flex; flex-wrap: wrap; align-items: center; gap: 0.35rem; padding: 0.25rem 0.4rem 0.35rem; border-top: 1px solid rgba(255, 255, 255, 0.08); }
+.bar__extra[hidden], .bar__clock[hidden] { display: none; }
+.bar__extra form { display: contents; }
+.bar__extra input { flex: 1 1 140px; min-width: 0; height: 24px; padding: 0 0.5rem; border: 1px solid rgba(255, 255, 255, 0.25); border-radius: 0.4rem; background: #000; color: var(--ink); font: inherit; user-select: text; }
+.bar__extra-title { font-weight: 700; color: #ffd166; }
+
+/* Narrow window: the labels give way to icons so every button still fits at 320 px. */
+@media (max-width: 420px) {
+  .btn__label { display: none; }
+  .bar__team { max-width: 5.5em; }
+}

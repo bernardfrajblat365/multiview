@@ -52,6 +52,10 @@ npm run dist:release # instalador NSIS em release/
 - **Zoom dos botões:** Ctrl + / Ctrl − (ou Ctrl + rodinha do mouse) aumentam/diminuem os botões dos painéis e a barra de baixo, como no navegador, também com o foco ou o mouse em cima de um jogo; Ctrl 0 volta ao normal (de −3 a +3 níveis, só enquanto o app está aberto). Os vídeos e a grade não mudam de tamanho, e a página do player nunca recebe zoom.
 - **Nome do jogo:** com `Time A x Time B` no título (ou nomes do feed), o painel mostra o nome inteiro dos times, nunca sigla: na faixa preta de baixo/cima (fonte encolhe; duas linhas se preciso) ou numa legenda em degradê na base do vídeo (até 36 px). Emojis de som/esporte do título são removidos. O **×** (aparece com o mouse sobre os nomes) oculta aquele painel; **Abrir** restaura; o menu **⋯** oculta todos.
 
+### Janela flutuante
+
+O botão de janela (no canto superior esquerdo do painel, antes da lixeira) abre o jogo numa janelinha sempre por cima, que dá para mover e redimensionar (mantém 16:9). O vídeo não recarrega. A barra da janelinha mostra placar, relógio e os alertas (a borda muda de cor, o selo traz o gol e o nome de quem marcou, o VAR aparece em azul), e tem os botões Mutar, ✎ (trocar link, BLL, YouTube, Zapping), recarregar, ⏱, 🔔 e "Voltar". Vários painéis podem flutuar ao mesmo tempo, cada um na sua janela (as novas aparecem empilhadas no canto da tela); a janela principal fica como está (pode ser minimizada). Fechar a janelinha devolve o jogo à grade. Destaque, arrastar e organizar não existem para o painel enquanto ele flutua. Posição e tamanho valem só enquanto o app está aberto.
+
 ### Alertas de lances
 
 - **Fontes:** jogos BLL usam o feed William Hill numa janela oculta, sem a sessão BLL. Lives do YouTube e jogos BLL sem William Hill usam o 365Scores (abaixo).

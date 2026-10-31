@@ -210,7 +210,7 @@ multiview-desktop/
 
 **Commits**
 
-Estilo observado no histórico: Conventional Commits em inglês — `feat:`, `fix:`, `chore:`, `docs:`. Bumps de versão: `chore: bump Quadra to x.y.z`. Tags de release: `v*` alinhadas a `package.json` `version`. Todo bump de versão inclui a entrada da nova versão no topo de `RELEASES` em `src/release-notes.ts` (pop-up "Novidades da versão"), com título e descrição de cada novidade em linguagem para o usuário final; `tests/release-notes.test.ts` falha se a versão do `package.json` não tiver notas. **Quando um PR de feature vai virar release, o bump de versão (`package.json`, `package-lock.json`, versão atual neste arquivo) entra no próprio PR**, como commit `chore: bump Quadra to x.y.z`; nunca abrir um PR separado só para o bump. Assim a tag `vx.y.z` sai direto do merge.
+Estilo observado no histórico: Conventional Commits em inglês — `feat:`, `fix:`, `chore:`, `docs:`. Bumps de versão: `chore: bump Quadra to x.y.z`. Tags de release: `v*` alinhadas a `package.json` `version`. Todo bump de versão inclui a entrada da nova versão no topo de `RELEASES` em `src/release-notes.ts` (pop-up "Novidades da versão"), com título e descrição de cada novidade em linguagem para o usuário final; `tests/release-notes.test.ts` falha se a versão do `package.json` não tiver notas.
 
 **UI / plataforma**
 

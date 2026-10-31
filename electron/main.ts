@@ -11,6 +11,8 @@ import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
 import { createTeamCrests } from './team-crests'
+import { createMatchInfo, loadAthletePhotos } from './match-info'
+import { parsePhotoRefs, type InfoTabId } from '../src/match-info'
 import { createScoreboardScanners, type ScannerClock, type ScannerScore } from './scoreboard-scanner'
 import {
   createLoadPacer,
@@ -310,6 +312,9 @@ const scanners = createScoreboardScanners({
   },
   onScore: sendMatchScore,
   onClock: sendMatchClock,
+  onLineup: ({ panelIds, lineup }) => {
+    for (const panelId of panelIds) matchInfo.setWhLineup(panelId, lineup)
+  },
   onEnd: sendMatchEnded,
   findScorer: (query) => liveScores.findScorer(query),
 })
@@ -337,6 +342,7 @@ const liveScores = createLiveScoreLinker({
   onStatus: (status) => {
     // Unlinked (other video, no match): its crests go with it.
     if (status.status === 'off') teamCrests.clear(status.panelId)
+    matchInfo.setLinked(status.panelId, status.status === 'linked' ? liveScores.gameIdOf(status.panelId) : null)
     overlayWindow?.webContents.send('quadra:live-match', status)
   },
   onEnd: sendMatchEnded,
@@ -349,6 +355,11 @@ const liveScores = createLiveScoreLinker({
 const teamCrests = createTeamCrests({
   listGames: () => liveScores.listGames(),
   onCrests: (crests) => overlayWindow?.webContents.send('quadra:match-crests', crests),
+  onGame: ({ panelId, gameId, reversed }) => matchInfo.setResolved(panelId, gameId === null ? null : { gameId, reversed }),
+})
+/** The 365Scores game of each panel (or William Hill's own line-up) and what the info drawer shows about it. */
+const matchInfo = createMatchInfo({
+  onReady: (update) => overlayWindow?.webContents.send('quadra:match-info-ready', update),
 })
 
 function sendMatchEnded({ panelIds }: { panelIds: string[] }) {
@@ -815,6 +826,7 @@ function stopMatchDetection(panelId: string) {
   scanners.detach(panelId)
   liveScores.detach(panelId)
   teamCrests.clear(panelId)
+  matchInfo.clear(panelId)
   overlayWindow?.webContents.send('quadra:match-score', { panelId, home: '', away: '', score: '' })
 }
 
@@ -902,6 +914,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
     if (slotId && !isYoutubeWatchUrl(url) && !matchSportsPlayerUrl(url)) {
       liveScores.detach(slotId)
       teamCrests.clear(slotId)
+      matchInfo.clear(slotId)
     }
   })
   contents.on('did-finish-load', () => {
@@ -1058,6 +1071,7 @@ function closeOwnedWindows() {
   scanners.destroyAll()
   liveScores.destroyAll()
   teamCrests.reset()
+  matchInfo.reset()
   for (const id of [...matchDetections.keys()]) stopMatchDetection(id)
   stopBllEndWatch()
   if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
@@ -1258,6 +1272,17 @@ function installIpcHandlers() {
     if (!isUiSender(event) || typeof panelId !== 'string') return
     if (gameId === null || (typeof gameId === 'number' && Number.isSafeInteger(gameId) && gameId > 0)) liveScores.choose(panelId, gameId)
   })
+  ipcMain.handle('quadra:match-info', async (event, request: unknown) => {
+    if (!isUiSender(event)) return { status: 'error' }
+    const row = request && typeof request === 'object' ? request as { panelId?: unknown; tab?: unknown } : null
+    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : null
+    if (!row || typeof row.panelId !== 'string' || row.panelId.length > 64 || !tab) return { status: 'error' }
+    return matchInfo.load({ panelId: row.panelId, tab })
+  })
+  ipcMain.handle('quadra:athlete-photos', async (event, refs: unknown) => {
+    const valid = isUiSender(event) ? parsePhotoRefs(refs) : null
+    return valid ? loadAthletePhotos(valid) : {}
+  })
   ipcMain.on('quadra:open-monitor', (event) => {
     if (isUiSender(event)) openMonitorWindow()
   })
@@ -1370,6 +1395,8 @@ function createWindow() {
     scanners.destroyAll()
     liveScores.destroyAll()
     teamCrests.reset()
+    matchInfo.reset()
+  matchInfo.reset()
     if (monitorWindow && !monitorWindow.isDestroyed()) monitorWindow.close()
     destroyAllSlotViews()
     scheduleFullscreenPrioritySync()

@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.2.2',
+    label: '1.2.2',
+    notes: [
+      { title: 'Escalação do jogo', body: 'O botão de camisa nos controles do painel abre a escalação dos dois times com número, foto, posição e nota (e o técnico); nos jogos que o 365Scores não tem, usa a escalação do radar da William Hill.' },
+    ],
+  },
+  {
     version: '1.2.1',
     label: '1.2.1',
     notes: [

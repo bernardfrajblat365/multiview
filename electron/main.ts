@@ -755,8 +755,10 @@ function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string
 function openBllLoginWindow() {
   const catalog = getSportsCatalog('bllsport')
   setSportsCatalogTarget(catalog, null)
+  const alreadyOpen = Boolean(catalog.window && !catalog.window.isDestroyed())
   const window = ensureSportsCatalogWindow(catalog)
-  void window.loadURL(catalog.homeUrl).catch(() => {})
+  // ensureSportsCatalogWindow already navigates on create; reload only when reusing the window.
+  if (alreadyOpen) void window.loadURL(catalog.homeUrl).catch(() => {})
 }
 
 function listBllProfilesPayload() {

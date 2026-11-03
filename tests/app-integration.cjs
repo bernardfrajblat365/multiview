@@ -97,6 +97,28 @@ async function waitForExpression(target, expression, timeoutMs = 10000) {
   throw new Error(`Timeout aguardando expressão: ${expression}`)
 }
 
+/** Partition marker via localStorage (document.cookie can throw SecurityError while the catalog is still navigating). */
+async function setBllProfileMarker(target, value) {
+  await waitForExpression(target, `Boolean(document.querySelector('#game-a')) && document.readyState === 'complete'`)
+  await waitForExpression(target, `(() => {
+    try {
+      localStorage.setItem('quadra_bll_profile', ${JSON.stringify(value)})
+      return localStorage.getItem('quadra_bll_profile') === ${JSON.stringify(value)}
+    } catch {
+      return false
+    }
+  })()`, 15000)
+}
+
+async function readBllProfileMarker(target) {
+  await waitForExpression(target, `Boolean(document.querySelector('#game-a')) && document.readyState === 'complete'`)
+  await waitForExpression(target, `(() => { try { void localStorage.length; return true } catch { return false } })()`, 15000)
+  return evaluate(target.webSocketDebuggerUrl, `(() => {
+    try { return localStorage.getItem('quadra_bll_profile') }
+    catch { return null }
+  })()`)
+}
+
 /** 365Scores game detail with line-ups: 11 starters + coach per team. Player 101 has a photo, 102 doesn't (404). */
 function standingsFixture() {
   const team = (id, name, position, points, destinationNum) => ({ competitor: { id, name, shortName: name, imageVersion: 3 }, position, gamePlayed: 10, gamesWon: 5, gamesEven: 2, gamesLost: 3, ratio: position === 3 ? -2 : 4, points, destinationNum })
@@ -416,9 +438,7 @@ async function run() {
     })()`)
     let profileCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
     assert.ok(profileCatalog, 'Adicionar conta deve abrir a home da BLL na sessão nova.')
-    await waitForExpression(profileCatalog, `Boolean(document.querySelector('#game-a'))`)
-    await evaluate(profileCatalog.webSocketDebuggerUrl, `document.cookie = 'quadra_bll_profile=time; path=/'`)
-    assert.match(await evaluate(profileCatalog.webSocketDebuggerUrl, `document.cookie`), /quadra_bll_profile=time/)
+    await setBllProfileMarker(profileCatalog, 'time')
     await waitForExpression(target, `Boolean(document.querySelector('.bll-accounts [data-bll-profile][aria-current="true"]'))`)
     const timeId = await evaluate(target.webSocketDebuggerUrl,
       `document.querySelector('.bll-accounts [data-bll-profile][aria-current="true"]')?.dataset.bllProfile ?? null`)
@@ -431,9 +451,8 @@ async function run() {
     await evaluate(target.webSocketDebuggerUrl, `window.quadra.openBllProfileLogin()`)
     profileCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
     assert.ok(profileCatalog, 'Voltar à Principal e abrir login deve carregar a home da BLL.')
-    await waitForExpression(profileCatalog, `document.readyState === 'complete'`)
-    assert.equal(String(await evaluate(profileCatalog.webSocketDebuggerUrl, `document.cookie`)).includes('quadra_bll_profile=time'), false,
-      'A sessão da Principal não pode ver o cookie da outra conta.')
+    assert.notEqual(await readBllProfileMarker(profileCatalog), 'time',
+      'A sessão da Principal não pode ver o marcador da outra conta.')
     await evaluate(profileCatalog.webSocketDebuggerUrl, `window.close()`).catch(() => {})
     await wait(300)
     // Clique no botão principal ainda abre o lote (não a troca de conta).

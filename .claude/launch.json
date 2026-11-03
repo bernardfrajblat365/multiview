@@ -1,0 +1,10 @@
+{
+  "version": "0.0.1",
+  "configurations": [
+    {
+      "name": "renderer",
+      "url": "http://localhost:43123",
+      "port": 43123
+    }
+  ]
+}

@@ -91,6 +91,9 @@ async function run() {
         }
         const result = { version: document.querySelector('.app-version')?.textContent ?? '', layouts: [], interactions: {} }
         result.interactions.chooserHasNoCurrentHighlight = document.querySelectorAll('.chooser__card.is-current').length === 0
+        result.interactions.bllAccountsMenu = Boolean(document.querySelector('.chooser__bll #btn-start-bll-batch') && document.querySelector('.bll-accounts'))
+          && !document.querySelector('#btn-switch-bll-account')
+        result.interactions.bllAccountsAdd = Boolean(document.querySelector('.bll-accounts [data-bll-add]'))
         const updateButton = document.querySelector('#btn-check-updates')
         const updateStatus = document.querySelector('#update-status')
         result.interactions.updateButtonIsAccessible = updateButton?.getAttribute('aria-describedby') === 'update-status' &&
@@ -455,6 +458,8 @@ async function run() {
     assert.equal(result.interactions.twoHighlightsHaveMoreArea, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.startsWithOne, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.chooserHasNoCurrentHighlight, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.bllAccountsMenu, true, JSON.stringify(result.interactions))
+    assert.equal(result.interactions.bllAccountsAdd, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.updateButtonIsAccessible, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.updateButtonReportsUnavailableInDev, true, JSON.stringify(result.interactions))
     assert.equal(result.interactions.singlePanelTrashDisabled, true, JSON.stringify(result.interactions))

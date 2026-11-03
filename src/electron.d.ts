@@ -31,6 +31,11 @@ type QuadraBridge = {
   openBllsport: (panelId: string, label: string) => void
   setBllsportTarget: (panelId: string | null, label?: string) => void
   listBllsportEvents: () => Promise<BllEventsResult>
+  listBllProfiles: () => Promise<{ activeId: string; profiles: { id: string; name: string }[] }>
+  addBllProfile: (name: string) => Promise<{ status: 'ok' | 'error'; reason?: string; id?: string }>
+  deleteBllProfile: (id: string) => Promise<{ status: 'ok' | 'error'; reason?: string }>
+  switchBllProfile: (id: string) => Promise<{ status: 'ok' | 'error'; reason?: string }>
+  openBllProfileLogin: () => Promise<{ status: 'ok' | 'error' }>
   listYoutubeLives: (channelIds: string[]) => Promise<YoutubeLivesResult>
   resolveYoutubeChannel: (input: string) => Promise<YoutubeChannelResult>
   onRequestLayout: (callback: () => void) => () => void

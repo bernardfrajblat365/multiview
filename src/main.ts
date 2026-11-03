@@ -1444,6 +1444,115 @@ function openBllsport(id: PanelId) {
   window.quadra?.openBllsport(id, panelLabel(id))
 }
 
+async function promptText(
+  message: string,
+  confirmLabel = 'OK',
+  initial = '',
+  placeholder = '',
+): Promise<string | null> {
+  return new Promise((resolve) => {
+    document.querySelector('.confirm:not(.ui-dialog)')?.remove()
+    const backdrop = document.createElement('div')
+    backdrop.className = 'confirm'
+    backdrop.innerHTML = `<div class="confirm__dialog" role="dialog" aria-modal="true" aria-labelledby="prompt-title">
+      <p id="prompt-title" class="confirm__message">${escapeHtml(message)}</p>
+      <input type="text" class="confirm__input" maxlength="40" value="${escapeHtml(initial)}" placeholder="${escapeHtml(placeholder)}" aria-label="${escapeHtml(message)}">
+      <div class="confirm__actions"><button type="button" class="btn btn--ghost" data-cancel>Cancelar</button>
+      <button type="button" class="btn btn--load" data-ok>${escapeHtml(confirmLabel)}</button></div>
+    </div>`
+    const input = backdrop.querySelector<HTMLInputElement>('.confirm__input')!
+    const finish = (value: string | null) => {
+      document.removeEventListener('keydown', onKey)
+      backdrop.remove()
+      resolve(value)
+    }
+    const submit = () => {
+      const name = input.value.trim()
+      finish(name || null)
+    }
+    const onKey = (event: KeyboardEvent) => {
+      if (event.key === 'Escape') finish(null)
+      if (event.key === 'Enter') {
+        event.preventDefault()
+        submit()
+      }
+    }
+    backdrop.querySelector('[data-cancel]')!.addEventListener('click', () => finish(null))
+    backdrop.querySelector('[data-ok]')!.addEventListener('click', submit)
+    backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish(null) })
+    document.addEventListener('keydown', onKey)
+    document.body.appendChild(backdrop)
+    input.focus()
+    if (initial) input.select()
+  })
+}
+
+async function refreshBllAccountsMenu() {
+  const menu = document.querySelector<HTMLElement>('.bll-accounts')
+  if (!menu) return
+  const data = await window.quadra?.listBllProfiles().catch(() => null)
+  const profiles = data?.profiles ?? []
+  const activeId = data?.activeId ?? ''
+  menu.innerHTML = `${profiles.map((profile) => {
+    const active = profile.id === activeId
+    return `<div class="bll-accounts__row${active ? ' is-active' : ''}" role="none">
+      <button type="button" class="bll-accounts__item" role="menuitem" data-bll-profile="${escapeHtml(profile.id)}" aria-current="${active ? 'true' : 'false'}"><span class="bll-accounts__check" aria-hidden="true">${active ? '✓' : ''}</span><span class="bll-accounts__name">${escapeHtml(profile.name)}</span></button>
+      <button type="button" class="bll-accounts__remove" data-bll-remove="${escapeHtml(profile.id)}" data-bll-remove-name="${escapeHtml(profile.name)}" title="Remover ${escapeHtml(profile.name)}" aria-label="Remover ${escapeHtml(profile.name)}">×</button>
+    </div>`
+  }).join('')}
+    <button type="button" class="bll-accounts__item bll-accounts__add" role="menuitem" data-bll-add><span class="bll-accounts__check" aria-hidden="true"></span><span class="bll-accounts__name">Adicionar conta</span></button>`
+}
+
+function bindBllAccountsMenu(root: ParentNode) {
+  const wrap = root.querySelector<HTMLElement>('.chooser__bll')
+  const menu = root.querySelector<HTMLElement>('.bll-accounts')
+  if (!wrap || !menu) return
+  void refreshBllAccountsMenu()
+  wrap.addEventListener('mouseenter', () => { void refreshBllAccountsMenu() })
+  menu.addEventListener('click', (event) => {
+    const target = event.target as HTMLElement
+    const remove = target.closest<HTMLElement>('[data-bll-remove]')
+    if (remove?.dataset.bllRemove) {
+      event.preventDefault()
+      event.stopPropagation()
+      void (async () => {
+        const label = remove.dataset.bllRemoveName || 'esta conta'
+        const ok = await confirmAction(`Remover a conta "${label}"? O login dela neste PC será apagado.`, 'Remover')
+        if (!ok) return
+        await window.quadra?.deleteBllProfile(remove.dataset.bllRemove!)
+        await refreshBllAccountsMenu()
+      })()
+      return
+    }
+    const add = target.closest<HTMLElement>('[data-bll-add]')
+    if (add) {
+      event.preventDefault()
+      event.stopPropagation()
+      void (async () => {
+        const name = await promptText(
+          'Nome desta conta da BLL',
+          'Adicionar',
+          '',
+          'use o e-mail da conta, ex.: fulano@empresa.com',
+        )
+        if (!name) return
+        await window.quadra?.addBllProfile(name)
+        await refreshBllAccountsMenu()
+      })()
+      return
+    }
+    const item = target.closest<HTMLElement>('[data-bll-profile]')
+    if (item?.dataset.bllProfile) {
+      event.preventDefault()
+      event.stopPropagation()
+      void (async () => {
+        await window.quadra?.switchBllProfile(item.dataset.bllProfile!)
+        await refreshBllAccountsMenu()
+      })()
+    }
+  })
+}
+
 const ZAPPING_URL = 'https://app.zapping.com.br/webplayer'
 
 function openZapping(id: PanelId) {
@@ -3090,7 +3199,7 @@ function renderChoose() {
   app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch">Abrir vários jogos da BLL</button><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-first-steps">Primeiros passos</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><div class="chooser__bll"><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch" title="Abrir vários jogos; passe o mouse para trocar de conta da BLL">Abrir vários jogos da BLL</button><div class="bll-accounts" role="menu" aria-label="Contas da BLL"><button type="button" class="bll-accounts__item bll-accounts__add" role="menuitem" data-bll-add><span class="bll-accounts__check" aria-hidden="true"></span><span class="bll-accounts__name">Adicionar conta</span></button></div></div><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-first-steps">Primeiros passos</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
     ${alertControlsHtml('chooser')}
     <div class="chooser__options" role="group" aria-label="Número de telas">
       ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
@@ -3098,6 +3207,7 @@ function renderChoose() {
   </div></main>`
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
   app.querySelector<HTMLButtonElement>('#btn-start-bll-batch')?.addEventListener('click', () => openBatch('bll'))
+  bindBllAccountsMenu(app)
   app.querySelector<HTMLButtonElement>('#btn-start-youtube-batch')?.addEventListener('click', () => openBatch('youtube'))
   app.querySelector<HTMLButtonElement>('#btn-start-auto-open')?.addEventListener('click', openAutoOpenDialog)
   app.querySelector<HTMLButtonElement>('#btn-first-steps')?.addEventListener('click', showFirstSteps)

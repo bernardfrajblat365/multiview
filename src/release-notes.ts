@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.1',
+    label: '1.3.1',
+    notes: [
+      { title: 'Várias contas da BLL', body: 'Passe o mouse em Abrir vários jogos da BLL na tela inicial para trocar entre contas salvas neste PC ou adicionar outra; cada uma guarda o próprio login, sem misturar com as preferências do Quadra.' },
+    ],
+  },
+  {
     version: '1.3.0',
     label: '1.3',
     notes: [

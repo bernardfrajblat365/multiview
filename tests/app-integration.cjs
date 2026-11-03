@@ -97,6 +97,28 @@ async function waitForExpression(target, expression, timeoutMs = 10000) {
   throw new Error(`Timeout aguardando expressão: ${expression}`)
 }
 
+/** Partition marker via localStorage (document.cookie can throw SecurityError while the catalog is still navigating). */
+async function setBllProfileMarker(target, value) {
+  await waitForExpression(target, `Boolean(document.querySelector('#game-a')) && document.readyState === 'complete'`)
+  await waitForExpression(target, `(() => {
+    try {
+      localStorage.setItem('quadra_bll_profile', ${JSON.stringify(value)})
+      return localStorage.getItem('quadra_bll_profile') === ${JSON.stringify(value)}
+    } catch {
+      return false
+    }
+  })()`, 15000)
+}
+
+async function readBllProfileMarker(target) {
+  await waitForExpression(target, `Boolean(document.querySelector('#game-a')) && document.readyState === 'complete'`)
+  await waitForExpression(target, `(() => { try { void localStorage.length; return true } catch { return false } })()`, 15000)
+  return evaluate(target.webSocketDebuggerUrl, `(() => {
+    try { return localStorage.getItem('quadra_bll_profile') }
+    catch { return null }
+  })()`)
+}
+
 /** 365Scores game detail with line-ups: 11 starters + coach per team. Player 101 has a photo, 102 doesn't (404). */
 function standingsFixture() {
   const team = (id, name, position, points, destinationNum) => ({ competitor: { id, name, shortName: name, imageVersion: 3 }, position, gamePlayed: 10, gamesWon: 5, gamesEven: 2, gamesLost: 3, ratio: position === 3 ? -2 : 4, points, destinationNum })
@@ -389,6 +411,56 @@ async function run() {
   try {
     const target = await waitForRendererTarget(port)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.app-version')?.textContent`), expectedAppVersion)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('#btn-switch-bll-account'))`), false,
+      'O botão solto Trocar conta BLL saiu; as contas ficam no hover do lote BLL.')
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `Boolean(document.querySelector('.chooser__bll #btn-start-bll-batch') && document.querySelector('.bll-accounts'))`), true,
+      'A tela inicial precisa do dropdown de contas no botão Abrir vários jogos da BLL.')
+    await waitForExpression(target, `Boolean(document.querySelector('.bll-accounts [data-bll-add]'))`)
+    const principalId = await evaluate(target.webSocketDebuggerUrl,
+      `document.querySelector('.bll-accounts [data-bll-profile][aria-current="true"]')?.dataset.bllProfile ?? null`)
+    assert.ok(principalId, 'Deve existir a conta Principal ativa.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-accounts [data-bll-add]').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.confirm__input'))`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.confirm [data-cancel]').click()`)
+    await wait(400)
+    {
+      const pages = (await fetchJson(`http://127.0.0.1:${port}/json`).catch(() => []))
+        .filter((candidate) => candidate.type === 'page' && candidate.url.includes('/bll/'))
+      assert.equal(pages.length, 0, 'Cancelar "Adicionar conta" não pode abrir o catálogo BLL.')
+    }
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-accounts [data-bll-add]').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.confirm__input'))`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const input = document.querySelector('.confirm__input')
+      input.value = 'Conta Time'
+      input.dispatchEvent(new Event('input', { bubbles: true }))
+      document.querySelector('.confirm [data-ok]').click()
+    })()`)
+    let profileCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
+    assert.ok(profileCatalog, 'Adicionar conta deve abrir a home da BLL na sessão nova.')
+    await setBllProfileMarker(profileCatalog, 'time')
+    await waitForExpression(target, `Boolean(document.querySelector('.bll-accounts [data-bll-profile][aria-current="true"]'))`)
+    const timeId = await evaluate(target.webSocketDebuggerUrl,
+      `document.querySelector('.bll-accounts [data-bll-profile][aria-current="true"]')?.dataset.bllProfile ?? null`)
+    assert.ok(timeId && timeId !== principalId, 'A conta nova deve ficar ativa.')
+    await evaluate(profileCatalog.webSocketDebuggerUrl, `window.close()`).catch(() => {})
+    await wait(300)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-accounts [data-bll-profile="${principalId}"]').click()`)
+    await waitForExpression(target,
+      `document.querySelector('.bll-accounts [data-bll-profile][aria-current="true"]')?.dataset.bllProfile === ${JSON.stringify(principalId)}`)
+    await evaluate(target.webSocketDebuggerUrl, `window.quadra.openBllProfileLogin()`)
+    profileCatalog = await waitForPageTarget(port, (candidate) => candidate.url.includes('/bll/'))
+    assert.ok(profileCatalog, 'Voltar à Principal e abrir login deve carregar a home da BLL.')
+    assert.notEqual(await readBllProfileMarker(profileCatalog), 'time',
+      'A sessão da Principal não pode ver o marcador da outra conta.')
+    await evaluate(profileCatalog.webSocketDebuggerUrl, `window.close()`).catch(() => {})
+    await wait(300)
+    // Clique no botão principal ainda abre o lote (não a troca de conta).
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-bll-batch').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.bll-batch'))`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.bll-batch [data-cancel]').click()`)
+    await waitForExpression(target, `!document.querySelector('.bll-batch')`)
+
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('[data-count="2"]').click()`)
     await waitForExpression(target, `Boolean(document.querySelector('.panel[data-slot="0"] [data-bllsport]'))`)
     assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
@@ -1244,7 +1316,7 @@ async function run() {
     })`)
     assert.deepEqual(JSON.parse(whLineup), { names: ['Lautaro Herrera', 'Gabriel Silva'], note: 'Fonte: William Hill', ratingShown: false, coach: false })
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-close]').click()`)
-    process.stdout.write(JSON.stringify({ lineupDrawer: true, scorerName: true, chooser: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    process.stdout.write(JSON.stringify({ lineupDrawer: true, scorerName: true, chooser: true, bllProfiles: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

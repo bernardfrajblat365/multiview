@@ -35,6 +35,15 @@ const quadra = {
   openBllsport: (panelId: string, label: string) => ipcRenderer.send('quadra:open-bllsport', panelId, label),
   setBllsportTarget: (panelId: string | null, label = '') => ipcRenderer.send('quadra:set-bllsport-target', panelId, label),
   listBllsportEvents: (): Promise<BllEventsResult> => ipcRenderer.invoke('quadra:list-bllsport-events'),
+  listBllProfiles: (): Promise<{ activeId: string; profiles: { id: string; name: string }[] }> =>
+    ipcRenderer.invoke('quadra:bll-profiles'),
+  addBllProfile: (name: string): Promise<{ status: 'ok' | 'error'; reason?: string; id?: string }> =>
+    ipcRenderer.invoke('quadra:bll-profile-add', name),
+  deleteBllProfile: (id: string): Promise<{ status: 'ok' | 'error'; reason?: string }> =>
+    ipcRenderer.invoke('quadra:bll-profile-delete', id),
+  switchBllProfile: (id: string): Promise<{ status: 'ok' | 'error'; reason?: string }> =>
+    ipcRenderer.invoke('quadra:bll-profile-switch', id),
+  openBllProfileLogin: (): Promise<{ status: 'ok' | 'error' }> => ipcRenderer.invoke('quadra:bll-profile-login'),
   listYoutubeLives: (channelIds: string[]): Promise<YoutubeLivesResult> => ipcRenderer.invoke('quadra:list-youtube-lives', channelIds),
   resolveYoutubeChannel: (input: string): Promise<YoutubeChannelResult> => ipcRenderer.invoke('quadra:resolve-youtube-channel', input),
   onRequestLayout: (callback: () => void) => {

@@ -31,6 +31,16 @@ import { createUiMessageBox } from './ui-dialog'
 import { createPipWindowController } from './pip-window'
 import { isValidPipState, parsePipCommand } from '../src/pip'
 import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
+import {
+  addBllProfile,
+  createDefaultState,
+  deleteBllProfile,
+  partitionOf,
+  readBllProfilesFile,
+  switchBllProfile,
+  writeBllProfilesFile,
+  type BllProfilesState,
+} from './bll-profiles'
 
 const { autoUpdater } = electronUpdater
 
@@ -220,6 +230,9 @@ let mainWindow: BaseWindow | null = null
 let overlayWindow: BrowserWindow | null = null
 let overlayReady = false
 let quadraSession: Electron.Session | null = null
+/** Named BLL login partitions; preferences stay on the overlay / persist:quadra. */
+let bllProfiles: BllProfilesState = createDefaultState()
+const bllSessionCache = new Map<string, Electron.Session>()
 let shuttingDown = false
 let cursorHidden = false
 let visiblePanelIds = new Set<string>()
@@ -528,6 +541,92 @@ function getSportsCatalog(id: SportsCatalogId) {
   return sportsCatalogs[id]
 }
 
+function bllHomeOrigin(): string {
+  return new URL(getSportsCatalog('bllsport').homeUrl).origin
+}
+
+function isBllOriginUrl(value: string): boolean {
+  try {
+    return new URL(value).origin === bllHomeOrigin()
+  } catch {
+    return false
+  }
+}
+
+function sessionForPartition(partition: string): Electron.Session {
+  let cached = bllSessionCache.get(partition)
+  if (!cached) {
+    cached = session.fromPartition(partition)
+    cached.setUserAgent(electronUserAgent)
+    bllSessionCache.set(partition, cached)
+  }
+  return cached
+}
+
+function activeBllSession(): Electron.Session {
+  return sessionForPartition(partitionOf(bllProfiles.activeId))
+}
+
+function sessionForUrl(url: string): Electron.Session {
+  return isBllOriginUrl(url) ? activeBllSession() : quadraSession!
+}
+
+function sessionForCatalog(catalog: SportsCatalog): Electron.Session {
+  return catalog.id === 'bllsport' ? activeBllSession() : quadraSession!
+}
+
+function saveBllProfiles() {
+  writeBllProfilesFile(app.getPath('userData'), bllProfiles)
+}
+
+function closeBllCatalogWindow() {
+  const catalog = getSportsCatalog('bllsport')
+  if (catalog.window && !catalog.window.isDestroyed()) {
+    catalog.window.destroy()
+    catalog.window = null
+    catalog.target = null
+  }
+}
+
+/** Session is fixed at WebContents creation — open BLL panels must be rebuilt on profile switch. */
+function recreateOpenBllSlotViews() {
+  const snapshots: { id: string; url: string; muted: boolean; pip: boolean; bounds: Electron.Rectangle }[] = []
+  for (const [id, state] of slotViews) {
+    if (!isBllOriginUrl(state.url)) continue
+    snapshots.push({
+      id,
+      url: state.url,
+      muted: !state.view.webContents.isDestroyed() && state.view.webContents.isAudioMuted(),
+      pip: state.host === 'pip',
+      bounds: state.view.getBounds(),
+    })
+  }
+  for (const snap of snapshots) {
+    destroySlotView(snap.id)
+    const state = createSlotView(snap.id, snap.url, snap.muted, snap.pip, PIP_WINDOW_TITLE)
+    if (!snap.pip) {
+      state.view.setBounds(snap.bounds)
+      state.view.setVisible(true)
+    }
+  }
+}
+
+async function clearBllOriginOnSession(target: Electron.Session) {
+  await target.clearStorageData({ origin: bllHomeOrigin() }).catch(() => {})
+}
+
+async function initBllProfiles() {
+  const existing = readBllProfilesFile(app.getPath('userData'))
+  if (existing) {
+    bllProfiles = existing
+    return
+  }
+  bllProfiles = createDefaultState()
+  saveBllProfiles()
+  // Drop leftover BLL cookies on the shared partition so login lives only in named profiles.
+  if (quadraSession) await clearBllOriginOnSession(quadraSession)
+}
+
 function normalizeSportsPlayerUrl(catalog: SportsCatalog, value: string) {
   try {
     const url = new URL(value, catalog.homeUrl)
@@ -576,7 +675,7 @@ function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebCo
         overrideBrowserWindowOptions: {
           autoHideMenuBar: true,
           webPreferences: {
-            session: quadraSession!,
+            session: sessionForCatalog(catalog),
             contextIsolation: true,
             nodeIntegration: false,
             sandbox: true,
@@ -606,18 +705,18 @@ function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebCo
   })
 }
 
-function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string) {
-  if (!visiblePanelIds.has(id)) return
-  const catalog = getSportsCatalog(catalogId)
-  setSportsCatalogTarget(catalog, id, label)
+/** Create or focus the sports catalog BrowserWindow (shared by panel pick and BLL login). */
+function ensureSportsCatalogWindow(catalog: SportsCatalog) {
   if (catalog.window && !catalog.window.isDestroyed()) {
     if (catalog.window.isMinimized()) catalog.window.restore()
     catalog.window.show()
     catalog.window.focus()
-    return
+    return catalog.window
   }
   catalog.window = new BrowserWindow({
-    title: `${catalog.name} — abrir no ${label}`,
+    title: catalog.target
+      ? `${catalog.name} — abrir no ${catalog.target.label}`
+      : `${catalog.name} — escolha um painel no Quadra`,
     icon: appIconPath,
     width: 1180,
     height: 820,
@@ -625,7 +724,7 @@ function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string
     minHeight: 560,
     autoHideMenuBar: true,
     webPreferences: {
-      session: quadraSession!,
+      session: sessionForCatalog(catalog),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -642,6 +741,72 @@ function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string
     catalog.target = null
   })
   void catalog.window.loadURL(catalog.homeUrl).catch(() => {})
+  return catalog.window
+}
+
+function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string) {
+  if (!visiblePanelIds.has(id)) return
+  const catalog = getSportsCatalog(catalogId)
+  setSportsCatalogTarget(catalog, id, label)
+  ensureSportsCatalogWindow(catalog)
+}
+
+/** Open the BLL home without a panel target so the user can log in on the active profile. */
+function openBllLoginWindow() {
+  const catalog = getSportsCatalog('bllsport')
+  setSportsCatalogTarget(catalog, null)
+  const alreadyOpen = Boolean(catalog.window && !catalog.window.isDestroyed())
+  const window = ensureSportsCatalogWindow(catalog)
+  // ensureSportsCatalogWindow already navigates on create; reload only when reusing the window.
+  if (alreadyOpen) void window.loadURL(catalog.homeUrl).catch(() => {})
+}
+
+function listBllProfilesPayload() {
+  return { activeId: bllProfiles.activeId, profiles: bllProfiles.profiles.map((profile) => ({ ...profile })) }
+}
+
+function activateBllProfile(id: string): { status: 'ok' | 'error'; reason?: string } {
+  const previousId = bllProfiles.activeId
+  const result = switchBllProfile(bllProfiles, id)
+  if (!result.ok) return { status: 'error', reason: result.reason }
+  bllProfiles = result.state
+  if (previousId !== bllProfiles.activeId) {
+    saveBllProfiles()
+    closeBllCatalogWindow()
+    closeBllListWindow()
+    recreateOpenBllSlotViews()
+  }
+  return { status: 'ok' }
+}
+
+async function handleAddBllProfile(name: unknown): Promise<{ status: 'ok' | 'error'; reason?: string; id?: string }> {
+  const result = addBllProfile(bllProfiles, name)
+  if (!result.ok) return { status: 'error', reason: result.reason }
+  bllProfiles = result.state
+  saveBllProfiles()
+  closeBllCatalogWindow()
+  closeBllListWindow()
+  recreateOpenBllSlotViews()
+  openBllLoginWindow()
+  return { status: 'ok', id: result.id }
+}
+
+async function handleDeleteBllProfile(id: unknown): Promise<{ status: 'ok' | 'error'; reason?: string }> {
+  if (typeof id !== 'string') return { status: 'error', reason: 'missing' }
+  const previous = bllProfiles
+  const wasLast = previous.profiles.length === 1
+  const result = deleteBllProfile(previous, id)
+  if (!result.ok) return { status: 'error', reason: result.reason }
+  const removedId = wasLast ? previous.profiles[0].id : id
+  bllProfiles = result.state
+  saveBllProfiles()
+  closeBllCatalogWindow()
+  closeBllListWindow()
+  await clearBllOriginOnSession(sessionForPartition(partitionOf(removedId)))
+  if (wasLast) await clearBllOriginOnSession(activeBllSession())
+  recreateOpenBllSlotViews()
+  if (wasLast) openBllLoginWindow()
+  return { status: 'ok' }
 }
 
 const BLL_LIST_TIMEOUT_MS = 15000
@@ -670,7 +835,7 @@ function getBllListWindow() {
     width: 1180,
     height: 820,
     webPreferences: {
-      session: quadraSession!,
+      session: activeBllSession(),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -1009,6 +1174,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
   })
   contents.setWindowOpenHandler(({ url }) => {
     if (!isAllowedRemoteUrl(url)) return { action: 'deny' }
+    const parentUrl = contents.isDestroyed() ? url : contents.getURL()
     return {
       action: 'allow',
       overrideBrowserWindowOptions: {
@@ -1016,7 +1182,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
         width: 1100,
         height: 760,
         webPreferences: {
-          session: quadraSession!,
+          session: sessionForUrl(isAllowedRemoteUrl(parentUrl) ? parentUrl : url),
           contextIsolation: true,
           nodeIntegration: false,
           sandbox: true,
@@ -1143,7 +1309,7 @@ function installAutoUpdater() {
 function createSlotView(id: string, url: string, muted: boolean, pip = false, title = '') {
   const view = new WebContentsView({
     webPreferences: {
-      session: quadraSession!,
+      session: sessionForUrl(url),
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: true,
@@ -1257,10 +1423,16 @@ function applyLayout(payload: LayoutPayload) {
     if (!state) {
       state = createSlotView(panel.id, panel.url, panel.muted, floating, PIP_WINDOW_TITLE)
     } else if (state.url !== panel.url || panel.forceReload) {
-      state.url = panel.url
-      state.cursorCssKey = undefined
-      state.playbackRetries = 0
-      loadSlotUrl(state, panel.url)
+      // Session is fixed at creation; BLL ↔ other origin needs a new WebContentsView.
+      if (isBllOriginUrl(state.url) !== isBllOriginUrl(panel.url)) {
+        destroySlotView(panel.id)
+        state = createSlotView(panel.id, panel.url, panel.muted, floating, PIP_WINDOW_TITLE)
+      } else {
+        state.url = panel.url
+        state.cursorCssKey = undefined
+        state.playbackRetries = 0
+        loadSlotUrl(state, panel.url)
+      }
     }
     state.view.webContents.setAudioMuted(panel.muted)
     if (floating) {
@@ -1451,6 +1623,27 @@ function installIpcHandlers() {
     if (!isUiSender(event)) return { status: 'unavailable' }
     return listBllsportEvents()
   })
+  ipcMain.handle('quadra:bll-profiles', (event) => {
+    if (!isUiSender(event)) return { activeId: '', profiles: [] }
+    return listBllProfilesPayload()
+  })
+  ipcMain.handle('quadra:bll-profile-add', (event, name: unknown) => {
+    if (!isUiSender(event)) return { status: 'error', reason: 'forbidden' }
+    return handleAddBllProfile(name)
+  })
+  ipcMain.handle('quadra:bll-profile-delete', (event, id: unknown) => {
+    if (!isUiSender(event)) return { status: 'error', reason: 'forbidden' }
+    return handleDeleteBllProfile(id)
+  })
+  ipcMain.handle('quadra:bll-profile-switch', (event, id: unknown) => {
+    if (!isUiSender(event) || typeof id !== 'string') return { status: 'error', reason: 'missing' }
+    return activateBllProfile(id)
+  })
+  ipcMain.handle('quadra:bll-profile-login', (event) => {
+    if (!isUiSender(event)) return { status: 'error' }
+    openBllLoginWindow()
+    return { status: 'ok' }
+  })
   ipcMain.handle('quadra:list-youtube-lives', (event, channels: unknown) => {
     if (!isUiSender(event)) return { status: 'unavailable' }
     return listYoutubeLives(channels)
@@ -1533,6 +1726,7 @@ app.whenReady().then(async () => {
   quadraSession = session.fromPartition('persist:quadra')
   quadraSession.setUserAgent(electronUserAgent)
   quadraSession.webRequest.onBeforeRequest({ urls: YOUTUBE_AD_URL_PATTERNS }, (_details, callback) => callback({ cancel: true }))
+  await initBllProfiles()
   if (process.platform === 'win32') app.setAppUserModelId('com.quadra.multiview')
   installNativeFullscreenHandlers()
   installIpcHandlers()

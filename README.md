@@ -35,7 +35,7 @@ npm run dist:release # instalador NSIS em release/
 
 ### BLL
 
-- Botão **BLL** no painel: login uma vez (sessão persistente `persist:quadra`) e escolha o jogo; os próximos vão para a próxima tela vazia.
+- Botão **BLL** no painel: login uma vez e escolha o jogo; os próximos vão para a próxima tela vazia. Na tela inicial, passe o mouse em **Abrir vários jogos da BLL** para trocar entre contas nomeadas (cada uma com a própria sessão Chromium) ou **Adicionar conta**; Auto, alertas e o resto do Quadra não mudam.
 - **Abrir vários jogos da BLL** (tela inicial ou menu **⋯**): lista os jogos ao vivo lidos da home da BLL numa página oculta (só leitura, mesmo login), agrupados por liga (país + liga em ordem alfabética, jogos por horário, fase ao lado) ou, em **Ordem: Por horário**, numa lista só com a competição ao lado (a escolha fica salva). Jogos de basquete aparecem com 🏀 e de futebol americano com 🏈. Na tela inicial cria uma tela por jogo; com a grade aberta, preenche as vazias e cria as que faltarem (até 18). Jogos já abertos são pulados; previstos só aparecem quando começam. **Desfazer** volta.
 - **Modo Auto** (tela inicial ou menu **⋯**; ponto verde no **⋯** quando ligado): relê a lista da BLL a cada 25 s e abre numa tela cada jogo de futebol que fica ao vivo numa competição escolhida. Cada competição fica em **Todos os jogos**, **Só times principais** ou **Desligada** (padrão: Brasileirão, Copa do Brasil, Supercopa do Brasil, competições da UEFA e as 5 grandes ligas com todos os jogos; copas nacionais europeias só com os times principais). Dá para somar competições como aparecem na BLL ("Portugal, Liga Portugal") e editar os times principais (outros nomes separados por `/`); a opção "em qualquer competição" abre também amistosos etc. dos times principais. Preenche telas vazias e cria telas até 18; com a grade cheia, jogo de time principal entra no lugar do jogo mais antigo aberto pelo modo Auto sem time principal (os outros esperam tela livre). Painéis abertos por você nunca são trocados; jogo que você fechar ou trocar não volta. Com o organizador, um arrasto, um diálogo ou um destaque de gol na tela, espera e tenta de novo em 5 s. Ligar abre também os jogos que já estão ao vivo. Listas salvas no perfil (`localStorage`); ligado/desligado vale só até fechar o app. Times casam pelo nome inteiro (Milan ≠ Inter Milan; feminino, sub-XX e reservas ficam fora).
 
@@ -85,7 +85,7 @@ O botão de janela (no canto superior esquerdo do painel, antes da lixeira) abre
 
 ### Sessão e dados
 
-URLs e layout ficam só em memória. Só a BLL usa sessão persistente. Credenciais, cookies, tokens e licenças não são coletados.
+URLs e layout ficam só em memória. A BLL usa sessões persistentes nomeadas (até 8); o restante do app usa `persist:quadra`. Credenciais, cookies, tokens e licenças não são coletados pelo Quadra.
 
 ## Especificações técnicas
 

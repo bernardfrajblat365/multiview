@@ -8,7 +8,15 @@ import {
   extractWilliamHillId,
   formatPlayerName,
   filterNew,
+  createGoalScoreState,
+  BOARD_RISE_WINDOW_MS,
+  GOAL_RISE_WINDOW_MS,
+  GOAL_WARMUP_MS,
+  GOAL_SCORE_WAIT_MS,
+  predictGoalScore,
+  recordBoardScore,
   HISTORY_GRACE_MS,
+  settleGoals,
   type RawIncident,
 } from '../src/match-events.ts'
 import { ALERT_SOUNDS, ALERT_SOUND_IDS } from '../src/alert-sounds.ts'
@@ -301,4 +309,82 @@ test('formatPlayerName vira "Nome Sobrenome" e usa inicial com ponto', () => {
   assert.equal(formatPlayerName('Jun Ichimori'), 'Jun Ichimori')
   assert.equal(formatPlayerName('  Silva,   '), 'Silva')
   assert.equal(formatPlayerName(',X'), ',X')
+})
+
+test('a goal waits for the board score to move off the baseline', () => {
+  const incident = classifyIncident({ id: 'g1', type: 'GOAL', teamType: 'HOME', time: { duration: 60 } })!
+  const held = [{ incident, since: 1000, baseline: '1 - 0' }]
+  assert.deepEqual(settleGoals(held, '1 - 0', 1500), { ready: [], waiting: held })
+  assert.deepEqual(settleGoals(held, '2 - 0', 1500), { ready: held, waiting: [] })
+})
+
+test('a goal whose score never moves goes out after the wait', () => {
+  const incident = classifyIncident({ id: 'g2', type: 'GOAL', teamType: 'AWAY', time: { duration: 60 } })!
+  const held = [{ incident, since: 1000, baseline: '0 - 0' }]
+  assert.equal(settleGoals(held, '0 - 0', 1000 + GOAL_SCORE_WAIT_MS - 1).ready.length, 0)
+  assert.equal(settleGoals(held, '0 - 0', 1000 + GOAL_SCORE_WAIT_MS).ready.length, 1)
+})
+
+// Times in ms after the board was first read; W is past the warm-up.
+const W = GOAL_WARMUP_MS + 1000
+
+test('goal score: goal before the board (Feyenoord x Inter 54\') gets the goal added', () => {
+  const state = createGoalScoreState()
+  recordBoardScore(state, 0, { home: 0, away: 2 })
+  assert.deepEqual(predictGoalScore(state, W, 'away'), { home: 0, away: 3 })
+  recordBoardScore(state, W + 600, { home: 0, away: 3 })
+  assert.deepEqual(state.goals, { home: [], away: [] })
+})
+
+test('goal score: board before the goal is not counted twice, nor on the next goal', () => {
+  // Portsmouth x Swansea: 1-0, board 1-1 then goal 85\' 0.9 s later; board 2-1 then goal 92\' 0.9 s later.
+  const state = createGoalScoreState()
+  recordBoardScore(state, 0, { home: 1, away: 0 })
+  recordBoardScore(state, W, { home: 1, away: 1 })
+  assert.deepEqual(predictGoalScore(state, W + 900, 'away'), { home: 1, away: 1 })
+  recordBoardScore(state, W + 444_000, { home: 2, away: 1 })
+  assert.deepEqual(predictGoalScore(state, W + 444_900, 'home'), { home: 2, away: 1 })
+})
+
+test('goal score: Blackburn x Stoke 87\' and 90\' (board first), then the 90\' taken back', () => {
+  const state = createGoalScoreState()
+  recordBoardScore(state, 0, { home: 0, away: 2 })
+  recordBoardScore(state, W, { home: 1, away: 2 })
+  assert.deepEqual(predictGoalScore(state, W + 900, 'home'), { home: 1, away: 2 })
+  recordBoardScore(state, W + 188_000, { home: 2, away: 2 })
+  assert.deepEqual(predictGoalScore(state, W + 188_900, 'home'), { home: 2, away: 2 })
+  recordBoardScore(state, W + 232_000, { home: 1, away: 2 })
+  // A later goal for the same side counts from the corrected board.
+  assert.deepEqual(predictGoalScore(state, W + 300_000, 'home'), { home: 2, away: 2 })
+})
+
+test('goal score: two goals before the board moves both count', () => {
+  const state = createGoalScoreState()
+  recordBoardScore(state, 0, { home: 0, away: 0 })
+  assert.deepEqual(predictGoalScore(state, W, 'away'), { home: 0, away: 1 })
+  assert.deepEqual(predictGoalScore(state, W + 20, 'home'), { home: 1, away: 1 })
+  recordBoardScore(state, W + 700, { home: 1, away: 1 })
+  assert.deepEqual(predictGoalScore(state, W + 40_000, 'away'), { home: 1, away: 2 })
+})
+
+test('goal score: an old board rise is not taken as this goal', () => {
+  const state = createGoalScoreState()
+  recordBoardScore(state, 0, { home: 0, away: 0 })
+  recordBoardScore(state, W, { home: 1, away: 0 })
+  assert.deepEqual(predictGoalScore(state, W + BOARD_RISE_WINDOW_MS, 'home'), { home: 2, away: 0 })
+})
+
+test('goal score: a goal the board never shows stops counting', () => {
+  const state = createGoalScoreState()
+  recordBoardScore(state, 0, { home: 0, away: 0 })
+  predictGoalScore(state, W, 'home')
+  assert.deepEqual(predictGoalScore(state, W + GOAL_RISE_WINDOW_MS, 'away'), { home: 0, away: 1 })
+})
+
+test('goal score: no prediction in the first minute of watching', () => {
+  const state = createGoalScoreState()
+  assert.equal(predictGoalScore(state, 0, 'home'), null)
+  recordBoardScore(state, 0, { home: 1, away: 0 })
+  assert.equal(predictGoalScore(state, GOAL_WARMUP_MS - 1, 'home'), null)
+  assert.notEqual(predictGoalScore(state, GOAL_WARMUP_MS, 'home'), null)
 })

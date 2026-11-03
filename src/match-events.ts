@@ -128,6 +128,98 @@ export function filterNew(state: ScannerState, incidents: readonly RawIncident[]
   return { fresh, ignored }
 }
 
+/**
+ * The William Hill board gets goals and scores on separate topics, so the goal incident can reach us
+ * before the score text moves (seen: ~0.7 s) or after it (seen: ~0.9 s, common in the Championship).
+ * Each goal is paired with one rise of the board on its side: a rise already waiting means the board
+ * has the goal; otherwise the goal is still on its way and is added to what the board shows. The
+ * alert goes out at once either way.
+ */
+/** A board rise this old with no goal alerted for it isn't waited on (a data fix, a held own goal). */
+export const BOARD_RISE_WINDOW_MS = 5000
+/** A goal whose rise never came in this long is dropped (disallowed before the board showed it). */
+export const GOAL_RISE_WINDOW_MS = 15_000
+/** On connect the feed replays recent goals the board already shows: no prediction for this long. */
+export const GOAL_WARMUP_MS = 60_000
+
+type Score = { home: number; away: number }
+type Side = 'home' | 'away'
+
+export type GoalScoreState = {
+  board: Score | null
+  /** When the board was first read. */
+  since: number
+  /** Board rises per side still waiting for their goal alert, by time. */
+  rises: Record<Side, number[]>
+  /** Goals alerted per side still waiting for their board rise, by time. */
+  goals: Record<Side, number[]>
+}
+
+export function createGoalScoreState(): GoalScoreState {
+  return { board: null, since: 0, rises: { home: [], away: [] }, goals: { home: [], away: [] } }
+}
+
+function prune(state: GoalScoreState, now: number) {
+  for (const side of ['home', 'away'] as const) {
+    state.rises[side] = state.rises[side].filter((at) => now - at < BOARD_RISE_WINDOW_MS)
+    state.goals[side] = state.goals[side].filter((at) => now - at < GOAL_RISE_WINDOW_MS)
+  }
+}
+
+/** Records the board's score: each rise pays off a goal already alerted on that side, or waits for one. */
+export function recordBoardScore(state: GoalScoreState, now: number, score: Score) {
+  const previous = state.board
+  state.board = { ...score }
+  if (!previous) {
+    state.since = now
+    return
+  }
+  prune(state, now)
+  for (const side of ['home', 'away'] as const) {
+    const delta = score[side] - previous[side]
+    if (delta < 0) {
+      // Taken back off the board (VAR, a data fix): nothing pending on that side holds any more.
+      state.rises[side] = []
+      state.goals[side] = []
+    }
+    for (let step = 0; step < delta; step += 1) {
+      if (state.goals[side].length > 0) state.goals[side].shift()
+      else state.rises[side].push(now)
+    }
+  }
+}
+
+/**
+ * The score after a goal by `team`, alerted at `now`, and records the goal. Null before the board is
+ * read and in the first minute of watching, when the goal may be a replay the board already has.
+ */
+export function predictGoalScore(state: GoalScoreState, now: number, team: Side): Score | null {
+  if (!state.board || now - state.since < GOAL_WARMUP_MS) return null
+  prune(state, now)
+  if (state.rises[team].length > 0) state.rises[team].shift()
+  else state.goals[team].push(now)
+  return { home: state.board.home + state.goals.home.length, away: state.board.away + state.goals.away.length }
+}
+
+/**
+ * Own goals (and goals without a side) can't be predicted: which side the feed credits isn't known.
+ * They wait for the board's score to move, or for this long.
+ */
+export const GOAL_SCORE_WAIT_MS = 4000
+
+export type HeldGoal = { incident: MatchIncident; since: number; baseline: string }
+
+/** Splits held goals into those whose score is known now (it moved off the baseline, or the wait ran out) and those still waiting. */
+export function settleGoals(held: readonly HeldGoal[], score: string, now: number): { ready: HeldGoal[]; waiting: HeldGoal[] } {
+  const ready: HeldGoal[] = []
+  const waiting: HeldGoal[] = []
+  for (const goal of held) {
+    if (score !== goal.baseline || now - goal.since >= GOAL_SCORE_WAIT_MS) ready.push(goal)
+    else waiting.push(goal)
+  }
+  return { ready, waiting }
+}
+
 export function extractWilliamHillId(value: unknown): string | null {
   if (typeof value !== 'string' && typeof value !== 'number') return null
   const id = String(value).replace(/^OB_EV/, '')

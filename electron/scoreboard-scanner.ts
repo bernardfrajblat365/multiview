@@ -4,7 +4,14 @@ import {
   createScannerState,
   detectMatchEnd,
   END_INCIDENT_TYPE,
+  createGoalScoreState,
   filterNew,
+  GOAL_SCORE_WAIT_MS,
+  predictGoalScore,
+  recordBoardScore,
+  settleGoals,
+  type GoalScoreState,
+  type HeldGoal,
   type MatchIncident,
   type RawIncident,
   type ScannerState,
@@ -12,6 +19,7 @@ import {
 import { logScanner } from './scanner-log'
 import { clockElapsedAt, HALF_TIME_INCIDENTS, isRunningPeriod, normalizeElapsed, sameClock, whClockPeriod, type MatchClock } from '../src/match-clock'
 import type { CrestTeams } from '../src/team-crests'
+import { parseScore } from '../src/match-label'
 import { parseWhLineup, type LineupTeam } from '../src/match-info'
 
 export type ScannerEvent = {
@@ -80,6 +88,10 @@ type Scanner = {
   retryTimer?: ReturnType<typeof setTimeout>
   /** Goals whose scorer isn't known yet, by incident id. */
   scorers: Map<string, PendingScorer>
+  /** Own goals (and the like) waiting for the board's score to catch up before their alert goes out. */
+  heldGoals: HeldGoal[]
+  /** Board rises and goal alerts still waiting for each other, to predict a goal's score. */
+  goalScores: GoalScoreState
   destroyed: boolean
 }
 
@@ -400,7 +412,11 @@ export function createScoreboardScanners(options: {
     scanner.connected = Boolean(result.connected)
     if (result.home) scanner.home = result.home
     if (result.away) scanner.away = result.away
+    const previousScore = scanner.score
     if (result.score) scanner.score = result.score
+    const scoreMoved = previousScore !== '' && scanner.score !== previousScore
+    const boardScore = parseScore(scanner.score)
+    if (boardScore) recordBoardScore(scanner.goalScores, Date.now(), boardScore)
     publishScore(scanner)
     scanner.lineup = parseWhLineup(result.lineups, scanner.home, scanner.away)
     publishLineup(scanner)
@@ -413,7 +429,8 @@ export function createScoreboardScanners(options: {
       scanner.lastMessageAt = Date.now()
     }
     const queue = Array.isArray(result.queue) ? result.queue : []
-    if (queue.length > 0) emitIncidents(scanner, queue)
+    if (queue.length > 0) emitIncidents(scanner, queue, scoreMoved)
+    releaseHeldGoals(scanner)
     await resolveScorers(scanner)
     const period = typeof result.period === 'string' ? result.period : ''
     if (detectMatchEnd(scanner.state, period, Number(result.endAt) || 0)) {
@@ -422,10 +439,40 @@ export function createScoreboardScanners(options: {
     }
   }
 
-  function emitIncidents(scanner: Scanner, queue: RawIncident[]) {
+  function emitIncidents(scanner: Scanner, queue: RawIncident[], scoreMoved: boolean) {
     const { fresh, ignored } = filterNew(scanner.state, queue)
     if (ignored > 0) logScanner(`[${scanner.label}] ${ignored} lance(s) do histórico ignorado(s)`, 'wh')
-    for (const incident of fresh) sendIncident(scanner, incident, scanner.score)
+    for (const incident of fresh) {
+      if (incident.kind !== 'goal') {
+        sendIncident(scanner, incident, scanner.score)
+        continue
+      }
+      // The board's score may not have caught up with the goal yet: it is predicted instead of read.
+      const predicted = incident.team !== 'match' && !incident.ownGoal ? predictGoalScore(scanner.goalScores, Date.now(), incident.team) : null
+      if (predicted) {
+        const score = `${predicted.home} - ${predicted.away}`
+        if (score !== scanner.score) logScanner(`[${scanner.label}] gol ${incident.minute}': placar previsto ${score} (feed ainda em ${scanner.score})`, 'wh')
+        sendIncident(scanner, incident, score)
+        continue
+      }
+      // Own goals, goals without a side and the first minute of watching: the alert waits for the board's score to move.
+      if (scanner.score && !scoreMoved) {
+        scanner.heldGoals.push({ incident, since: Date.now(), baseline: scanner.score })
+        continue
+      }
+      sendIncident(scanner, incident, scanner.score)
+    }
+  }
+
+  function releaseHeldGoals(scanner: Scanner) {
+    if (scanner.heldGoals.length === 0) return
+    const { ready, waiting } = settleGoals(scanner.heldGoals, scanner.score, Date.now())
+    scanner.heldGoals = waiting
+    for (const goal of ready) {
+      if (scanner.score === goal.baseline) logScanner(`[${scanner.label}] placar do feed não mudou em ${GOAL_SCORE_WAIT_MS / 1000} s após o gol ${goal.incident.minute}'; alerta sai com ${scanner.score}`, 'wh')
+      else logScanner(`[${scanner.label}] gol ${goal.incident.minute}': placar do feed ${goal.baseline} → ${scanner.score} (${((Date.now() - goal.since) / 1000).toFixed(1)} s depois do lance)`, 'wh')
+      sendIncident(scanner, goal.incident, scanner.score)
+    }
   }
 
   /**
@@ -552,6 +599,8 @@ export function createScoreboardScanners(options: {
       updates: 0,
       retries: 0,
       scorers: new Map(),
+      heldGoals: [],
+      goalScores: createGoalScoreState(),
       drainTimer: setInterval(() => void drain(scanner), DRAIN_MS),
       watchdogTimer: setInterval(() => watchdog(scanner), WATCHDOG_MS),
       destroyed: false,

@@ -2252,8 +2252,8 @@ function panelAlertsLabel(panel: Panel) {
   return `${panel.alertsOff ? 'Ativar' : 'Desativar'} alertas do jogo ${panelIndex(panel.id) + 1}`
 }
 
-function panelAlertsIconHtml(off: boolean) {
-  return `<svg class="panel__alerts-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11.5V7.2a4 4 0 0 1 8 0v4.3l1.2 1.2H2.8zM6.6 14.2a1.5 1.5 0 0 0 2.8 0" />${off ? '<path d="M2.2 2.2l11.6 11.6" />' : ''}</svg>`
+function panelAlertsIconHtml() {
+  return '<img class="panel__alerts-icon" src="./alerts-icon.png" alt="" aria-hidden="true" />'
 }
 
 /** Turns every alert of one panel off or on (ring, sound, goal highlight); memory only, like mute. */
@@ -2271,7 +2271,7 @@ function togglePanelAlerts(id: PanelId) {
   const button = app.querySelector<HTMLButtonElement>(`[data-panel-id="${CSS.escape(id)}"] [data-alerts]`)
   if (!button) return
   const label = panelAlertsLabel(panel)
-  button.innerHTML = panelAlertsIconHtml(panel.alertsOff)
+  button.innerHTML = panelAlertsIconHtml()
   button.setAttribute('aria-pressed', String(panel.alertsOff))
   button.setAttribute('aria-label', label)
   button.title = label
@@ -2452,11 +2452,11 @@ function panelActionsHtml(panel: Panel): string {
     <div class="panel__controls" aria-label="Ações do jogo ${panelIndex(panel.id) + 1}">
       ${panels.length > 1 ? `<button type="button" class="btn btn--ghost btn--icon panel__drag" data-drag aria-label="Arrastar jogo ${panelIndex(panel.id) + 1} para trocar de posição" title="Arrastar para trocar de posição">⠿</button>` : ''}
       <button type="button" class="btn btn--ghost panel__mute" data-mute aria-pressed="${panel.muted}" aria-label="${panel.muted ? 'Ativar som do' : 'Mutar'} jogo ${panelIndex(panel.id) + 1}" title="${panel.muted ? 'Ativar som do' : 'Mutar'} jogo ${panelIndex(panel.id) + 1}">${panel.muted ? 'Ativar som' : 'Mutar'}</button>
-      <button type="button" class="btn btn--ghost btn--icon" data-highlight aria-pressed="${isHighlighted}" aria-label="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}" title="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}">${isHighlighted ? '★' : '☆'}</button>
+      <button type="button" class="btn btn--ghost btn--icon" data-highlight aria-pressed="${isHighlighted}" aria-label="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}" title="${isHighlighted ? 'Remover destaque' : 'Destacar jogo'}"><img src="./highlight-icon.png" alt="" aria-hidden="true" /></button>
       ${panel.url ? '<button type="button" class="btn btn--ghost btn--icon" data-edit aria-label="Editar URL" title="Editar URL">✎</button>' : ''}
       ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__reload" data-reload aria-label="Recarregar jogo ${panelIndex(panel.id) + 1}" title="Recarregar página"><img src="./reload-icon.png" alt="" aria-hidden="true" /></button>` : ''}
-      ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__alerts" data-alerts aria-pressed="${panel.alertsOff}" aria-label="${panelAlertsLabel(panel)}" title="${panelAlertsLabel(panel)}">${panelAlertsIconHtml(panel.alertsOff)}</button>` : ''}
-      ${panel.url && window.quadra ? `<button type="button" class="btn btn--ghost btn--icon panel__pip" data-pip aria-label="Abrir jogo ${panelIndex(panel.id) + 1} em janela flutuante" title="Abrir em janela flutuante (fica por cima das outras janelas)"><svg viewBox="0 0 16 16" aria-hidden="true"><rect x="1.5" y="2.5" width="13" height="11" rx="1.5" /><rect x="8" y="8" width="5" height="3.5" rx="0.6" class="panel__pip-fill" /></svg></button>` : ''}
+      ${panel.url ? `<button type="button" class="btn btn--ghost btn--icon panel__alerts" data-alerts aria-pressed="${panel.alertsOff}" aria-label="${panelAlertsLabel(panel)}" title="${panelAlertsLabel(panel)}">${panelAlertsIconHtml()}</button>` : ''}
+      ${panel.url && window.quadra ? `<button type="button" class="btn btn--ghost btn--icon panel__pip" data-pip aria-label="Abrir jogo ${panelIndex(panel.id) + 1} em janela flutuante" title="Abrir em janela flutuante (fica por cima das outras janelas)"><img src="./pip-icon.png" alt="" aria-hidden="true" /></button>` : ''}
       <button type="button" class="btn btn--ghost btn--icon panel__remove" data-remove aria-label="${removeLabel}" title="${removeLabel}"${canRemove ? '' : ' disabled'}><img src="./trash-icon.png" alt="" aria-hidden="true" /></button>
     </div>
   `
@@ -2468,7 +2468,7 @@ function panelInnerHtml(panel: Panel): string {
       ${panelActionsHtml(panel)}
       <div class="panel__pip-note">
         <p class="panel__slot">Jogo ${panelIndex(panel.id) + 1} na janela flutuante</p>
-        <button type="button" class="btn btn--load" data-pip-return>Trazer de volta</button>
+        <button type="button" class="btn btn--load" data-pip-return><img src="./pip-return-icon.png" alt="" aria-hidden="true" /> Trazer de volta</button>
       </div>
     `
   }
@@ -2601,7 +2601,12 @@ function isFullscreenActive() {
 
 function updateFullscreenButton() {
   const button = app.querySelector<HTMLButtonElement>('#btn-fullscreen')
-  if (button) button.textContent = isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'
+  if (!button) return
+  const active = isFullscreenActive()
+  const label = active ? 'Minimizar' : 'Tela Cheia'
+  button.title = label
+  button.setAttribute('aria-label', label)
+  button.setAttribute('aria-pressed', String(active))
 }
 
 function toggleFullscreen() {
@@ -3362,7 +3367,7 @@ function renderGrid() {
       <button type="button" class="btn btn--danger" id="btn-remove-panel"${panels.length <= MIN_PANELS ? ' disabled' : ''} aria-label="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}" title="${panels.length <= MIN_PANELS ? 'É necessário manter pelo menos uma tela' : 'Remover a última tela'}">- Remover tela</button>
       <button type="button" class="btn btn--ghost" id="btn-organize">${editorOpen ? 'Cancelar organização' : 'Organizar'}</button>
       <label class="toolbar__count"><span>Telas <output id="panel-count-status" aria-live="polite">${panels.length}/${MAX_PANELS}</output></span><select id="panel-count" aria-label="Quantidade de telas">${Array.from({ length: MAX_PANELS }, (_, index) => `<option value="${index + 1}"${index + 1 === panels.length ? ' selected' : ''}>${index + 1}</option>`).join('')}</select></label>
-      <button type="button" class="btn btn--ghost" id="btn-fullscreen">${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}</button>
+      <button type="button" class="btn btn--ghost btn--icon" id="btn-fullscreen" aria-pressed="${isFullscreenActive()}" aria-label="${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}" title="${isFullscreenActive() ? 'Minimizar' : 'Tela Cheia'}"><img src="./fullscreen-icon.png" alt="" aria-hidden="true" /></button>
       <div class="toolbar__more"><button type="button" class="btn btn--ghost btn--icon${autoOpenOn ? ' is-auto-open' : ''}" id="btn-more" aria-label="Mais opções${autoOpenOn ? ' (modo Auto ligado)' : ''}" aria-haspopup="menu" aria-expanded="false" aria-controls="toolbar-more-menu"><svg viewBox="0 0 24 24" width="1.25rem" height="1.25rem" fill="currentColor" aria-hidden="true" focusable="false" style="display:block"><circle cx="5" cy="12" r="2"/><circle cx="12" cy="12" r="2"/><circle cx="19" cy="12" r="2"/></svg></button>
         <div class="toolbar__menu" id="toolbar-more-menu" role="menu" hidden>
           <div class="toolbar__menu-actions">

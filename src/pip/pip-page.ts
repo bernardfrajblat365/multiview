@@ -70,7 +70,6 @@ function controlsHtml(state: PipState) {
           ${delay.options.map((value) => `<option value="${value}"${delay.own === value ? ' selected' : ''}>${delayLabel(value)}</option>`).join('')}
         </select></label>`
     : ''
-  const bell = `<svg viewBox="0 0 16 16" aria-hidden="true"><path d="M4 11.5V7.2a4 4 0 0 1 8 0v4.3l1.2 1.2H2.8zM6.6 14.2a1.5 1.5 0 0 0 2.8 0" />${state.alertsOff ? '<path d="M2.2 2.2l11.6 11.6" />' : ''}</svg>`
   const alertsLabel = `${state.alertsOff ? 'Ativar' : 'Desativar'} alertas do ${label}`
   const muteLabel = `${state.muted ? 'Ativar som do' : 'Mutar'} ${label}`
   return `
@@ -78,8 +77,8 @@ function controlsHtml(state: PipState) {
     <button type="button" class="btn" data-edit title="Editar URL" aria-label="Editar URL" aria-expanded="${editorOpen}">✎</button>
     <button type="button" class="btn" data-cmd="reload" title="Recarregar página" aria-label="Recarregar ${label}"><img src="./reload-icon.png" alt="" /></button>
     ${delayButton}
-    <button type="button" class="btn" data-cmd="alerts" aria-pressed="${state.alertsOff}" title="${alertsLabel}" aria-label="${alertsLabel}">${bell}</button>
-    <button type="button" class="btn btn--primary" data-cmd="return" title="Voltar para a grade" aria-label="Voltar para a grade">⧉<span class="btn__label">Voltar</span></button>`
+    <button type="button" class="btn" data-cmd="alerts" aria-pressed="${state.alertsOff}" title="${alertsLabel}" aria-label="${alertsLabel}"><img src="./alerts-icon.png" alt="" /></button>
+    <button type="button" class="btn btn--primary" data-cmd="return" title="Voltar para a grade" aria-label="Voltar para a grade"><img src="./pip-return-icon.png" alt="" /><span class="btn__label">Voltar</span></button>`
 }
 
 function editorHtml(state: PipState) {

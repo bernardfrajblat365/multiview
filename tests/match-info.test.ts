@@ -6,6 +6,7 @@ import {
   crestKeyOf,
   formatRating,
   initialsOf,
+  parseLineupEventCounts,
   parseLineups,
   parsePhotoRefs,
   parseStandings,
@@ -107,6 +108,10 @@ test('parseLineups: só os 11 titulares entram, na ordem da API, com técnico se
     positionShort: 'GOL',
     rating: 7.5,
     photo: { athleteId: 5000, imageVersion: 38 },
+    goals: 0,
+    assists: 0,
+    yellowCards: 0,
+    redCards: 0,
   })
 
   assert.equal(home.name, 'Casa')
@@ -187,6 +192,42 @@ test('parseLineups: titular sem correspondente em game.members é ignorado', () 
   if (result.status !== 'ok') return
   assert.equal(result.teams[0].players.length, 11)
   assert.ok(result.teams[0].players.every((player) => player.name && player.name !== 'undefined'))
+})
+
+test('parseLineupEventCounts: gols, assistências e cartões pelo id do membro', () => {
+  const counts = parseLineupEventCounts([
+    { playerId: 101, extraPlayers: [102], eventType: { id: 1, name: 'Gol' } },
+    { playerId: 101, eventType: { id: 1, name: 'Gol' } },
+    { playerId: 103, eventType: { id: 2, name: 'Cartão Amarelo' } },
+    { playerId: 104, eventType: { id: 3, name: 'Cartão Vermelho', subTypeId: 21 } },
+    // Substituição: extraPlayers não vira assistência
+    { playerId: 105, extraPlayers: [106], eventType: { id: 1000, name: 'Substitution' } },
+  ])
+  assert.deepEqual(counts.get(101), { goals: 2, assists: 0, yellowCards: 0, redCards: 0 })
+  assert.deepEqual(counts.get(102), { goals: 0, assists: 1, yellowCards: 0, redCards: 0 })
+  assert.deepEqual(counts.get(103), { goals: 0, assists: 0, yellowCards: 1, redCards: 0 })
+  assert.deepEqual(counts.get(104), { goals: 0, assists: 0, yellowCards: 0, redCards: 1 })
+  assert.equal(counts.has(105), false)
+  assert.equal(counts.has(106), false)
+})
+
+test('parseLineups: ícones do jogo entram nos titulares a partir de game.events', () => {
+  const result = parseLineups(gameRaw({
+    events: [
+      { playerId: 108, extraPlayers: [105], eventType: { id: 1, name: 'Gol' } },
+      { playerId: 110, eventType: { id: 2, name: 'Cartão Amarelo' } },
+      { playerId: 111, eventType: { id: 3, name: 'Cartão Vermelho' } },
+    ],
+  }), GAME_ID)
+  assert.equal(result.status, 'ok')
+  if (result.status !== 'ok') return
+  const byName = Object.fromEntries(result.teams[0].players.map((player) => [player.name, player]))
+  assert.equal(byName['Luis Silva'].goals, 1)
+  assert.equal(byName['Rafael Lopez'].assists, 1)
+  assert.equal(byName['Nicolas Alvarez'].yellowCards, 1)
+  assert.equal(byName['Diego Torres'].redCards, 1)
+  assert.equal(byName['Peter Gulacsi'].goals, 0)
+  assert.equal(byName['Bruno Costa'].assists, 0)
 })
 
 test('positionShort: siglas das posições do 365Scores e fallback', () => {
@@ -302,6 +343,10 @@ test('parseWhLineup: monta titulares com nome no formato "Nome Sobrenome" e cami
     positionShort: '',
     rating: null,
     photo: null,
+    goals: 0,
+    assists: 0,
+    yellowCards: 0,
+    redCards: 0,
   })
   assert.equal(home.players[1].name, 'M. Silva')
   assert.equal(home.players[1].number, 7)

@@ -10,6 +10,7 @@ export const RELEASES: readonly Release[] = [
     label: '1.3.1',
     notes: [
       { title: 'Várias contas da BLL', body: 'Passe o mouse em Abrir vários jogos da BLL na tela inicial para trocar entre contas salvas neste PC ou adicionar outra; cada uma guarda o próprio login, sem misturar com as preferências do Quadra.' },
+      { title: 'Gols e cartões na escalação', body: 'Na gaveta de escalação, quem fez gol, deu assistência ou levou cartão amarelo ou vermelho ganha o ícone correspondente ao lado do nome.' },
     ],
   },
   {

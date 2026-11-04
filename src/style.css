@@ -315,7 +315,14 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 .panel__controls .btn { width: 1.85rem; min-width: 1.85rem; height: 1.85rem; font-size: 0.95rem; background: rgba(7,26,20,0.9); }
 .panel__controls .panel__mute, .panel__controls .panel__delay { width: auto; padding: 0 0.5rem; font-size: 0.75rem; white-space: nowrap; }
 .panel__controls .panel__remove { font-size: 0.9rem; }
-.panel__controls .panel__reload img, .panel__controls .panel__remove img, .panel__alerts-icon { width: 1.15rem; height: 1.15rem; display: block; object-fit: contain; }
+.panel__controls .panel__reload img,
+.panel__controls .panel__remove img,
+.panel__controls .panel__alerts-icon,
+.panel__controls [data-highlight] img,
+.panel__controls .panel__pip img,
+.panel__controls .panel__info-icon { width: 1.15rem; height: 1.15rem; display: block; object-fit: contain; }
+.panel__controls [data-highlight][aria-pressed="false"] img { opacity: 0.42; filter: grayscale(0.35); }
+.panel__controls [data-highlight][aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .panel__controls .panel__remove:not(:disabled):hover { color: #ffb0a8; border-color: rgba(255, 126, 116, 0.72); background: rgba(78, 19, 17, 0.94); }
 .panel__mute[aria-pressed="true"], #btn-mute-all[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .panel:hover .panel__controls, .panel:focus-within .panel__controls, .layout-stage.is-editing .panel__controls, .grid-shell.is-toolbar-visible .panel__controls { opacity: 1; pointer-events: auto; }
@@ -664,7 +671,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   .panel__controls .btn { width: 1.35rem; min-width: 1.35rem; height: 1.35rem; font-size: 0.7rem; }
   .panel__controls .panel__mute, .panel__controls .panel__delay { width: auto; padding: 0 0.28rem; font-size: 0.62rem; }
   .panel__controls .panel__remove { font-size: 0.68rem; }
-  .panel__controls .panel__reload img, .panel__controls .panel__remove img, .panel__alerts-icon { width: 0.82rem; height: 0.82rem; }
+  .panel__controls .panel__reload img,
+  .panel__controls .panel__remove img,
+  .panel__controls .panel__alerts-icon,
+  .panel__controls [data-highlight] img,
+  .panel__controls .panel__pip img,
+  .panel__controls .panel__info-icon { width: 0.82rem; height: 0.82rem; }
 }
 
 @container (max-width: 300px), (max-height: 180px) {
@@ -672,7 +684,12 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   .panel__controls .btn { width: 1.15rem; min-width: 1.15rem; height: 1.15rem; font-size: 0.62rem; }
   .panel__controls .panel__mute, .panel__controls .panel__delay { max-width: 100%; padding: 0 0.22rem; font-size: 0.56rem; }
   .panel__controls .panel__delay { width: auto; }
-  .panel__controls .panel__reload img, .panel__controls .panel__remove img, .panel__alerts-icon { width: 0.7rem; height: 0.7rem; }
+  .panel__controls .panel__reload img,
+  .panel__controls .panel__remove img,
+  .panel__controls .panel__alerts-icon,
+  .panel__controls [data-highlight] img,
+  .panel__controls .panel__pip img,
+  .panel__controls .panel__info-icon { width: 0.7rem; height: 0.7rem; }
 }
 
 @media (max-width: 1000px) {
@@ -792,18 +809,24 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 .delay-menu [role="option"]:hover, .delay-menu [role="option"]:focus-visible { background: rgba(200,245,96,0.14); outline: none; }
 .delay-menu [role="option"][aria-selected="true"] { background: rgba(200,245,96,0.24); color: var(--accent); font-weight: 600; }
 
-.panel__alerts-icon { display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linecap: round; stroke-linejoin: round; }
+.panel__controls .panel__alerts { position: relative; }
 .panel__controls .panel__alerts[aria-pressed="true"] { color: #ffb0a8; border-color: rgba(255, 126, 116, 0.72); }
+.panel__controls .panel__alerts[aria-pressed="true"] .panel__alerts-icon { opacity: 0.55; }
+.panel__controls .panel__alerts[aria-pressed="true"]::after {
+  content: ''; position: absolute; inset: 22%;
+  background: linear-gradient(to top right, transparent calc(50% - 1.2px), #ffb0a8 0, #ffb0a8 calc(50% + 1.2px), transparent 0);
+  pointer-events: none;
+}
 
 /* Panel living in the floating window: a quiet placeholder, no alert ring of its own. */
 .panel--pip { z-index: 4; display: grid; place-items: center; pointer-events: auto; background: repeating-linear-gradient(45deg, rgba(10,42,32,0.9) 0 14px, rgba(8,34,26,0.9) 14px 28px); }
 .panel--pip .panel__alert, .panel--pip .panel__var { display: none; }
 .panel__pip-note { display: grid; justify-items: center; gap: 0.5rem; padding: 0.5rem; text-align: center; }
-.panel__pip svg { width: 1em; height: 1em; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
-.panel__pip .panel__pip-fill { fill: currentColor; }
-/* Botão de camisa nos controles do painel e gaveta com a escalação do jogo. */
-.panel__info-icon { width: 1.1em; height: 1.1em; display: block; fill: none; stroke: currentColor; stroke-width: 1.5; stroke-linejoin: round; }
+.panel__pip-note .btn img { width: 1.15rem; height: 1.15rem; display: inline-block; vertical-align: -0.2rem; object-fit: contain; margin-right: 0.25rem; }
+/* Botão de estatísticas nos controles do painel e gaveta (escalação / tabela). */
 .panel__controls .panel__info.is-open { color: var(--accent); border-color: var(--accent); }
+.toolbar #btn-fullscreen img { width: 1.35rem; height: 1.35rem; display: block; object-fit: contain; }
+.toolbar #btn-fullscreen[aria-pressed="true"] { color: var(--accent); border-color: var(--accent); }
 .info-drawer { position: fixed; z-index: 70; display: flex; flex-direction: column; box-sizing: border-box; overflow: hidden; color: var(--ink); background: rgba(7, 26, 20, 0.94); backdrop-filter: blur(6px); border-left: 1px solid var(--bg-mid); border-bottom: 1px solid var(--bg-mid); border-bottom-left-radius: 0.6rem; box-shadow: -10px 0 28px rgba(0, 0, 0, 0.45); font-size: 0.85rem; pointer-events: auto; }
 .info-drawer.is-entering { animation: info-drawer-in 160ms ease-out; }
 @keyframes info-drawer-in { from { transform: translateX(1.5rem); opacity: 0; } to { transform: none; opacity: 1; } }

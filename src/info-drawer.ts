@@ -36,9 +36,9 @@ function esc(value: string) {
   return value.replace(/[&<>"']/g, (char) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' })[char] ?? char)
 }
 
-const SHIRT_ICON = '<svg class="panel__info-icon" viewBox="0 0 16 16" aria-hidden="true"><path d="M5.6 2 2 3.6 3 6.4l1.6-.5V14h6.8V5.9l1.6.5 1-2.8L10.4 2c-.3.9-1.2 1.5-2.4 1.5S5.9 2.9 5.6 2Z" /></svg>'
+const INFO_ICON = '<img class="panel__info-icon" src="./match-info-icon.png" alt="" aria-hidden="true" />'
 
-/** O botão de camisa dos controles do painel, criado e removido conforme o painel tem (ou não) informações. */
+/** O botão de estatísticas dos controles do painel, criado e removido conforme o painel tem (ou não) informações. */
 export function updateInfoButton(panelElement: HTMLElement, ready: boolean, open: boolean) {
   const controls = panelElement.querySelector<HTMLElement>(':scope > .panel__controls')
   let button = controls?.querySelector<HTMLButtonElement>(':scope > .panel__info') ?? null
@@ -51,10 +51,10 @@ export function updateInfoButton(panelElement: HTMLElement, ready: boolean, open
     button.type = 'button'
     button.className = 'btn btn--ghost btn--icon panel__info'
     button.dataset.info = ''
-    button.title = 'Escalação'
-    button.setAttribute('aria-label', 'Escalação do jogo')
-    button.innerHTML = SHIRT_ICON
-    // Antes do ⏱ (ou do 🔔, ou da lixeira): ✎ ↻ 👕 ⏱ 🔔 🗑.
+    button.title = 'Escalação e estatísticas'
+    button.setAttribute('aria-label', 'Escalação e estatísticas do jogo')
+    button.innerHTML = INFO_ICON
+    // Antes do ⏱ (ou do 🔔, ou da lixeira): ✎ ↻ 📊 ⏱ 🔔 🗑.
     controls.insertBefore(button, controls.querySelector(':scope > .panel__delay') ?? controls.querySelector(':scope > .panel__alerts') ?? controls.querySelector(':scope > .panel__remove'))
   }
   button.setAttribute('aria-expanded', String(open))

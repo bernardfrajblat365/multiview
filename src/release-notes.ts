@@ -10,6 +10,7 @@ export const RELEASES: readonly Release[] = [
     label: '1.3.1',
     notes: [
       { title: 'Várias contas da BLL', body: 'Passe o mouse em Abrir vários jogos da BLL na tela inicial para trocar entre contas salvas neste PC ou adicionar outra; cada uma guarda o próprio login, sem misturar com as preferências do Quadra.' },
+      { title: 'Ícones novos nos controles', body: 'Destaque, alertas, janela flutuante, tela cheia e a central de estatísticas do painel ganharam ícones novos no mesmo visual verde do Quadra.' },
     ],
   },
   {

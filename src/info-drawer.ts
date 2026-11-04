@@ -15,6 +15,11 @@ import {
   type StandingsTable,
 } from './match-info'
 
+const ICON_GOAL = new URL('./assets/lineup/goal.png', import.meta.url).href
+const ICON_ASSIST = new URL('./assets/lineup/assist.png', import.meta.url).href
+const ICON_YELLOW = new URL('./assets/lineup/yellow-card.png', import.meta.url).href
+const ICON_RED = new URL('./assets/lineup/red-card.png', import.meta.url).href
+
 /** O que a gaveta precisa saber do resto do app. */
 export type InfoDrawerDeps = {
   panelElement: (panelId: string) => HTMLElement | null
@@ -90,13 +95,33 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     return `<span class="info-avatar"${key ? ` data-photo="${esc(key)}"` : ''}${url ? ' data-has-photo' : ''} aria-hidden="true">${inner}</span>`
   }
 
+  /** Ícones de gol / assistência / cartões ao lado do nome; só entram quando a contagem é > 0. */
+  function eventIconsHtml(player: LineupPlayer) {
+    const parts: string[] = []
+    const labels: string[] = []
+    const add = (count: number, src: string, singular: string, plural: string) => {
+      if (count <= 0) return
+      const label = count === 1 ? singular : `${count} ${plural}`
+      labels.push(label)
+      const badge = count > 1 ? `<span class="info-row__event-n">${count}</span>` : ''
+      parts.push(`<span class="info-row__event" title="${esc(label)}"><img src="${esc(src)}" alt="" />${badge}</span>`)
+    }
+    add(player.goals, ICON_GOAL, 'Gol', 'gols')
+    add(player.assists, ICON_ASSIST, 'Assistência', 'assistências')
+    add(player.yellowCards, ICON_YELLOW, 'Cartão amarelo', 'cartões amarelos')
+    add(player.redCards, ICON_RED, 'Cartão vermelho', 'cartões vermelhos')
+    if (parts.length === 0) return ''
+    return `<span class="info-row__events" aria-label="${esc(labels.join(', '))}">${parts.join('')}</span>`
+  }
+
   function playerRowHtml(player: LineupPlayer) {
     const tone = ratingTone(player.rating)
     const position = player.position ? `<span class="info-row__pos" title="${esc(player.position)}">${esc(player.positionShort)}</span>` : ''
+    const events = eventIconsHtml(player)
     return `<li class="info-row" data-info-row>
       <span class="info-row__number">${player.number ?? ''}</span>
       ${avatarHtml(player.name, player.photo)}
-      <span class="info-row__who"><span class="info-row__name" title="${esc(player.name)}">${esc(player.name)}</span>${position}</span>
+      <span class="info-row__who"><span class="info-row__name-line"><span class="info-row__name" title="${esc(player.name)}">${esc(player.name)}</span>${events}</span>${position}</span>
       <span class="info-row__rating info-row__rating--${tone}">${formatRating(player.rating)}</span>
     </li>`
   }

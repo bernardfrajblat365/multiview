@@ -24,6 +24,11 @@ export type LineupPlayer = {
   positionShort: string
   rating: number | null
   photo: PhotoRef | null
+  /** Contagens do jogo (eventos do `/web/game/`); 0 quando a fonte não traz (ex.: William Hill). */
+  goals: number
+  assists: number
+  yellowCards: number
+  redCards: number
 }
 
 export type LineupTeam = {
@@ -201,6 +206,16 @@ export function parseTeamRefs(value: unknown): TeamRef365[] | null {
 
 type Member = { name: string; shortName: string; jersey: number | null; photo: PhotoRef | null }
 
+/** Contagens lidas dos eventos do jogo; o `id` é o do membro (`game.members` / `lineups.members`). */
+export type LineupEventCounts = { goals: number; assists: number; yellowCards: number; redCards: number }
+
+const EMPTY_EVENTS: LineupEventCounts = { goals: 0, assists: 0, yellowCards: 0, redCards: 0 }
+const EVENT_GOAL = 1
+const EVENT_YELLOW = 2
+const EVENT_RED = 3
+/** Teto por jogador: evita ícone/contagem absurda se a API mandar lixo. */
+const MAX_EVENT_COUNT = 9
+
 function parseMembers(value: unknown) {
   const members = new Map<number, Member>()
   if (!Array.isArray(value)) return members
@@ -223,7 +238,43 @@ function parseMembers(value: unknown) {
   return members
 }
 
-function parseTeam(value: unknown, members: Map<number, Member>): LineupTeam | null {
+/**
+ * Gols (`eventType.id` 1 → `playerId`), assistências (mesmo evento → `extraPlayers`), amarelo (2) e vermelho (3).
+ * Substituições também usam `extraPlayers`, então só o gol conta assistência.
+ */
+export function parseLineupEventCounts(events: unknown): Map<number, LineupEventCounts> {
+  const map = new Map<number, LineupEventCounts>()
+  if (!Array.isArray(events)) return map
+  const bump = (id: number, key: keyof LineupEventCounts) => {
+    const cur = map.get(id) ?? { ...EMPTY_EVENTS }
+    if (cur[key] >= MAX_EVENT_COUNT) return
+    cur[key] += 1
+    map.set(id, cur)
+  }
+  for (const item of events) {
+    const row = record(item)
+    const type = record(row?.eventType)
+    if (!row || !type) continue
+    const typeId = Number(type.id)
+    const playerId = positiveInt(row.playerId)
+    if (typeId === EVENT_GOAL) {
+      if (playerId !== null) bump(playerId, 'goals')
+      if (Array.isArray(row.extraPlayers)) {
+        for (const extra of row.extraPlayers) {
+          const assistId = positiveInt(extra)
+          if (assistId !== null) bump(assistId, 'assists')
+        }
+      }
+    } else if (typeId === EVENT_YELLOW && playerId !== null) {
+      bump(playerId, 'yellowCards')
+    } else if (typeId === EVENT_RED && playerId !== null) {
+      bump(playerId, 'redCards')
+    }
+  }
+  return map
+}
+
+function parseTeam(value: unknown, members: Map<number, Member>, events: Map<number, LineupEventCounts>): LineupTeam | null {
   const competitor = record(value)
   const competitorId = competitor ? positiveInt(competitor.id) : null
   if (!competitor || competitorId === null) return null
@@ -238,6 +289,7 @@ function parseTeam(value: unknown, members: Map<number, Member>): LineupTeam | n
     if (row.status === 1 && players.length < MAX_STARTERS) {
       const position = text(record(row.formation)?.name) || text(record(row.position)?.name)
       const ranking = Number(row.ranking)
+      const counts = events.get(Number(row.id)) ?? EMPTY_EVENTS
       players.push({
         number: member.jersey,
         name: member.name,
@@ -246,6 +298,10 @@ function parseTeam(value: unknown, members: Map<number, Member>): LineupTeam | n
         positionShort: positionShort(position),
         rating: Number.isFinite(ranking) && ranking > 0 ? ranking : null,
         photo: member.photo,
+        goals: counts.goals,
+        assists: counts.assists,
+        yellowCards: counts.yellowCards,
+        redCards: counts.redCards,
       })
     } else if (row.status === 4 && !coach) {
       coach = { name: member.name, photo: member.photo }
@@ -270,8 +326,9 @@ export function parseLineups(raw: unknown, gameId: number): LineupsParse {
   const game = record(record(raw)?.game)
   if (!game || Number(game.id) !== gameId) return { status: 'invalid' }
   const members = parseMembers(game.members)
-  const home = parseTeam(game.homeCompetitor, members)
-  const away = parseTeam(game.awayCompetitor, members)
+  const events = parseLineupEventCounts(game.events)
+  const home = parseTeam(game.homeCompetitor, members, events)
+  const away = parseTeam(game.awayCompetitor, members, events)
   if (!home || !away) return { status: 'invalid' }
   if (game.hasLineups === false || (home.players.length === 0 && away.players.length === 0)) return { status: 'none' }
   return { status: 'ok', teams: [home, away], live: Number(game.statusGroup) === 3 }
@@ -302,6 +359,7 @@ function whTeam(name: string, players: unknown, coach: unknown): LineupTeam {
         positionShort: '',
         rating: null,
         photo: null,
+        ...EMPTY_EVENTS,
       })
     }
   }

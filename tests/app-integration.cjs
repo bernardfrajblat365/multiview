@@ -357,7 +357,7 @@ async function run() {
           let duration = 67 * 60 + 10
           setTimeout(() => { period = 'GAME_FINISHED' }, 8000)`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html><title>Scoreboard fixture</title><div>Time W</div><div>1 - 0</div><div>Time Z</div>
+      response.end(`<!doctype html><title>Scoreboard fixture</title><div>Time W</div><div id="score">${eventId === '7301' ? '0 - 0' : '1 - 0'}</div><div>Time Z</div>
         <div style="display:none"><div class="players_home"><ul><li><div class="box-col1"><span>1</span><span>Herrera, Lautaro</span></div></li><li><div class="box-col1"><span>9</span><span>Silva, Gabriel</span></div></li></ul></div><div class="players_away"><ul></ul></div></div>
         <script>
           ${timeline}
@@ -371,6 +371,7 @@ async function run() {
           } }
           let lineupKnown = false
           ${eventId === '7301' ? `setTimeout(() => window.WH.scoreboard.commentaries.acceptIncident([{ id: 'OB_EV7301#goal1', type: 'GOAL', teamType: 'HOME', timestamp: new Date().toISOString(), time: { duration: 3000 }, data: { PLAYER: '9' } }]), 3000)
+                    setTimeout(() => { document.getElementById('score').textContent = '1 - 0' }, 3600)  
           setTimeout(() => { lineupKnown = true }, 7000)` : ''}
           setInterval(() => { if (period === 'SECOND_HALF' || period === 'FIRST_HALF') window.WH.scoreboard.scores.setClock({ currentTime: { duration: duration++ } }) }, 1000)
         </script>`)

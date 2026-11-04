@@ -11,6 +11,7 @@ export const RELEASES: readonly Release[] = [
     notes: [
       { title: 'Placar certo nos gols da William Hill', body: 'O alerta de gol mostra o placar depois do gol, mesmo quando a página do placar atualiza um pouco depois do lance; o gol contra e a primeira leitura de um jogo que acabou de abrir esperam a página, por até 4 segundos.' },
       { title: 'Várias contas da BLL', body: 'Passe o mouse em Abrir vários jogos da BLL na tela inicial para trocar entre contas salvas neste PC ou adicionar outra; cada uma guarda o próprio login, sem misturar com as preferências do Quadra.' },
+      { title: 'Gols e cartões na escalação', body: 'Na gaveta de escalação, quem fez gol, deu assistência ou levou cartão amarelo ou vermelho ganha o ícone correspondente ao lado do nome.' },
     ],
   },
   {

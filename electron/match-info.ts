@@ -1,14 +1,22 @@
-import { athletePhotoUrl, parseLineups, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
+import { athletePhotoUrl, hasAnyGame, parseFanVotes, parseGamesInfo, parseOdds, parseLineups, reverseGamesInfo, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
 import { apiUrl, fetchJson } from './livescore-365'
 import { loadImage } from './image-cache'
 import { crestKey, crestUrl } from '../src/team-crests'
 import type { TeamRef365 } from '../src/livescore-365'
+
+function record(value: unknown): Record<string, unknown> | null {
+  return value && typeof value === 'object' && !Array.isArray(value) ? value as Record<string, unknown> : null
+}
 
 type PanelGame = { gameId: number; reversed: boolean }
 type Lineup = [LineupTeam, LineupTeam]
 
 const CACHE_MS = 30_000
 const STANDINGS_CACHE_MS = 60_000
+/** A API diz `ttl: 30` nas odds. */
+const ODDS_CACHE_MS = 30_000
+/** Últimos jogos e confronto direto só mudam quando um dos times joga. */
+const H2H_CACHE_MS = 10 * 60_000
 const PHOTO_CONCURRENCY = 6
 const IMAGE_BASE_URL = process.env.QUADRA_365SCORES_IMAGE_URL
 
@@ -24,6 +32,10 @@ export function createMatchInfo(options: {
   fetchGame?: (gameId: number) => Promise<unknown>
   /** Troque nos testes; por padrão, `/web/standings/` do 365Scores. */
   fetchStandings?: (competitionId: number, seasonNum: number, stageNum: number) => Promise<unknown>
+  /** Troque nos testes; por padrão, `/web/bets/lines/` do 365Scores. */
+  fetchOdds?: (gameId: number) => Promise<unknown>
+  /** Troque nos testes; por padrão, `/web/games/h2h/` do 365Scores. */
+  fetchH2h?: (gameId: number) => Promise<unknown>
 }) {
   const linked = new Map<string, number>()
   const resolved = new Map<string, PanelGame>()
@@ -32,6 +44,10 @@ export function createMatchInfo(options: {
   const announced = new Map<string, string>()
   const games = new Map<number, { at: number; raw: Promise<unknown> }>()
   const tables = new Map<string, { at: number; raw: Promise<unknown> }>()
+  const odds = new Map<string, { at: number; raw: Promise<unknown> }>()
+  const h2h = new Map<string, { at: number; raw: Promise<unknown> }>()
+  const fetchOdds = options.fetchOdds ?? ((gameId: number) => fetchJson(apiUrl('/web/bets/lines/', { games: String(gameId) })))
+  const fetchH2h = options.fetchH2h ?? ((gameId: number) => fetchJson(apiUrl('/web/games/h2h/', { gameId: String(gameId) })))
   const fetchGame = options.fetchGame ?? ((gameId: number) => fetchJson(apiUrl('/web/game/', { gameId: String(gameId) })))
 
   const fetchStandings = options.fetchStandings ?? ((competitionId: number, seasonNum: number, stageNum: number) => fetchJson(apiUrl('/web/standings/', { competitions: String(competitionId), seasonNum: String(seasonNum), stageNum: String(stageNum) })))
@@ -88,6 +104,62 @@ export function createMatchInfo(options: {
     for (const panelId of [...announced.keys()]) clear(panelId)
     games.clear()
     tables.clear()
+    odds.clear()
+    h2h.clear()
+  }
+
+  /** Mesma regra do `rawGame`, para as odds e os jogos: um pedido por vez por chave, guardado por `ttl`. */
+  function cached(store: Map<string, { at: number; raw: Promise<unknown> }>, key: string, ttl: number, fetcher: () => Promise<unknown>) {
+    const hit = store.get(key)
+    if (hit && Date.now() - hit.at < ttl) return hit.raw
+    const raw = fetcher()
+    const entry = { at: Date.now(), raw }
+    store.set(key, entry)
+    raw.catch(() => {
+      if (store.get(key) === entry) store.delete(key)
+    })
+    if (store.size > 40) store.delete(store.keys().next().value as string)
+    return raw
+  }
+
+  /** Painel sem jogo do 365Scores: com a escalação WH a gaveta existe, mas não há odds nem jogos. */
+  function noGame(panelId: string): MatchInfoResult {
+    return whLineups.has(panelId) ? { status: 'none' } : { status: 'no-game' }
+  }
+
+  function gameRow(raw: unknown, gameId: number) {
+    const row = record(record(raw)?.game)
+    return row && Number(row.id) === gameId ? row : null
+  }
+
+  async function loadOdds(panelId: string): Promise<MatchInfoResult> {
+    const game = gameOf(panelId)
+    if (!game) return noGame(panelId)
+    try {
+      const detail = await rawGame(game.gameId)
+      const row = gameRow(detail, game.gameId)
+      if (!row) return { status: 'error' }
+      const live = Number(row.statusGroup) === 3
+      if (row.hasBets === false) return { status: 'none' }
+      const nameOf = (side: unknown) => String(record(side)?.name ?? '')
+      const parsed = parseOdds(await cached(odds, String(game.gameId), ODDS_CACHE_MS, () => fetchOdds(game.gameId)), game.gameId, nameOf(row.homeCompetitor), nameOf(row.awayCompetitor))
+      return parsed ? { status: 'ok', tab: 'odds', odds: { ...parsed, votes: parseFanVotes(detail, game.gameId) }, live } : { status: 'none' }
+    } catch {
+      return { status: 'error' }
+    }
+  }
+
+  async function loadGames(panelId: string): Promise<MatchInfoResult> {
+    const game = gameOf(panelId)
+    if (!game) return noGame(panelId)
+    try {
+      const parsed = parseGamesInfo(await cached(h2h, String(game.gameId), H2H_CACHE_MS, () => fetchH2h(game.gameId)), game.gameId)
+      if (!parsed) return { status: 'error' }
+      if (!hasAnyGame(parsed)) return { status: 'none' }
+      return { status: 'ok', tab: 'games', games: game.reversed ? reverseGamesInfo(parsed) : parsed, live: false }
+    } catch {
+      return { status: 'error' }
+    }
   }
 
   /** Um pedido por vez por jogo: pedidos simultâneos compartilham a mesma resposta, que vale 30 s. */
@@ -161,6 +233,10 @@ export function createMatchInfo(options: {
         return loadLineup(request.panelId)
       case 'standings':
         return loadStandings(request.panelId)
+      case 'odds':
+        return loadOdds(request.panelId)
+      case 'games':
+        return loadGames(request.panelId)
       default:
         return { status: 'error' }
     }

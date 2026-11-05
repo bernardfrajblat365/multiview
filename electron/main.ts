@@ -12,7 +12,7 @@ import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
 import { createTeamCrests } from './team-crests'
 import { createMatchInfo, loadAthletePhotos, loadTableCrests } from './match-info'
-import { parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
+import { isInfoTabId, parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
 import { createScoreboardScanners, type ScannerClock, type ScannerScore } from './scoreboard-scanner'
 import {
   createLoadPacer,
@@ -1554,7 +1554,8 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:match-info', async (event, request: unknown) => {
     if (!isUiSender(event)) return { status: 'error' }
     const row = request && typeof request === 'object' ? request as { panelId?: unknown; tab?: unknown } : null
-    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : row?.tab === 'standings' ? 'standings' : null
+    const rawTab = row?.tab
+    const tab: InfoTabId | null = isInfoTabId(rawTab) ? rawTab : null
     if (!row || typeof row.panelId !== 'string' || row.panelId.length > 64 || !tab) return { status: 'error' }
     return matchInfo.load({ panelId: row.panelId, tab })
   })

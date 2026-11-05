@@ -1,13 +1,19 @@
 import type { TeamRef365 } from './livescore-365.ts'
 import { formatPlayerName } from './match-events.ts'
 
-/** Abas da gaveta de informações do jogo. Escalação e tabela aparecem; as outras já estão previstas no tipo. */
+/** Abas da gaveta de informações do jogo. */
 export type InfoTabId = 'lineup' | 'standings' | 'odds' | 'games'
 
 export const INFO_TABS: readonly { id: InfoTabId; label: string }[] = [
   { id: 'lineup', label: 'Escalação' },
   { id: 'standings', label: 'Tabela' },
+  { id: 'odds', label: 'Odds' },
+  { id: 'games', label: 'Jogos' },
 ]
+
+export function isInfoTabId(value: unknown): value is InfoTabId {
+  return INFO_TABS.some((item) => item.id === value)
+}
 
 /** Foto de um atleta no CDN do 365Scores: o id e a versão bastam para montar a URL. */
 export type PhotoRef = { athleteId: number; imageVersion: number }
@@ -79,6 +85,8 @@ export type StandingsTable = {
 export type MatchInfoResult =
   | { status: 'ok'; tab: 'lineup'; teams: [LineupTeam, LineupTeam]; live: boolean; source: LineupSource }
   | { status: 'ok'; tab: 'standings'; table: StandingsTable; /** Ids dos times do jogo, destacados na tabela. */ highlight: number[]; live: boolean }
+  | { status: 'ok'; tab: 'odds'; odds: GameOdds; live: boolean }
+  | { status: 'ok'; tab: 'games'; games: GamesInfo; live: boolean }
   | { status: 'none' }
   | { status: 'no-game' }
   | { status: 'error' }
@@ -462,3 +470,300 @@ export function parseStandings(raw: unknown, target: StandingsTarget): Standings
     zones: usedZones,
   }
 }
+
+/** Odd subiu, caiu ou ficou igual desde a última atualização (`trend` 3 / 1 / 2 no 365Scores). */
+export type OddsTrend = 'up' | 'down' | null
+
+export type OddsOption = {
+  label: string
+  rate: number
+  trend: OddsTrend
+  /** A odd de antes do jogo, mostrada com o jogo rolando; null quando é igual à atual ou a API não traz. */
+  prematch: number | null
+}
+
+export type OddsMarket = { lineTypeId: number; title: string; options: OddsOption[] }
+
+/** Votos dos usuários do 365Scores em "Quem vai ganhar?". */
+export type FanVote = { label: string; percentage: number }
+
+export type GameOdds = { bookmaker: string; markets: OddsMarket[]; votes: FanVote[] }
+
+/** Mercados mostrados, na ordem: resultado (futebol / basquete), chance dupla, ambos marcam, empate anula, total. */
+const ODDS_RESULT = [1, 33]
+const ODDS_SIMPLE = [14, 12, 15]
+/** Total de gols / pontos: há uma linha por valor (0.5, 1.5, 2.5…); fica a mais equilibrada. */
+const ODDS_TOTAL = [3, 34]
+const MAX_OPTIONS = 3
+
+function rateOf(value: unknown) {
+  const rate = Number(record(value)?.decimal)
+  return Number.isFinite(rate) && rate >= 1 && rate < 10_000 ? Math.round(rate * 100) / 100 : null
+}
+
+function isDecided(line: Record<string, unknown>) {
+  return line.isConcluded === true || (Array.isArray(line.options) && line.options.some((option) => record(option)?.isWon === true))
+}
+
+/** "1" / "Casa" → mandante, "2" / "Fora" → visitante, "X" → Empate; o resto como a API escreve. */
+function optionLabel(name: string, home: string, away: string) {
+  const key = name.trim().toLowerCase()
+  if ((key === '1' || key === 'casa') && home) return home
+  if ((key === '2' || key === 'fora') && away) return away
+  if (key === 'x') return 'Empate'
+  return name
+}
+
+function parseMarket(line: Record<string, unknown>, home: string, away: string): OddsMarket | null {
+  const lineTypeId = positiveInt(line.lineTypeId)
+  const type = record(line.lineType)
+  if (lineTypeId === null || !type || !Array.isArray(line.options)) return null
+  const value = text(line.internalOptionValue, 12).replace('.', ',')
+  const base = text(type.name, 40)
+  if (!base) return null
+  const options: OddsOption[] = []
+  for (const item of line.options.slice(0, MAX_OPTIONS)) {
+    const row = record(item)
+    const rate = row ? rateOf(row.rate) : null
+    const name = row ? text(row.name, 40) : ''
+    if (!row || rate === null || !name) return null
+    const prematch = rateOf(row.prematchRate)
+    options.push({
+      label: optionLabel(name, home, away),
+      rate,
+      trend: row.trend === 3 ? 'up' : row.trend === 1 ? 'down' : null,
+      prematch: prematch !== null && prematch !== rate ? prematch : null,
+    })
+  }
+  if (options.length < 2) return null
+  const title = value ? `${base} (${value})` : base
+  return { lineTypeId, title, options }
+}
+
+/**
+ * Odds de uma resposta de `/web/bets/lines/?games=<id>`: resultado final, chance dupla, ambos marcam, empate anula e
+ * o total de gols/pontos na linha mais equilibrada. Linhas já decididas (`isConcluded`, ou com uma opção `isWon`, como
+ * "Mais que 0.5" depois do 1º gol) ficam de fora.
+ * Os nomes "1"/"2"/"Casa"/"Fora" viram os nomes dos times (na ordem do 365Scores). Null quando nada serve.
+ */
+export function parseOdds(raw: unknown, gameId: number, home: string, away: string): Omit<GameOdds, 'votes'> | null {
+  const response = record(raw)
+  if (!response || !Array.isArray(response.lines)) return null
+  const lines = response.lines.map(record).filter((line): line is Record<string, unknown> => line !== null && Number(line.gameId) === gameId && !isDecided(line))
+  const homeName = text(home)
+  const awayName = text(away)
+  const markets: OddsMarket[] = []
+  for (const id of [...ODDS_RESULT, ...ODDS_SIMPLE]) {
+    const line = lines.find((item) => Number(item.lineTypeId) === id)
+    const market = line ? parseMarket(line, homeName, awayName) : null
+    if (market) markets.push(market)
+  }
+  let total: OddsMarket | null = null
+  let gap = Infinity
+  for (const line of lines.filter((item) => ODDS_TOTAL.includes(Number(item.lineTypeId)))) {
+    const market = parseMarket(line, homeName, awayName)
+    if (!market || market.options.length !== 2) continue
+    const distance = Math.abs(market.options[0].rate - market.options[1].rate)
+    if (distance < gap) {
+      gap = distance
+      total = market
+    }
+  }
+  if (total) markets.push(total)
+  if (markets.length === 0) return null
+  const bookmakerId = Number(lines.find((line) => Number(line.lineTypeId) === markets[0].lineTypeId)?.bookmakerId)
+  const bookmakers = Array.isArray(response.bookmakers) ? response.bookmakers.map(record) : []
+  const bookmaker = text(bookmakers.find((item) => item && Number(item.id) === bookmakerId)?.name, 40)
+  return { bookmaker, markets }
+}
+
+/** "Quem vai ganhar?" (`promotedPredictions`, tipo 1) do `/web/game/`: porcentagem de votos de cada opção. */
+export function parseFanVotes(raw: unknown, gameId: number): FanVote[] {
+  const game = record(record(raw)?.game)
+  if (!game || Number(game.id) !== gameId) return []
+  const list = record(game.promotedPredictions)?.predictions
+  const prediction = Array.isArray(list) ? list.map(record).find((item) => item && Number(item.type) === 1) : null
+  if (!prediction || !Array.isArray(prediction.options)) return []
+  const votes: FanVote[] = []
+  for (const item of prediction.options.slice(0, MAX_OPTIONS)) {
+    const row = record(item)
+    const label = row ? text(row.name, 40) : ''
+    const percentage = Number(record(row?.vote)?.percentage)
+    if (!label || !Number.isFinite(percentage) || percentage < 0 || percentage > 100) return []
+    votes.push({ label, percentage: Math.round(percentage) })
+  }
+  return votes.length >= 2 && votes.some((vote) => vote.percentage > 0) ? votes : []
+}
+
+/** "2,05"; a vírgula do Brasil. */
+export function formatOdd(rate: number) {
+  return rate.toFixed(2).replace('.', ',')
+}
+
+export type GameOutcome = 'win' | 'draw' | 'loss'
+
+/** Um jogo passado de um time, do ponto de vista dele. */
+export type RecentGame = {
+  gameId: number
+  /** "2026-10-28T21:30:00-03:00", como a API manda. */
+  startTime: string
+  opponent: string
+  opponentRef: TeamRef365 | null
+  /** O time jogou em casa. */
+  home: boolean
+  goalsFor: number
+  goalsAgainst: number
+  outcome: GameOutcome
+  competition: string
+}
+
+export type TeamForm = { name: string; competitorId: number; crestRef: TeamRef365 | null; games: RecentGame[] }
+
+export type HeadToHeadGame = {
+  gameId: number
+  startTime: string
+  home: string
+  away: string
+  homeId: number
+  awayId: number
+  homeScore: number
+  awayScore: number
+  /** Id do time que venceu; null no empate. */
+  winnerId: number | null
+  competition: string
+}
+
+export type HeadToHead = {
+  games: HeadToHeadGame[]
+  /** Vitórias de cada time do jogo (na ordem de `GamesInfo.teams`) e empates, em todos os confrontos que a API trouxe. */
+  wins: [number, number]
+  draws: number
+  total: number
+}
+
+export type GamesInfo = { teams: [TeamForm, TeamForm]; h2h: HeadToHead }
+
+const MAX_RECENT = 6
+const MAX_H2H_SHOWN = 5
+const MAX_H2H_COUNTED = 30
+
+function crestRefOf(competitor: Record<string, unknown>, id: number): TeamRef365 {
+  const version = Number(competitor.imageVersion)
+  return { id, imageVersion: Number.isSafeInteger(version) && version >= 0 ? version : 0 }
+}
+
+function score(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) && number >= 0 ? Math.trunc(number) : null
+}
+
+function startTimeOf(value: unknown) {
+  const raw = text(value, 40)
+  return raw && Number.isFinite(Date.parse(raw)) ? raw : ''
+}
+
+/** Jogo encerrado com placar: os dois lados e quem venceu (`winner` 1 / 2, -1 empate). */
+function finishedGame(value: unknown) {
+  const game = record(value)
+  if (!game || Number(game.statusGroup) !== 4) return null
+  const gameId = positiveInt(game.id)
+  const home = record(game.homeCompetitor)
+  const away = record(game.awayCompetitor)
+  const homeId = home ? positiveInt(home.id) : null
+  const awayId = away ? positiveInt(away.id) : null
+  const homeScore = home ? score(home.score) : null
+  const awayScore = away ? score(away.score) : null
+  const startTime = startTimeOf(game.startTime)
+  if (gameId === null || !home || !away || homeId === null || awayId === null || homeScore === null || awayScore === null || !startTime) return null
+  const winner = Number(game.winner)
+  // Pênaltis: o placar empata e o `winner` diz quem passou.
+  const winnerId = winner === 1 ? homeId : winner === 2 ? awayId : winner === -1 ? null : homeScore > awayScore ? homeId : awayScore > homeScore ? awayId : null
+  return { game, gameId, home, away, homeId, awayId, homeScore, awayScore, startTime, winnerId, competition: text(game.competitionDisplayName, 60) }
+}
+
+function parseForm(value: unknown): TeamForm | null {
+  const competitor = record(value)
+  const competitorId = competitor ? positiveInt(competitor.id) : null
+  if (!competitor || competitorId === null) return null
+  const games: RecentGame[] = []
+  for (const item of Array.isArray(competitor.recentGames) ? competitor.recentGames : []) {
+    if (games.length >= MAX_RECENT) break
+    const game = finishedGame(item)
+    if (!game) continue
+    const home = game.homeId === competitorId
+    if (!home && game.awayId !== competitorId) continue
+    const opponent = home ? game.away : game.home
+    const opponentId = home ? game.awayId : game.homeId
+    const outcome: GameOutcome = game.winnerId === null ? 'draw' : game.winnerId === competitorId ? 'win' : 'loss'
+    games.push({
+      gameId: game.gameId,
+      startTime: game.startTime,
+      opponent: text(opponent.name) || '?',
+      opponentRef: crestRefOf(opponent, opponentId),
+      home,
+      goalsFor: home ? game.homeScore : game.awayScore,
+      goalsAgainst: home ? game.awayScore : game.homeScore,
+      outcome,
+      competition: game.competition,
+    })
+  }
+  return { name: text(competitor.name), competitorId, crestRef: crestRefOf(competitor, competitorId), games }
+}
+
+/**
+ * Últimos jogos de cada time (`recentGames`, mais novo primeiro) e confronto direto (`h2hGames`) de uma resposta de
+ * `/web/games/h2h/?gameId=<id>`. Só jogos encerrados. Times na ordem do 365Scores; `null` quando a resposta não é
+ * deste jogo, e sem nenhum jogo nos três a UI mostra "sem jogos".
+ */
+export function parseGamesInfo(raw: unknown, gameId: number): GamesInfo | null {
+  const game = record(record(raw)?.game)
+  if (!game || Number(game.id) !== gameId) return null
+  const home = parseForm(game.homeCompetitor)
+  const away = parseForm(game.awayCompetitor)
+  if (!home || !away) return null
+  const h2h: HeadToHead = { games: [], wins: [0, 0], draws: 0, total: 0 }
+  for (const item of Array.isArray(game.h2hGames) ? game.h2hGames : []) {
+    if (h2h.total >= MAX_H2H_COUNTED) break
+    const played = finishedGame(item)
+    if (!played) continue
+    const ids = [played.homeId, played.awayId]
+    if (!ids.includes(home.competitorId) || !ids.includes(away.competitorId)) continue
+    h2h.total += 1
+    if (played.winnerId === null) h2h.draws += 1
+    else if (played.winnerId === home.competitorId) h2h.wins[0] += 1
+    else h2h.wins[1] += 1
+    if (h2h.games.length < MAX_H2H_SHOWN) {
+      h2h.games.push({
+        gameId: played.gameId,
+        startTime: played.startTime,
+        home: text(played.home.name) || '?',
+        away: text(played.away.name) || '?',
+        homeId: played.homeId,
+        awayId: played.awayId,
+        homeScore: played.homeScore,
+        awayScore: played.awayScore,
+        winnerId: played.winnerId,
+        competition: played.competition,
+      })
+    }
+  }
+  return { teams: [home, away], h2h }
+}
+
+/** Troca a ordem dos times (o painel lista o visitante do 365Scores primeiro). */
+export function reverseGamesInfo(info: GamesInfo): GamesInfo {
+  return { teams: [info.teams[1], info.teams[0]], h2h: { ...info.h2h, wins: [info.h2h.wins[1], info.h2h.wins[0]] } }
+}
+
+export function hasAnyGame(info: GamesInfo) {
+  return info.h2h.total > 0 || info.teams.some((team) => team.games.length > 0)
+}
+
+/** "28/10/26", no fuso de São Paulo como o resto da API. */
+export function formatGameDate(startTime: string) {
+  const time = Date.parse(startTime)
+  if (!Number.isFinite(time)) return ''
+  return new Intl.DateTimeFormat('pt-BR', { timeZone: 'America/Sao_Paulo', day: '2-digit', month: '2-digit', year: '2-digit' }).format(new Date(time))
+}
+
+export const OUTCOME_LETTER: Record<GameOutcome, string> = { win: 'V', draw: 'E', loss: 'D' }

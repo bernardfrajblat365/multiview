@@ -92,6 +92,52 @@ test('teamsFromTitle devolve null quando o título não tem confronto', () => {
   assert.equal(teamsFromTitle('Futebol ao vivo hoje, assista agora'), null)
 })
 
+test('teamsFromTitle lê " - " entre os times quando não há "x"/"vs"', () => {
+  const cases: [string, string, string][] = [
+    ['Flamengo - Palmeiras', 'Flamengo', 'Palmeiras'],
+    ['AO VIVO | Bayern München - Dortmund | Bundesliga', 'Bayern München', 'Dortmund'],
+    ['🔴 EN VIVO - Boca Juniors - River Plate', 'Boca Juniors', 'River Plate'],
+    ['Paris Saint-Germain - Olympique Lyon | Ligue 1', 'Paris Saint-Germain', 'Olympique Lyon'],
+    ['Al-Ittihad – Al-Nassr', 'Al-Ittihad', 'Al-Nassr'],
+    ['AO VIVO: Grêmio 1 - 0 Internacional', 'Grêmio', 'Internacional'],
+    ['20:00 - Santos - Corinthians - YouTube', 'Santos', 'Corinthians'],
+  ]
+  for (const [title, home, away] of cases) {
+    const found = teamsFromTitle(title)
+    assert.ok(found, title)
+    assert.equal(found.home, home, title)
+    assert.equal(found.away, away, title)
+  }
+  assert.equal(teamsFromTitle('AO VIVO | Bayern München - Dortmund | Bundesliga')?.competition, 'Bundesliga')
+})
+
+test('teamsFromTitle não liga " - " ambíguo ou que não separa times', () => {
+  for (const title of [
+    'Flamengo - Palmeiras - Brasileirão',
+    'Flamengo - Palmeiras | Santos - Corinthians',
+    'Brasileirão - Flamengo',
+    'Melhores momentos - Flamengo',
+    'Rodada 30 - Brasileirão Série A',
+    'Paris Saint-Germain',
+    'Al-Ittihad ao vivo',
+    'Lofi hip hop radio: beats to relax - study to',
+    '2026 - 2027',
+  ]) {
+    assert.equal(teamsFromTitle(title), null, title)
+  }
+})
+
+test('teamsFromTitle com "x" continua igual quando também tem " - "', () => {
+  const found = teamsFromTitle('Flamengo x Palmeiras - Brasileirão')
+  assert.ok(found)
+  assert.equal(found.home, 'Flamengo')
+  assert.equal(found.away, 'Palmeiras')
+  const psg = teamsFromTitle('AO VIVO: LE HAVRE X PARIS SAINT-GERMAIN | LIGUE 1')
+  assert.ok(psg)
+  assert.equal(psg.home, 'LE HAVRE')
+  assert.equal(psg.away, 'PARIS SAINT-GERMAIN')
+})
+
 test('Brasileirão Série B no título não vira qualificador de reserva', () => {
   const found = teamsFromTitle('Santos x Pumas AO VIVO | Brasileirão Série B')
   assert.ok(found)

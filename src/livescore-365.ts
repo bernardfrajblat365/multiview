@@ -1,5 +1,5 @@
 import type { MatchIncident } from './match-events.ts'
-import { extractMatchLabel, splitMatchTeams } from './match-label.ts'
+import { extractDashMatchup, extractMatchLabel, splitMatchTeams } from './match-label.ts'
 import { detectCompetition } from './youtube-lives.ts'
 import { clockElapsedAt, clockPeriod365, isRunningPeriod, normalizeElapsed, type MatchClock } from './match-clock.ts'
 
@@ -277,8 +277,10 @@ function cleanTitleTeam(value: string, side: 'home' | 'away') {
 /** Teams named in a YouTube live title, or null when there is no "A x B". */
 export function teamsFromTitle(title: string): { home: string; away: string; qualifiers: Set<string>; competition: string | null } | null {
   const label = extractMatchLabel(title)
-  const teams = label ? splitMatchTeams(label.replace(/…$/, '')) : null
-  if (!teams) return null
+  const dash = label ? null : extractDashMatchup(title)
+  const teams = label ? splitMatchTeams(label.replace(/…$/, '')) : dash
+  // "Brasileirão - Flamengo": a competition on one side of the dash is not a matchup.
+  if (!teams || (dash && (detectCompetition(dash.home) || detectCompetition(dash.away)))) return null
   const home = cleanTitleTeam(teams.home, 'home')
   const away = cleanTitleTeam(teams.away, 'away')
   if (teamTokens(home).length === 0 || teamTokens(away).length === 0) return null

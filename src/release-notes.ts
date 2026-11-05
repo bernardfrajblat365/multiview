@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.2',
+    label: '1.3.2',
+    notes: [
+      { title: 'Jogos com hífen no título', body: 'Lives com o título no formato "Flamengo - Palmeiras" (com um traço em vez do "x") agora também são ligadas ao jogo do 365Scores, com placar e alertas.' },
+    ],
+  },
+  {
     version: '1.3.1',
     label: '1.3.1',
     notes: [

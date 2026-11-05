@@ -194,19 +194,25 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     return `<span class="${className}"${key ? ` data-crest="${esc(key)}"` : ''}>${url ? `<img src="${esc(url)}" alt="" />` : ''}</span>`
   }
 
+  /** Uma linha por opção, nas mesmas colunas em todos os mercados: nome, odd, seta, odd de antes do jogo. */
   function oddsMarketHtml(market: OddsMarket) {
-    const options = market.options.map((option) => {
-      const trend = option.trend ? `<span class="info-odd__trend info-odd__trend--${option.trend}" aria-label="${option.trend === 'up' ? 'subiu' : 'caiu'}">${option.trend === 'up' ? '▲' : '▼'}</span>` : ''
-      const before = option.prematch !== null ? `<span class="info-odd__pre" title="Odd antes do jogo">antes ${formatOdd(option.prematch)}</span>` : ''
-      return `<div class="info-odd" data-info-odd><span class="info-odd__label" title="${esc(option.label)}">${esc(option.label)}</span><span class="info-odd__rate">${formatOdd(option.rate)}${trend}</span>${before}</div>`
+    const rows = market.options.map((option) => {
+      const trend = option.trend ? `<span class="info-odd__trend info-odd__trend--${option.trend}" aria-label="${option.trend === 'up' ? 'subiu' : 'caiu'}">${option.trend === 'up' ? '▲' : '▼'}</span>` : '<span class="info-odd__trend"></span>'
+      const before = `<span class="info-odd__pre"${option.prematch !== null ? ' title="Odd antes do jogo"' : ''}>${option.prematch !== null ? `antes ${formatOdd(option.prematch)}` : ''}</span>`
+      return `<li class="info-odd" data-info-odd><span class="info-odd__label" title="${esc(option.label)}">${esc(option.label)}</span><span class="info-odd__rate">${formatOdd(option.rate)}</span>${trend}${before}</li>`
     }).join('')
-    return `<section class="info-odds" data-info-market><h3 class="info-section">${esc(market.title)}</h3><div class="info-odds__options" style="--n:${market.options.length}">${options}</div></section>`
+    return `<section data-info-market><h3 class="info-section">${esc(market.title)}</h3><ol class="info-odds">${rows}</ol></section>`
+  }
+
+  /** Barra dividida com valor e nome embaixo de cada parte, em colunas iguais (votos dos torcedores e confronto direto). */
+  function splitBarHtml(items: { value: string; weight: number; label: string }[]) {
+    const bars = items.map((item, i) => `<span class="info-split__bar info-split__bar--${i}" style="flex-grow:${Math.max(item.weight, 1)}"></span>`).join('')
+    const labels = items.map((item, i) => `<li class="info-split__item info-split__item--${i}"><span class="info-split__value">${esc(item.value)}</span><span class="info-split__label" title="${esc(item.label)}">${esc(item.label)}</span></li>`).join('')
+    return `<div class="info-split__track" aria-hidden="true">${bars}</div><ul class="info-split__list" style="--n:${items.length}">${labels}</ul>`
   }
 
   function votesHtml(votes: FanVote[]) {
-    const bars = votes.map((vote, i) => `<span class="info-votes__bar info-votes__bar--${i}" style="flex-grow:${Math.max(vote.percentage, 1)}"></span>`).join('')
-    const labels = votes.map((vote, i) => `<li class="info-votes__item info-votes__item--${i}"><span class="info-votes__pct">${vote.percentage}%</span><span class="info-votes__label" title="${esc(vote.label)}">${esc(vote.label)}</span></li>`).join('')
-    return `<section class="info-odds" data-info-votes><h3 class="info-section">Quem vai ganhar? · torcedores</h3><div class="info-votes" aria-hidden="true">${bars}</div><ul class="info-votes__list">${labels}</ul></section>`
+    return `<section data-info-votes><h3 class="info-section">Quem vai ganhar? · torcedores</h3>${splitBarHtml(votes.map((vote) => ({ value: `${vote.percentage}%`, weight: vote.percentage, label: vote.label })))}</section>`
   }
 
   function oddsHtml(odds: GameOdds, live: boolean) {
@@ -233,16 +239,19 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
 
   function h2hHtml(info: GamesInfo) {
     const { h2h, teams } = info
-    if (h2h.total === 0) return '<h3 class="info-section">Confronto direto</h3><p class="info-note">Os times não se enfrentaram recentemente</p>'
-    const box = (value: number, label: string, ref: TeamRef365 | null) => `<div class="info-h2h__box">${crestSlotHtml(ref, 'info-h2h__crest')}<span class="info-h2h__num">${value}</span><span class="info-h2h__label" title="${esc(label)}">${esc(label)}</span></div>`
+    if (h2h.total === 0) return '<section><h3 class="info-section">Confronto direto</h3><p class="info-note">Os times não se enfrentaram recentemente</p></section>'
     const games = h2h.games.map((game) => {
       const homeWon = game.winnerId === game.homeId
       const awayWon = game.winnerId === game.awayId
       return `<li class="info-h2h-game" data-info-h2h-game title="${esc(game.competition)}"><span class="info-game__date">${esc(formatGameDate(game.startTime))}</span><span class="info-h2h-game__home${homeWon ? ' is-winner' : ''}" title="${esc(game.home)}">${esc(game.home)}</span><span class="info-game__score">${game.homeScore}-${game.awayScore}</span><span class="info-h2h-game__away${awayWon ? ' is-winner' : ''}" title="${esc(game.away)}">${esc(game.away)}</span></li>`
     }).join('')
-    return `<h3 class="info-section">Confronto direto · ${h2h.total} ${h2h.total === 1 ? 'jogo' : 'jogos'}</h3>
-      <div class="info-h2h" data-info-h2h>${box(h2h.wins[0], teams[0].name, teams[0].crestRef)}${box(h2h.draws, 'Empates', null)}${box(h2h.wins[1], teams[1].name, teams[1].crestRef)}</div>
-      <ol class="info-games">${games}</ol>`
+    return `<section><h3 class="info-section">Confronto direto · ${h2h.total} ${h2h.total === 1 ? 'jogo' : 'jogos'}</h3>
+      <div data-info-h2h>${splitBarHtml([
+        { value: String(h2h.wins[0]), weight: h2h.wins[0], label: teams[0].name },
+        { value: String(h2h.draws), weight: h2h.draws, label: 'Empates' },
+        { value: String(h2h.wins[1]), weight: h2h.wins[1], label: teams[1].name },
+      ])}</div>
+      <ol class="info-games info-h2h-games">${games}</ol></section>`
   }
 
   function gamesHtml(id: string, info: GamesInfo) {
@@ -252,7 +261,7 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
       const crest = deps.crests(id)[i] ?? (team.crestRef ? tableCrests.get(crestKeyOf(team.crestRef)) ?? null : null)
       return `<button type="button" role="tab" class="info-team${selected ? ' is-selected' : ''}" aria-selected="${selected}" data-info-team="${i}" title="${esc(team.name)}">${crest ? `<img src="${esc(crest)}" alt="" />` : ''}<span>${esc(team.name)}</span></button>`
     }).join('')
-    return `<div class="info-list info-scroll" data-info-list>${h2hHtml(info)}<h3 class="info-section">Últimos jogos</h3><div class="info-teams" role="tablist" aria-label="Time">${buttons}</div>${formHtml(info.teams[index])}</div>`
+    return `<div class="info-list info-scroll" data-info-list>${h2hHtml(info)}<section><h3 class="info-section">Últimos jogos</h3><div class="info-teams" role="tablist" aria-label="Time">${buttons}</div>${formHtml(info.teams[index])}</section></div>`
   }
 
   function bodyHtml(id: string) {

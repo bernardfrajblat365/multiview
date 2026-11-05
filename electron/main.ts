@@ -1554,7 +1554,7 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:match-info', async (event, request: unknown) => {
     if (!isUiSender(event)) return { status: 'error' }
     const row = request && typeof request === 'object' ? request as { panelId?: unknown; tab?: unknown } : null
-    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : row?.tab === 'standings' ? 'standings' : null
+    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : row?.tab === 'standings' ? 'standings' : row?.tab === 'stats' ? 'stats' : null
     if (!row || typeof row.panelId !== 'string' || row.panelId.length > 64 || !tab) return { status: 'error' }
     return matchInfo.load({ panelId: row.panelId, tab })
   })

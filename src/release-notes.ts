@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.2',
+    label: '1.3.2',
+    notes: [
+      { title: 'Estatísticas do jogo', body: 'A gaveta de informações do painel ganhou a aba Estatísticas, com posse de bola, chutes, escanteios, faltas, cartões, impedimentos e o que mais o 365Scores tiver do jogo, lado a lado com uma barra para comparar os dois times.' },
+    ],
+  },
+  {
     version: '1.3.1',
     label: '1.3.1',
     notes: [

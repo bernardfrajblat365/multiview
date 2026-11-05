@@ -2,11 +2,12 @@ import type { TeamRef365 } from './livescore-365.ts'
 import { formatPlayerName } from './match-events.ts'
 
 /** Abas da gaveta de informações do jogo. Escalação e tabela aparecem; as outras já estão previstas no tipo. */
-export type InfoTabId = 'lineup' | 'standings' | 'odds' | 'games'
+export type InfoTabId = 'lineup' | 'standings' | 'odds' | 'games' | 'stats'
 
 export const INFO_TABS: readonly { id: InfoTabId; label: string }[] = [
   { id: 'lineup', label: 'Escalação' },
   { id: 'standings', label: 'Tabela' },
+  { id: 'stats', label: 'Estatísticas' },
 ]
 
 /** Foto de um atleta no CDN do 365Scores: o id e a versão bastam para montar a URL. */
@@ -79,6 +80,7 @@ export type StandingsTable = {
 export type MatchInfoResult =
   | { status: 'ok'; tab: 'lineup'; teams: [LineupTeam, LineupTeam]; live: boolean; source: LineupSource }
   | { status: 'ok'; tab: 'standings'; table: StandingsTable; /** Ids dos times do jogo, destacados na tabela. */ highlight: number[]; live: boolean }
+  | { status: 'ok'; tab: 'stats'; /** Nomes dos times na ordem do feed. */ teams: [string, string]; sections: StatsSection[]; live: boolean }
   | { status: 'none' }
   | { status: 'no-game' }
   | { status: 'error' }
@@ -460,5 +462,115 @@ export function parseStandings(raw: unknown, target: StandingsTarget): Standings
     group: groupNum !== null && groups.size > 1 ? `Grupo ${groupNum}` : '',
     rows: parsed,
     zones: usedZones,
+  }
+}
+
+/** Uma estatística do jogo com o valor de cada time, na ordem do feed do painel. */
+export type MatchStat = {
+  id: number
+  name: string
+  /** Texto do 365Scores ("53%", "10/29 (34%)", "1,72"). */
+  values: [string, string]
+  /** Fatia de cada time na barra (0–1, somam 1); [0, 0] quando os dois têm zero. */
+  shares: [number, number]
+  /** Time com o número melhor segundo o 365Scores (menos faltas, mais chutes…), ou null. */
+  better: 0 | 1 | null
+}
+
+export type StatsSection = { title: string; stats: MatchStat[] }
+
+const MAX_STATS = 80
+const STAT_VALUE_MAX = 24
+
+/** "1.72" → "1,72"; o resto ("53%", "10/29 (34%)") fica como o 365Scores escreve. */
+export function formatStatValue(value: unknown) {
+  if (typeof value === 'number' && Number.isFinite(value)) return String(value).replace('.', ',')
+  const clean = text(value, STAT_VALUE_MAX)
+  return /^\d+\.\d+$/.test(clean) ? clean.replace('.', ',') : clean
+}
+
+function share(value: unknown) {
+  const number = Number(value)
+  return Number.isFinite(number) && number > 0 ? Math.min(number, 1) : 0
+}
+
+/**
+ * Estatísticas de uma resposta de `/web/game/stats/?games=<id>`: cada estatística vem uma vez por time
+ * (`competitorId`), com o texto (`value`), a fatia da barra (`valuePercentage`) e o time em vantagem (`markedTeam`,
+ * 1 mandante / 2 visitante). Só as do jogo inteiro (sem `filterId` de tempo). Seções: "Principais" (`isTop`) e
+ * depois as categorias do 365Scores (Chutes, Passes…) e, no fim, as sem categoria em "Geral", cada uma na ordem do 365Scores.
+ * `reversed`: o mandante do feed do painel é o visitante no 365Scores. Null quando não é deste jogo; [] sem estatísticas.
+ */
+export function parseMatchStats(raw: unknown, gameId: number, reversed = false): { teams: [string, string]; sections: StatsSection[]; live: boolean } | null {
+  const root = record(raw)
+  if (!root) return null
+  const game = Array.isArray(root.games) ? root.games.map(record).find((item) => item && Number(item.id) === gameId) : null
+  if (!game) return null
+  const homeId = positiveInt(record(game.homeCompetitor)?.id)
+  const awayId = positiveInt(record(game.awayCompetitor)?.id)
+  if (homeId === null || awayId === null) return null
+  const names: [string, string] = [text(record(game.homeCompetitor)?.name), text(record(game.awayCompetitor)?.name)]
+  const live = Number(game.statusGroup) === 3
+  type Entry = { id: number; name: string; order: number; top: boolean; category: string; categoryOrder: number; home?: Record<string, unknown>; away?: Record<string, unknown> }
+  const entries = new Map<number, Entry>()
+  for (const item of Array.isArray(root.statistics) ? root.statistics : []) {
+    const row = record(item)
+    if (!row || (row.filterId !== undefined && row.filterId !== null && Number(row.filterId) !== -1)) continue
+    const id = positiveInt(row.id)
+    const name = text(row.name, 48)
+    const side = Number(row.competitorId) === homeId ? 'home' : Number(row.competitorId) === awayId ? 'away' : null
+    if (id === null || !name || !side) continue
+    let entry = entries.get(id)
+    if (!entry) {
+      if (entries.size >= MAX_STATS) continue
+      const order = Number(row.order)
+      const categoryOrder = Number(row.categoryOrder)
+      entry = {
+        id, name,
+        order: Number.isFinite(order) ? order : 999,
+        top: row.isTop === true,
+        category: text(row.categoryName, 32),
+        categoryOrder: Number.isFinite(categoryOrder) ? categoryOrder : 0,
+      }
+      entries.set(id, entry)
+    }
+    entry[side] = row
+  }
+  const sections = new Map<string, { title: string; rank: number; stats: (MatchStat & { order: number })[] }>()
+  for (const entry of entries.values()) {
+    if (!entry.home || !entry.away) continue
+    const home = formatStatValue(entry.home.value)
+    const away = formatStatValue(entry.away.value)
+    if (!home || !away) continue
+    let homeShare = share(entry.home.valuePercentage)
+    let awayShare = share(entry.away.valuePercentage)
+    const total = homeShare + awayShare
+    if (total > 0) {
+      homeShare /= total
+      awayShare /= total
+    }
+    const marked = Number(entry.home.markedTeam ?? entry.away.markedTeam)
+    let better: 0 | 1 | null = marked === 1 ? 0 : marked === 2 ? 1 : null
+    let values: [string, string] = [home, away]
+    let shares: [number, number] = [homeShare, awayShare]
+    if (reversed) {
+      values = [away, home]
+      shares = [awayShare, homeShare]
+      better = better === null ? null : better === 0 ? 1 : 0
+    }
+    const title = entry.top ? 'Principais' : entry.category || 'Geral'
+    const rank = entry.top ? -1 : entry.category ? entry.categoryOrder : Number.MAX_SAFE_INTEGER
+    const section = sections.get(title) ?? { title, rank, stats: [] }
+    section.stats.push({ id: entry.id, name: entry.name, values, shares, better, order: entry.order })
+    sections.set(title, section)
+  }
+  const list = [...sections.values()].sort((a, b) => a.rank - b.rank)
+  return {
+    live,
+    teams: reversed ? [names[1], names[0]] : names,
+    sections: list.map((section) => ({
+      title: section.title,
+      stats: section.stats.sort((a, b) => a.order - b.order || a.id - b.id).map(({ order: _order, ...stat }) => stat),
+    })),
   }
 }

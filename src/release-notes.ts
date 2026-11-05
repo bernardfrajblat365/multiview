@@ -10,6 +10,7 @@ export const RELEASES: readonly Release[] = [
     label: '1.3.2',
     notes: [
       { title: 'Odds e jogos anteriores', body: 'A gaveta de informações do jogo ganhou as abas Odds (resultado, chance dupla, ambos marcam, total de gols e o palpite dos torcedores, com a odd subindo ou caindo ao vivo) e Jogos (confronto direto e os últimos jogos de cada time).' },
+      { title: 'Odds na legenda do jogo', body: 'Nos jogos ligados ao 365Scores, a odd de cada time aparece embaixo do nome e a do empate embaixo do placar, com o mesmo atraso do placar; dá para desligar em Ocultar odds na legenda, no menu ⋯.' },
     ],
   },
   {

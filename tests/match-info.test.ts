@@ -14,6 +14,7 @@ import {
   parseGamesInfo,
   parseOdds,
   reverseGamesInfo,
+  reverseMoneyline,
   parseLineupEventCounts,
   parseLineups,
   parsePhotoRefs,
@@ -850,4 +851,15 @@ test('parseGamesInfo recusa resposta de outro jogo ou sem times', () => {
   assert.equal(parseGamesInfo(H2H, ODDS_GAME + 1), null)
   assert.equal(parseGamesInfo({ game: { id: ODDS_GAME } }, ODDS_GAME), null)
   assert.equal(parseGamesInfo(null, ODDS_GAME), null)
+})
+
+test('parseOdds: 1X2 da legenda pelos nomes "1"/"X"/"2", com a seta; sem empate no basquete; reverseMoneyline', () => {
+  const odds = parseOdds(LINES, ODDS_GAME, 'São Paulo', 'Corinthians')
+  assert.deepEqual(odds?.moneyline, { home: { rate: 3.76, trend: 'up' }, draw: { rate: 1.73, trend: 'down' }, away: { rate: 4.77, trend: null } })
+  assert.deepEqual(reverseMoneyline(odds!.moneyline!), { home: { rate: 4.77, trend: null }, draw: { rate: 1.73, trend: 'down' }, away: { rate: 3.76, trend: 'up' } })
+  const basket = parseOdds({ lines: [line(33, 'Vencedor', [['1', 1.28, 2], ['2', 3.28, 2]])] }, ODDS_GAME, 'A', 'B')
+  assert.deepEqual(basket?.moneyline, { home: { rate: 1.28, trend: null }, draw: null, away: { rate: 3.28, trend: null } })
+  // Resultado já decidido: os outros mercados seguem, mas a legenda fica sem odds.
+  const decided = { lines: [line(1, 'Resultado Final', [['1', 2, 2], ['X', 3, 2], ['2', 4, 2]], { isConcluded: true }), line(12, 'Ambos marcam', [['Sim', 2, 2], ['Não', 1.7, 2]])] }
+  assert.equal(parseOdds(decided, ODDS_GAME, 'A', 'B')?.moneyline, null)
 })

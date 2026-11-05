@@ -1,4 +1,4 @@
-import { athletePhotoUrl, hasAnyGame, parseFanVotes, parseGamesInfo, parseOdds, parseLineups, reverseGamesInfo, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
+import { athletePhotoUrl, hasAnyGame, parseFanVotes, parseGamesInfo, parseOdds, parseLineups, reverseGamesInfo, reverseMoneyline, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
 import { apiUrl, fetchJson } from './livescore-365'
 import { loadImage } from './image-cache'
 import { crestKey, crestUrl } from '../src/team-crests'
@@ -143,7 +143,10 @@ export function createMatchInfo(options: {
       if (row.hasBets === false) return { status: 'none' }
       const nameOf = (side: unknown) => String(record(side)?.name ?? '')
       const parsed = parseOdds(await cached(odds, String(game.gameId), ODDS_CACHE_MS, () => fetchOdds(game.gameId)), game.gameId, nameOf(row.homeCompetitor), nameOf(row.awayCompetitor))
-      return parsed ? { status: 'ok', tab: 'odds', odds: { ...parsed, votes: parseFanVotes(detail, game.gameId) }, live } : { status: 'none' }
+      if (!parsed) return { status: 'none' }
+      // A legenda mostra o 1X2 na ordem do feed do painel; a aba usa os nomes, que já dizem de quem é cada odd.
+      const moneyline = parsed.moneyline && game.reversed ? reverseMoneyline(parsed.moneyline) : parsed.moneyline
+      return { status: 'ok', tab: 'odds', odds: { ...parsed, moneyline, votes: parseFanVotes(detail, game.gameId) }, live }
     } catch {
       return { status: 'error' }
     }

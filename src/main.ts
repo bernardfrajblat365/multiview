@@ -63,6 +63,8 @@ import {
   type NormRect,
 } from './match-label'
 import { createScoreTimeline, nextScoreChangeAt, pushScore, visibleScore, type ScoreTimeline } from './score-delay'
+import { LABEL_ODDS_IDLE_MS, LABEL_ODDS_POLL_MS, createOddsTimeline, labelOddsText, loadLabelOddsSetting, nextOddsChangeAt, oddsSpoken, orientOdds, pushOdds, saveLabelOddsSetting, visibleOdds, type OddsTimeline } from './label-odds'
+import type { Moneyline, OddsTrend } from './match-info'
 import { clockElapsedAt, clockView, createClockTimeline, nextClockChangeAt, pushClock, visibleClock, type ClockTimeline, type ClockView } from './match-clock'
 import { isBreakPeriod, planHalftimeSwaps, type HalftimeSwap, type SwapPanelInfo } from './halftime-swap'
 import {
@@ -164,6 +166,12 @@ let clockTicking = false
 const panelLive = new Map<PanelId, LiveMatchStatus>()
 /** Panels whose game has info for the drawer (a 365Scores game, or William Hill's own line-up); the 👕 button shows only for these. */
 const matchInfoReady = new Set<PanelId>()
+/** 1X2 odds under the names in the label (⋯ menu); the choice is saved like the alert preferences. */
+let showLabelOdds = loadLabelOddsSetting(browserStorage())
+/** Odds read for each panel's game, held back by the score delay like the score itself. */
+const panelOdds = new Map<PanelId, OddsTimeline>()
+const oddsPollTimers = new Map<PanelId, number>()
+const oddsInFlight = new Set<PanelId>()
 /** Per-panel delay (s) chosen on a 365Scores-linked panel; memory only, like the rest of the panel state. */
 const panelDelayOverride = new Map<PanelId, number>()
 /** Alerts of 365Scores-linked panels waiting for the video to catch up with the data. */
@@ -221,8 +229,25 @@ function clearPendingAlerts(id: PanelId) {
   pendingAlerts.delete(id)
 }
 
+function browserStorage(): Storage | null {
+  try {
+    return window.localStorage
+  } catch {
+    return null
+  }
+}
+
+function clearPanelOdds(id: PanelId) {
+  const timer = oddsPollTimers.get(id)
+  if (timer !== undefined) window.clearTimeout(timer)
+  oddsPollTimers.delete(id)
+  oddsInFlight.delete(id)
+  panelOdds.delete(id)
+}
+
 function clearPanelMatchState(id: PanelId) {
   matchInfoReady.delete(id)
+  clearPanelOdds(id)
   infoDrawer.forget(id)
   panelLive.delete(id)
   panelDelayOverride.delete(id)
@@ -243,6 +268,7 @@ function clearPanelMatchState(id: PanelId) {
 
 function clearAllPanelMatchState() {
   matchInfoReady.clear()
+  for (const id of [...new Set([...panelOdds.keys(), ...oddsPollTimers.keys(), ...oddsInFlight])]) clearPanelOdds(id)
   infoDrawer.close()
   for (const id of [...pendingAlerts.keys()]) clearPendingAlerts(id)
   finishedPanels.clear()
@@ -299,6 +325,10 @@ function scheduleLabelRefresh(now: number) {
     const delay = panelScoreDelayMs(id)
     if (delay !== null) consider(nextClockChangeAt(timeline, now, delay))
   }
+  for (const [id, timeline] of panelOdds) {
+    const delay = panelScoreDelayMs(id)
+    if (delay !== null && showLabelOdds) consider(nextOddsChangeAt(timeline, now, delay))
+  }
   for (const until of scoreFlashUntil.values()) consider(until)
   // A clock on screen ticks: wake up on the next whole second.
   if (clockTicking) consider(now + 1000 - (now % 1000))
@@ -309,7 +339,7 @@ function scheduleLabelRefresh(now: number) {
   }, Math.max(0, next - now) + 30)
 }
 
-function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null; crests: Crests; clock: ClockView | null } | null {
+function panelMatch(id: PanelId, now: number): { home: string; away: string; score: MatchScore | null; crests: Crests; clock: ClockView | null; odds: Moneyline | null } | null {
   const feed = panelFeeds.get(id)
   const titleLabel = extractMatchLabel(panelTitles.get(id) ?? '')
   const titleTeams = titleLabel ? splitMatchTeams(titleLabel) : null
@@ -320,14 +350,94 @@ function panelMatch(id: PanelId, now: number): { home: string; away: string; sco
   let score = feed && delay !== null ? visibleScore(feed.timeline, now, delay) : null
   if (score && titleTeams && feedTeams) score = orientScore(titleTeams, feedTeams, score)
   const feedCrests = panelCrests.get(id) ?? { home: null, away: null }
-  const crests = titleTeams && feedTeams && teamsReversed(titleTeams, feedTeams)
-    ? { home: feedCrests.away, away: feedCrests.home }
-    : feedCrests
+  const reversed = Boolean(titleTeams && feedTeams && teamsReversed(titleTeams, feedTeams))
+  const crests = reversed ? { home: feedCrests.away, away: feedCrests.home } : feedCrests
+  // Odds swing on a goal: they wait for the score's delay and hide with the score.
+  const oddsTimeline = showLabelOdds ? panelOdds.get(id) : undefined
+  const feedOdds = oddsTimeline && delay !== null ? visibleOdds(oddsTimeline, now, delay) : null
+  const odds = feedOdds ? orientOdds(feedOdds, reversed) : null
   // The clock follows the score's delay (and hides with it): the video trails the feed.
   const timeline = panelClocks.get(id)
   const reading = timeline && delay !== null ? visibleClock(timeline, now, delay) : null
   const clock = reading && delay !== null ? clockView(reading, now - delay) : null
-  return { ...teams, score, crests, clock }
+  return { ...teams, score, crests, clock, odds }
+}
+
+/** Polls the 1X2 odds of panels with a 365Scores game while the label shows them (the main process caches them for 30 s). */
+function wantsLabelOdds(id: PanelId) {
+  return showLabelOdds && showMatchLabels && matchInfoReady.has(id) && Boolean(panelById(id)?.url)
+}
+
+function scheduleOddsPoll(id: PanelId, delayMs: number) {
+  if (oddsPollTimers.has(id) || oddsInFlight.has(id) || !wantsLabelOdds(id)) return
+  oddsPollTimers.set(id, window.setTimeout(() => {
+    oddsPollTimers.delete(id)
+    void pollPanelOdds(id)
+  }, delayMs))
+}
+
+async function pollPanelOdds(id: PanelId) {
+  if (!window.quadra || oddsInFlight.has(id) || !wantsLabelOdds(id)) return
+  oddsInFlight.add(id)
+  let next = LABEL_ODDS_IDLE_MS
+  try {
+    const result = await window.quadra.getMatchInfo({ panelId: id, tab: 'odds' })
+    if (!oddsInFlight.has(id)) return
+    if (result.status !== 'error' && result.status !== 'no-game') {
+      const moneyline = result.status === 'ok' && result.tab === 'odds' ? result.odds.moneyline : null
+      const timeline = panelOdds.get(id) ?? createOddsTimeline()
+      panelOdds.set(id, timeline)
+      if (pushOdds(timeline, Date.now(), moneyline)) updatePanelLabels()
+      if (moneyline && result.status === 'ok' && result.live) next = LABEL_ODDS_POLL_MS
+    }
+  } catch {
+    // Main process busy or the window reloading: try again later.
+  } finally {
+    if (oddsInFlight.delete(id)) scheduleOddsPoll(id, next)
+  }
+}
+
+function syncLabelOdds() {
+  for (const [id, timer] of oddsPollTimers) {
+    if (wantsLabelOdds(id)) continue
+    window.clearTimeout(timer)
+    oddsPollTimers.delete(id)
+  }
+  for (const id of matchInfoReady) {
+    if (wantsLabelOdds(id) && !oddsPollTimers.has(id) && !oddsInFlight.has(id)) void pollPanelOdds(id)
+  }
+}
+
+function setShowLabelOdds(next: boolean) {
+  showLabelOdds = next
+  saveLabelOddsSetting(browserStorage(), next)
+  const button = app.querySelector<HTMLButtonElement>('#btn-label-odds')
+  if (button) {
+    button.setAttribute('aria-pressed', String(next))
+    button.textContent = labelOddsButtonText()
+  }
+  syncLabelOdds()
+  updatePanelLabels()
+}
+
+function labelOddsButtonText() {
+  return showLabelOdds ? 'Ocultar odds na legenda' : 'Mostrar odds na legenda'
+}
+
+/** A name (or the score) with its odd right under it. */
+function oddsColumn(child: HTMLElement, odd: string, trend: OddsTrend) {
+  const column = document.createElement('span')
+  column.className = 'panel__label-col'
+  column.append(child)
+  if (odd) {
+    const value = labelSpan('panel__label-odd', odd)
+    if (trend) {
+      const arrow = labelSpan(`panel__label-odd-trend panel__label-odd-trend--${trend}`, trend === 'up' ? '▲' : '▼')
+      value.append(arrow)
+    }
+    column.append(value)
+  }
+  return column
 }
 
 /** Width the label reserves for the clock box; the time counts as at least "00:00" so it doesn't jitter each second. */
@@ -474,7 +584,9 @@ function updatePanelLabels() {
       score: match.score,
       crests: Boolean(match.crests.home || match.crests.away),
       clockChars: clockChars(match.clock),
+      odds: Boolean(match.odds),
     })
+    const odds = placement.odds ? match.odds : null
     if (match.clock?.time) clockTicking = true
     const labelElement = existing ?? document.createElement('div')
     if (!existing) {
@@ -489,7 +601,8 @@ function updatePanelLabels() {
     labelElement.classList.toggle('panel__label--flash', flashing)
     const clockText = match.clock ? ` · ${match.clock.title}${match.clock.time ? ` ${match.clock.time}` : ''}` : ''
     labelElement.dataset.clock = match.clock ? `${match.clock.tag} ${match.clock.time}`.trim() : ''
-    labelElement.setAttribute('aria-label', `${scoreText ? `${match.home} ${scoreText} ${match.away}` : label}${clockText}`)
+    labelElement.toggleAttribute('data-odds', Boolean(odds))
+    labelElement.setAttribute('aria-label', `${scoreText ? `${match.home} ${scoreText} ${match.away}` : label}${clockText}${odds ? ` · odds ${oddsSpoken(odds)}` : ''}`)
     labelElement.style.setProperty('--label-x', `${placement.box.x * 100}%`)
     labelElement.style.setProperty('--label-y', `${placement.box.y * 100}%`)
     labelElement.style.setProperty('--label-w', `${placement.box.width * 100}%`)
@@ -499,7 +612,8 @@ function updatePanelLabels() {
     // Rebuild the content only when it changes, so the flash animation is not restarted by every poll.
     // The clock's time isn't part of the key: it ticks in place every second.
     const clockKey = match.clock ? `${match.clock.tag}:${match.clock.paused ? 'p' : 'r'}:${match.clock.time ? 't' : ''}` : ''
-    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, flashing ? `${lit.home ? 'h' : ''}${lit.away ? 'a' : ''}` : '', match.crests.home ?? '', match.crests.away ?? '', clockKey].join('|')
+    const oddsKey = odds ? [odds.home, odds.draw, odds.away].map((value) => (value ? `${value.rate}${value.trend ?? ''}` : '')).join('/') : ''
+    const contentKey = [placement.mode, placement.layout, match.home, match.away, scoreText, flashing ? `${lit.home ? 'h' : ''}${lit.away ? 'a' : ''}` : '', match.crests.home ?? '', match.crests.away ?? '', clockKey, oddsKey].join('|')
     if (labelElement.dataset.contentKey === contentKey) {
       updateClockBox(labelElement, match.clock)
       continue
@@ -515,11 +629,17 @@ function updatePanelLabels() {
     chip.setAttribute('aria-hidden', 'true')
     if (placement.layout === 'inline') {
       if (homeCrest) chip.append(homeCrest)
-      chip.append(
-        labelSpan('panel__label-team', match.home),
-        match.score ? scoreLabel(match.score, rollFrom, lit) : labelSpan('panel__label-vs', 'x'),
-        labelSpan('panel__label-team', match.away),
-      )
+      const middle = match.score ? scoreLabel(match.score, rollFrom, lit) : labelSpan('panel__label-vs', 'x')
+      if (odds) {
+        const text = labelOddsText(odds)
+        chip.append(
+          oddsColumn(labelSpan('panel__label-team', match.home), text.home, odds.home.trend),
+          oddsColumn(middle, text.draw, odds.draw?.trend ?? null),
+          oddsColumn(labelSpan('panel__label-team', match.away), text.away, odds.away.trend),
+        )
+      } else {
+        chip.append(labelSpan('panel__label-team', match.home), middle, labelSpan('panel__label-team', match.away))
+      }
       if (awayCrest) chip.append(awayCrest)
     } else {
       const rows = [
@@ -2411,6 +2531,7 @@ function setShowMatchLabels(next: boolean) {
     button.setAttribute('aria-pressed', String(showMatchLabels))
     button.textContent = showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'
   }
+  syncLabelOdds()
   updatePanelLabels()
 }
 
@@ -3134,6 +3255,10 @@ function bindMoreMenu() {
     setShowMatchLabels(!showMatchLabels)
     setOpen(false)
   }, { signal })
+  app.querySelector('#btn-label-odds')?.addEventListener('click', () => {
+    setShowLabelOdds(!showLabelOdds)
+    setOpen(false)
+  }, { signal })
   bindAlertControls(menu, signal)
   document.addEventListener('click', (event) => { if (!menu.contains(event.target as Node)) setOpen(false) }, { signal })
   document.addEventListener('keydown', (event) => { if (event.key === 'Escape') setOpen(false) }, { signal })
@@ -3377,6 +3502,7 @@ function renderGrid() {
           <button type="button" class="btn btn--ghost" id="btn-auto" role="menuitem">Organizar automaticamente</button>
           <button type="button" class="btn btn--ghost" id="btn-equal" role="menuitem">Sem destaques</button>
           <button type="button" class="btn btn--ghost" id="btn-match-labels" role="menuitem" aria-pressed="${showMatchLabels}">${showMatchLabels ? 'Ocultar nomes dos jogos' : 'Mostrar nomes dos jogos'}</button>
+          <button type="button" class="btn btn--ghost" id="btn-label-odds" role="menuitem" aria-pressed="${showLabelOdds}" title="Odds de vitória, empate e derrota (365Scores) embaixo dos nomes, com o mesmo atraso do placar">${labelOddsButtonText()}</button>
           <button type="button" class="btn btn--ghost" id="btn-undo" role="menuitem"${canUndo ? '' : ' disabled'}>Desfazer</button>
           <button type="button" class="btn btn--ghost" id="btn-clear-all" role="menuitem">Limpar todos</button>
           </div>
@@ -3555,8 +3681,11 @@ window.quadra?.onMatchInfoReady(({ panelId, ready }) => {
   else {
     matchInfoReady.delete(panelId)
     infoDrawer.forget(panelId)
+    clearPanelOdds(panelId)
   }
   updateLiveControls()
+  syncLabelOdds()
+  updatePanelLabels()
 })
 window.quadra?.onPanelVideoRect(({ panelId, rect }) => {
   if (!panelById(panelId)) return

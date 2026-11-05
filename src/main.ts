@@ -1087,7 +1087,8 @@ function deliverLiveVar(payload: LiveVarPayload) {
 /** Shows an alert now; a goal the VAR cancelled also undoes that panel's goal highlight. */
 function deliverMatchEvent(payload: MatchEventPayload) {
   if (view !== 'grid' || panelById(payload.panelId)?.alertsOff) return
-  if (payload.kind === 'var' && payload.note === 'gol anulado') releaseAutoPanel(payload.panelId)
+  // `keepHighlight`: a William Hill panel's VAR (from 365Scores) about a goal other than the one on screen.
+  if (payload.kind === 'var' && payload.note === 'gol anulado' && !payload.keepHighlight) releaseAutoPanel(payload.panelId)
   // With the goal highlight on, the alert (and the scorer's name in it) lasts as long as the highlight, so they leave together.
   const alertSettings = getAlertSettings()
   const highlightMs = panels.length >= AUTO_MIN_PANELS && alertSettings.autoHighlight ? alertSettings.autoHighlightSec * 1000 : undefined

@@ -3,7 +3,7 @@ import { AUTO_HIGHLIGHT_OPTIONS, CLOSE_FINISHED_OPTIONS, SCORE_DELAY_OPTIONS, lo
 import { ALERT_KINDS, formatPlayerName, type AlertKind } from './match-events'
 import type { LiveVarPayload, VarReviewKind } from './livescore-365'
 
-export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string }
+export type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string; keepHighlight?: boolean }
 
 const GOAL_HOLD_MS = 45_000
 const OTHER_HOLD_MS = 12_000

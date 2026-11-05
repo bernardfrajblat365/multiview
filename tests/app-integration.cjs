@@ -159,6 +159,13 @@ async function run() {
   const youtubeQueries = []
   let detailRequests = 0
   let gameCenterRequests = 0
+  // Ceará x Sport Recife (365Scores 9301) is William Hill event 7401 ("Sport Recife x Ceará"): the panel borrows only its VAR.
+  let whVarStartedAt = 0
+  let whVarDetailRequests = 0
+  const whVarElapsed = () => {
+    if (!whVarStartedAt) whVarStartedAt = Date.now()
+    return Date.now() - whVarStartedAt
+  }
   let finishingDetailRequests = 0
   const crestRequests = []
   const athleteRequests = []
@@ -303,6 +310,9 @@ async function run() {
       }, {
         id: 9002, sportId: 1, statusGroup: 3, statusText: "88'", competitionDisplayName: 'Liga Teste',
         startTime: new Date().toISOString(), homeCompetitor: { id: 3, name: 'Bahia' }, awayCompetitor: { id: 4, name: 'Vitória' },
+      }, {
+        id: 9301, sportId: 1, statusGroup: 3, statusText: "52'", competitionDisplayName: 'Liga Teste',
+        startTime: new Date().toISOString(), homeCompetitor: { id: 11, name: 'Ceará' }, awayCompetitor: { id: 12, name: 'Sport Recife' },
       }] }))
       return
     }
@@ -311,11 +321,30 @@ async function run() {
       const gameId = Number(new URL(request.url, 'http://fixture').searchParams.get('games'))
       if (gameId === 9001) gameCenterRequests += 1
       const reviewing = gameId === 9001 && gameCenterRequests >= 2 && gameCenterRequests <= 6
+      // 9301: a review of Sport Recife's goal (365Scores' away team) from 5 s to 13 s after the first read.
+      const whElapsed = gameId === 9301 ? whVarElapsed() : 0
+      const whReviewing = gameId === 9301 && whElapsed >= 5000 && whElapsed <= 13000
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify({ Games: [{
         ID: gameId, Active: true,
         ...(reviewing ? { ActiveVarEvents: [{ Type: 2, Num: 1, Comp: 2, GT: 26, GTD: "26'", AddedTime: 0, Player: 'Zofia Burzan', PID: 1, S: '1-0', Status: 1, OriginalRefDecision: false }] } : {}),
+        ...(whReviewing ? { ActiveVarEvents: [{ Type: 1, Num: 1, Comp: 2, GT: 52, GTD: "52'", AddedTime: 0, Player: 'Gabriel Silva', PID: 2, S: '0-1', Status: 1, OriginalRefDecision: true }] } : {}),
       }] }))
+      return
+    }
+    if (request.url?.startsWith('/web/game/') && new URL(request.url, 'http://fixture').searchParams.get('gameId') === '9301') {
+      // Sport Recife leads 1-0 (away in 365Scores). From 7 s a red card (William Hill's job, not 365Scores'), from 16 s the VAR disallows the goal.
+      whVarDetailRequests += 1
+      const elapsed = whVarElapsed()
+      const events = [
+        ...(elapsed >= 7000 ? [{ order: 1, competitorId: 11, stageId: 2, gameTime: 50, eventType: { id: 3, name: 'Cartão vermelho', subTypeId: 0 } }] : []),
+        ...(elapsed >= 16000 ? [{ order: 2, competitorId: 12, stageId: 2, gameTime: 52, eventType: { id: 11, name: 'Gol anulado', subTypeId: 25 } }] : []),
+      ]
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify({ game: {
+        id: 9301, statusGroup: 3, gameTime: 52, events,
+        homeCompetitor: { id: 11, name: 'Ceará', score: 0, redCards: 0 }, awayCompetitor: { id: 12, name: 'Sport Recife', score: 1, redCards: 0 },
+      } }))
       return
     }
     if (request.url?.startsWith('/web/game/') && new URL(request.url, 'http://fixture').searchParams.get('gameId') === '9002') {
@@ -350,14 +379,17 @@ async function run() {
           let duration = 44 * 60
           setTimeout(() => { period = 'HALF_TIME' }, 12000)
           setTimeout(() => { period = 'SECOND_HALF'; duration = 45 * 60 }, 26000)`
-        : eventId === '7202' || eventId === '7301'
+        : eventId === '7202' || eventId === '7301' || eventId === '7401'
           ? `let period = 'SECOND_HALF'
           let duration = 75 * 60`
           : `let period = 'SECOND_HALF'
           let duration = 67 * 60 + 10
           setTimeout(() => { period = 'GAME_FINISHED' }, 8000)`
       response.writeHead(200, { 'content-type': 'text/html; charset=utf-8' })
-      response.end(`<!doctype html><title>Scoreboard fixture</title><div>Time W</div><div id="score">${eventId === '7301' ? '0 - 0' : '1 - 0'}</div><div>Time Z</div>
+      // Event 7401 scores like 7301, with team names that 365Scores lists the other way round.
+      const goalAt3s = eventId === '7301' || eventId === '7401'
+      const [homeName, awayName] = eventId === '7401' ? ['Sport Recife', 'Ceará'] : ['Time W', 'Time Z']
+      response.end(`<!doctype html><title>Scoreboard fixture</title><div>${homeName}</div><div id="score">${goalAt3s ? '0 - 0' : '1 - 0'}</div><div>${awayName}</div>
         <div style="display:none"><div class="players_home"><ul><li><div class="box-col1"><span>1</span><span>Herrera, Lautaro</span></div></li><li><div class="box-col1"><span>9</span><span>Silva, Gabriel</span></div></li></ul></div><div class="players_away"><ul></ul></div></div>
         <script>
           ${timeline}
@@ -367,10 +399,10 @@ async function run() {
             statistics: { getPeriod: () => period, acceptIncident: () => true },
             scores: { setClock: () => {} },
             // Event 7301: a goal with only the shirt number (9) at 3 s; the line-up tells the name 3 s later.
-            lineups: { addEvents: () => {}, getPlayerName: (team, number) => ${eventId === '7301' ? "lineupKnown && team === 'HOME' && number === 9 ? 'Silva, Gabriel' : ''" : "''"} },
+            lineups: { addEvents: () => {}, getPlayerName: (team, number) => ${goalAt3s ? `(lineupKnown || ${eventId === '7401'}) && team === 'HOME' && number === 9 ? 'Silva, Gabriel' : ''` : "''"} },
           } }
           let lineupKnown = false
-          ${eventId === '7301' ? `setTimeout(() => window.WH.scoreboard.commentaries.acceptIncident([{ id: 'OB_EV7301#goal1', type: 'GOAL', teamType: 'HOME', timestamp: new Date().toISOString(), time: { duration: 3000 }, data: { PLAYER: '9' } }]), 3000)
+          ${goalAt3s ? `setTimeout(() => window.WH.scoreboard.commentaries.acceptIncident([{ id: 'OB_EV${eventId}#goal1', type: 'GOAL', teamType: 'HOME', timestamp: new Date().toISOString(), time: { duration: 3000 }, data: { PLAYER: '9' } }]), 3000)
                     setTimeout(() => { document.getElementById('score').textContent = '1 - 0' }, 3600)  
           setTimeout(() => { lineupKnown = true }, 7000)` : ''}
           setInterval(() => { if (period === 'SECOND_HALF' || period === 'FIRST_HALF') window.WH.scoreboard.scores.setClock({ currentTime: { duration: duration++ } }) }, 1000)
@@ -1317,7 +1349,42 @@ async function run() {
     })`)
     assert.deepEqual(JSON.parse(whLineup), { names: ['Lautaro Herrera', 'Gabriel Silva'], note: 'Fonte: William Hill', ratingShown: false, coach: false })
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-close]').click()`)
-    process.stdout.write(JSON.stringify({ lineupDrawer: true, scorerName: true, chooser: true, bllProfiles: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
+    // William Hill has no VAR: a William Hill game found on 365Scores (teams in the other order) borrows only the VAR from there.
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      // A MutationObserver, not a timer: the overlay has been in the background for minutes and Chromium throttles its timers.
+      window.__whVarAlerts = new Set()
+      window.__whVarDelay = false
+      const record = () => {
+        const panel = document.querySelector('.panel[data-slot="2"]')
+        if (!panel) return
+        for (const name of panel.classList) if (name.startsWith('panel--alert-')) window.__whVarAlerts.add(name)
+        if (panel.querySelector('.panel__delay')) window.__whVarDelay = true
+      }
+      window.__whVarObserver = new MutationObserver(record)
+      window.__whVarObserver.observe(document.body, { subtree: true, childList: true, attributes: true, attributeFilter: ['class'] })
+    })()`)
+    await openFinishingMatch(2, 300, `wh-7401?evento=${encodeURIComponent('Sport Recife x Ceará')}&wh=7401`)
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="2"]')?.classList.contains('panel--alert-goal')`, 20000)
+    await waitForExpression(target,
+      `document.querySelector('.panel[data-slot="2"] .panel__var-text')?.textContent === "Revisão: gol · 52' Gabriel Silva"`, 30000).catch(async (error) => {
+      const state = await evaluate(target.webSocketDebuggerUrl, `JSON.stringify({ var: document.querySelector('.panel[data-slot="2"] .panel__var')?.textContent ?? null, label: { ...document.querySelector('.panel[data-slot="2"] .panel__label')?.dataset } })`)
+      throw new Error(`${error.message}; painel: ${state}; detalhes 9301: ${whVarDetailRequests}`)
+    })
+    await waitForExpression(target, `!document.querySelector('.panel[data-slot="2"] .panel__var')`, 20000)
+    // The VAR's decision alerts in the feed's order: Sport Recife is William Hill's home team, the score reads 1 - 0 as on the board.
+    await waitForExpression(target, `document.querySelector('.panel[data-slot="2"]')?.classList.contains('panel--alert-var')`, 20000).catch(async (error) => {
+      const alert = await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="2"] .panel__alert')?.textContent ?? null`)
+      throw new Error(`${error.message}; alerta: ${JSON.stringify(alert)}`)
+    })
+    assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="2"] .panel__alert')?.textContent ?? ''`),
+      /VAR · Sport Recife · 52' \(gol anulado\) · 1 - 0/)
+    const whVarSeen = JSON.parse(await evaluate(target.webSocketDebuggerUrl, `(() => {
+      window.__whVarObserver.disconnect()
+      return JSON.stringify({ alerts: [...window.__whVarAlerts].sort(), delay: window.__whVarDelay })
+    })()`))
+    assert.deepEqual(whVarSeen, { alerts: ['panel--alert-goal', 'panel--alert-var'], delay: false },
+      'O painel William Hill recebe do 365Scores só o VAR (o vermelho do 365Scores não chega) e continua sem o botão de atraso.')
+    process.stdout.write(JSON.stringify({ whVarFrom365: true, lineupDrawer: true, scorerName: true, chooser: true, bllProfiles: true, bllsportCatalog: true, bllsportSequentialPanels: true, bllsportExplicitReplacement: true, bllsportBatch: true, bllsportBatchFromChooser: true, closesFinishedMatch: true, closesFinished365Match: true, closesBllEndedMatch: true, halftimeSwap: true, bllBasketball365: true, youtubeLivesBatch: true, youtubePlayerOnly: true, twoElectronViews: true, blockedFramePolicyPage: true, reorganizedWithoutReload: true, removesOnlyChosenPanel: true, clear: true, returnToChooser: true }) + '\n')
   } finally {
     if (child.exitCode === null) child.kill()
     await new Promise((resolve) => server.close(() => resolve()))

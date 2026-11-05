@@ -1739,6 +1739,9 @@ app.whenReady().then(async () => {
         'O Quadra será aberto, mas conteúdo protegido pode não reproduzir. Verifique sua conexão e reinicie o Quadra para tentar instalar o Widevine novamente.',
       )
     },
+    // macOS: the first CDM install can stall; open the window anyway and let it finish in the background.
+    isMac ? 15000 : undefined,
+    () => console.warn('Widevine still installing after 15 s; opening Quadra anyway.'),
   )
   quadraSession = session.fromPartition('persist:quadra')
   quadraSession.setUserAgent(electronUserAgent)

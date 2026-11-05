@@ -84,6 +84,26 @@ jobs:
           find "$app" -name '*.sig' | grep -q . || { echo "VMP signature missing"; exit 1; }
           ls -la release/*.dmg
 
+      # Opens the packaged app (fresh profile) and waits for the Quadra window's page to load.
+      - name: Launch smoke (window opens)
+        run: |
+          app=$(find release -maxdepth 2 -name 'Quadra.app' -type d | head -1)
+          profile="$RUNNER_TEMP/quadra-smoke-profile"
+          rm -rf "$profile"
+          QUADRA_TEST_USER_DATA="$profile" "$app/Contents/MacOS/Quadra" --remote-debugging-port=9333 > "$RUNNER_TEMP/quadra-smoke.log" 2>&1 &
+          pid=$!
+          ok=0
+          for i in $(seq 1 90); do
+            if curl -fsS http://127.0.0.1:9333/json/list 2>/dev/null | grep -q 'index.html'; then ok=1; break; fi
+            if ! kill -0 "$pid" 2>/dev/null; then echo "Quadra exited early"; break; fi
+            sleep 1
+          done
+          echo "--- app output ---"; cat "$RUNNER_TEMP/quadra-smoke.log" || true
+          curl -fsS http://127.0.0.1:9333/json/list 2>/dev/null || true
+          kill "$pid" 2>/dev/null || true
+          if [ "$ok" != 1 ]; then echo "::error::Quadra window did not open within 90 s"; exit 1; fi
+          echo "Quadra window opened after ${i}s"
+
       - name: Upload .dmg
         uses: actions/upload-artifact@v4
         with:

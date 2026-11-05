@@ -12,6 +12,7 @@ export const RELEASES: readonly Release[] = [
       { title: 'Nome certo depois de um gol anulado', body: 'Nos jogos ligados ao 365Scores, quando o VAR anula um gol e o mesmo time marca de novo, o nome de quem marcou vai para o gol novo, e não para o anulado.' },
       { title: 'Escalação do jogo certo', body: 'Se o painel passa a acompanhar outro jogo com a gaveta de escalação aberta, ela recarrega com o jogo novo em vez de continuar mostrando o anterior.' },
       { title: 'Jogos com hífen no título', body: 'Lives com o título no formato "Flamengo - Palmeiras" (com um traço em vez do "x") agora também são ligadas ao jogo do 365Scores, com placar e alertas.' },
+      { title: 'Estatísticas do jogo', body: 'A gaveta de informações do painel ganhou a aba Estatísticas, com posse de bola, chutes, escanteios, faltas, cartões, impedimentos e o que mais o 365Scores tiver do jogo, lado a lado com uma barra para comparar os dois times.' },
     ],
   },
   {

@@ -1,5 +1,5 @@
 import type { MatchIncident } from './match-events.ts'
-import { extractMatchLabel, splitMatchTeams } from './match-label.ts'
+import { extractDashMatchup, extractMatchLabel, splitMatchTeams } from './match-label.ts'
 import { detectCompetition } from './youtube-lives.ts'
 import { clockElapsedAt, clockPeriod365, isRunningPeriod, normalizeElapsed, type MatchClock } from './match-clock.ts'
 
@@ -277,8 +277,10 @@ function cleanTitleTeam(value: string, side: 'home' | 'away') {
 /** Teams named in a YouTube live title, or null when there is no "A x B". */
 export function teamsFromTitle(title: string): { home: string; away: string; qualifiers: Set<string>; competition: string | null } | null {
   const label = extractMatchLabel(title)
-  const teams = label ? splitMatchTeams(label.replace(/…$/, '')) : null
-  if (!teams) return null
+  const dash = label ? null : extractDashMatchup(title)
+  const teams = label ? splitMatchTeams(label.replace(/…$/, '')) : dash
+  // "Brasileirão - Flamengo": a competition on one side of the dash is not a matchup.
+  if (!teams || (dash && (detectCompetition(dash.home) || detectCompetition(dash.away)))) return null
   const home = cleanTitleTeam(teams.home, 'home')
   const away = cleanTitleTeam(teams.away, 'away')
   if (teamTokens(home).length === 0 || teamTokens(away).length === 0) return null
@@ -790,6 +792,8 @@ export function diffDetail(state: LiveState, detail: Detail365, now = Date.now()
       const before = team === 'home' ? state.home : state.away
       if (score < before) {
         state.alertedGoals[team] = Math.min(state.alertedGoals[team], score)
+        // The goals taken off stop waiting for a name, or the next goal of that side would hand its name to them.
+        state.unnamedGoals = state.unnamedGoals.filter((goal) => goal.team !== team || goal.nth <= score)
         // A goal taken back off the board is the VAR (or a data fix); with events, their "goal disallowed" says it.
         if (!detail.events) push('var', team, `score:${team}:${before}-${score}`, 'gol anulado')
       }

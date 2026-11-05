@@ -8,6 +8,7 @@ import {
   formatOdd,
   formatRating,
   hasAnyGame,
+  formatStatValue,
   initialsOf,
   isInfoTabId,
   parseFanVotes,
@@ -16,6 +17,7 @@ import {
   reverseGamesInfo,
   parseLineupEventCounts,
   parseLineups,
+  parseMatchStats,
   parsePhotoRefs,
   parseStandings,
   parseStandingsTarget,
@@ -708,9 +710,9 @@ const LINES = {
   ],
 }
 
-test('isInfoTabId aceita só as quatro abas', () => {
-  for (const tab of ['lineup', 'standings', 'odds', 'games']) assert.equal(isInfoTabId(tab), true)
-  for (const tab of ['stats', '', null, 1, 'ODDS']) assert.equal(isInfoTabId(tab), false)
+test('isInfoTabId aceita só as cinco abas', () => {
+  for (const tab of ['lineup', 'standings', 'odds', 'games', 'stats']) assert.equal(isInfoTabId(tab), true)
+  for (const tab of ['', null, 1, 'ODDS', 'STATS']) assert.equal(isInfoTabId(tab), false)
 })
 
 test('parseOdds: resultado, chance dupla, ambos marcam, empate anula e o total mais equilibrado', () => {
@@ -850,4 +852,110 @@ test('parseGamesInfo recusa resposta de outro jogo ou sem times', () => {
   assert.equal(parseGamesInfo(H2H, ODDS_GAME + 1), null)
   assert.equal(parseGamesInfo({ game: { id: ODDS_GAME } }, ODDS_GAME), null)
   assert.equal(parseGamesInfo(null, ODDS_GAME), null)
+})
+
+// Forma real de `/web/game/stats/?games=<id>` (São Paulo x Corinthians, lida em 05/11/2026), reduzida.
+const STATS_GAME = 4632614
+function statRow(id: number, competitorId: number, name: string, value: string, valuePercentage: number, extra: Raw = {}): Raw {
+  return { id, name, competitorId, value, valuePercentage, order: 0, ...extra }
+}
+function statsResponse(statistics: Raw[], statusGroup = 3): Raw {
+  return {
+    statisticsFilters: [{ filterId: -1, name: 'Partida' }],
+    statistics,
+    games: [{ id: STATS_GAME, statusGroup, homeCompetitor: { id: 1225, name: 'São Paulo' }, awayCompetitor: { id: 1267, name: 'Corinthians' } }],
+  }
+}
+const REAL_STATS = statsResponse([
+  statRow(10, 1225, 'Posse de Bola', '53%', 0.53, { order: 0, isTop: true, markedTeam: 1 }),
+  statRow(76, 1225, 'Gols esperados (xG)', '1.72', 0.58, { order: 1, isTop: true, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(8, 1225, 'Escanteios', '6', 0.43, { order: 5, isTop: true, markedTeam: 2 }),
+  statRow(52, 1225, 'Cruzamentos completos', '10/29 (34%)', 0.6, { order: 32, markedTeam: 1, categoryId: 47, categoryName: 'Passes', categoryOrder: 2 }),
+  statRow(5, 1225, 'Chutes para fora', '10', 0.62, { order: 11, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(25, 1225, 'Trave', '0', 0, { order: 13, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(29, 1225, 'Substituição', '5', 0.5, { order: 99 }),
+  statRow(12, 1225, 'Faltas', '13', 0.48, { order: 91, markedTeam: 1, categoryId: 50, categoryName: 'Disciplina', categoryOrder: 5 }),
+  statRow(10, 1267, 'Posse de Bola', '47%', 0.47, { order: 0, isTop: true, markedTeam: 1 }),
+  statRow(76, 1267, 'Gols esperados (xG)', '1.24', 0.42, { order: 1, isTop: true, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(8, 1267, 'Escanteios', '8', 0.57, { order: 5, isTop: true, markedTeam: 2 }),
+  statRow(52, 1267, 'Cruzamentos completos', '3/13 (23%)', 0.4, { order: 32, markedTeam: 1, categoryId: 47, categoryName: 'Passes', categoryOrder: 2 }),
+  statRow(5, 1267, 'Chutes para fora', '6', 0.38, { order: 11, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(25, 1267, 'Trave', '0', 0, { order: 13, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(29, 1267, 'Substituição', '5', 0.5, { order: 99 }),
+  statRow(12, 1267, 'Faltas', '14', 0.52, { order: 91, markedTeam: 1, categoryId: 50, categoryName: 'Disciplina', categoryOrder: 5 }),
+])
+
+test('parseMatchStats: junta os dois times por estatística, Principais primeiro, categorias na ordem e Geral no fim', () => {
+  const parsed = parseMatchStats(REAL_STATS, STATS_GAME)
+  assert.ok(parsed)
+  assert.deepEqual(parsed.teams, ['São Paulo', 'Corinthians'])
+  assert.equal(parsed.live, true)
+  assert.deepEqual(parsed.sections.map((section) => section.title), ['Principais', 'Chutes', 'Passes', 'Disciplina', 'Geral'])
+  assert.deepEqual(parsed.sections[0].stats.map((stat) => stat.name), ['Posse de Bola', 'Gols esperados (xG)', 'Escanteios'])
+  const possession = parsed.sections[0].stats[0]
+  assert.deepEqual(possession.values, ['53%', '47%'])
+  assert.equal(possession.better, 0)
+  assert.ok(Math.abs(possession.shares[0] - 0.53) < 1e-9 && Math.abs(possession.shares[1] - 0.47) < 1e-9)
+  assert.deepEqual(parsed.sections[0].stats[1].values, ['1,72', '1,24'])
+  assert.equal(parsed.sections[0].stats[2].better, 1)
+  assert.deepEqual(parsed.sections[1].stats.map((stat) => stat.name), ['Chutes para fora', 'Trave'])
+  assert.deepEqual(parsed.sections[2].stats[0].values, ['10/29 (34%)', '3/13 (23%)'])
+})
+
+test('parseMatchStats: zero dos dois lados deixa a barra vazia e sem time melhor', () => {
+  const trave = parseMatchStats(REAL_STATS, STATS_GAME)?.sections.flatMap((section) => section.stats).find((stat) => stat.name === 'Trave')
+  assert.ok(trave)
+  assert.deepEqual(trave.shares, [0, 0])
+  assert.equal(trave.better, null)
+})
+
+test('parseMatchStats: as fatias da barra somam 1 mesmo quando o 365Scores não soma', () => {
+  const parsed = parseMatchStats(statsResponse([
+    statRow(3, 1225, 'Total de chutes', '8', 0.6),
+    statRow(3, 1267, 'Total de chutes', '2', 0.2),
+  ]), STATS_GAME)
+  const [home, away] = parsed!.sections[0].stats[0].shares
+  assert.ok(Math.abs(home - 0.75) < 1e-9 && Math.abs(away - 0.25) < 1e-9)
+})
+
+test('parseMatchStats: invertido segue a ordem do feed do painel (valores, barra, time melhor e nomes)', () => {
+  const parsed = parseMatchStats(REAL_STATS, STATS_GAME, true)
+  assert.ok(parsed)
+  assert.deepEqual(parsed.teams, ['Corinthians', 'São Paulo'])
+  const possession = parsed.sections[0].stats[0]
+  assert.deepEqual(possession.values, ['47%', '53%'])
+  assert.equal(possession.better, 1)
+  assert.ok(possession.shares[1] > possession.shares[0])
+})
+
+test('parseMatchStats: estatística de um time só, de outro competidor ou de um tempo (filterId) fica de fora', () => {
+  const parsed = parseMatchStats(statsResponse([
+    statRow(10, 1225, 'Posse de Bola', '60%', 0.6),
+    statRow(10, 1267, 'Posse de Bola', '40%', 0.4),
+    statRow(10, 1225, 'Posse de Bola', '70%', 0.7, { filterId: 6 }),
+    statRow(3, 1225, 'Total de chutes', '8', 0.8),
+    statRow(4, 999, 'Chutes no gol', '1', 1),
+    statRow(4, 1267, 'Chutes no gol', '2', 1),
+  ], 4), STATS_GAME)
+  assert.ok(parsed)
+  assert.equal(parsed.live, false)
+  assert.deepEqual(parsed.sections.flatMap((section) => section.stats.map((stat) => [stat.name, stat.values])), [['Posse de Bola', ['60%', '40%']]])
+})
+
+test('parseMatchStats: resposta de jogo sem estatísticas, de outro jogo ou sem formato', () => {
+  // Jogo que ainda não começou: a API responde só `lastUpdateId`/`ttl`.
+  assert.equal(parseMatchStats({ lastUpdateId: 1, requestedUpdateId: -1, ttl: 10 }, STATS_GAME), null)
+  assert.deepEqual(parseMatchStats(statsResponse([]), STATS_GAME)?.sections, [])
+  assert.equal(parseMatchStats(REAL_STATS, STATS_GAME + 1), null)
+  assert.equal(parseMatchStats(null, STATS_GAME), null)
+  assert.equal(parseMatchStats([], STATS_GAME), null)
+})
+
+test('formatStatValue: decimal com vírgula; porcentagem e frações como vêm', () => {
+  assert.equal(formatStatValue('1.72'), '1,72')
+  assert.equal(formatStatValue('0.8'), '0,8')
+  assert.equal(formatStatValue('53%'), '53%')
+  assert.equal(formatStatValue('10/29 (34%)'), '10/29 (34%)')
+  assert.equal(formatStatValue(3), '3')
+  assert.equal(formatStatValue(null), '')
 })

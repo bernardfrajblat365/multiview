@@ -1,4 +1,4 @@
-import { athletePhotoUrl, hasAnyGame, parseFanVotes, parseGamesInfo, parseOdds, parseLineups, reverseGamesInfo, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef } from '../src/match-info'
+import { athletePhotoUrl, hasAnyGame, parseFanVotes, parseGamesInfo, parseOdds, parseLineups, reverseGamesInfo, parseStandings, parseStandingsTarget, photoKey, type LineupTeam, type MatchInfoReady, type MatchInfoRequest, type MatchInfoResult, type PhotoRef, parseMatchStats } from '../src/match-info'
 import { apiUrl, fetchJson } from './livescore-365'
 import { loadImage } from './image-cache'
 import { crestKey, crestUrl } from '../src/team-crests'
@@ -36,6 +36,8 @@ export function createMatchInfo(options: {
   fetchOdds?: (gameId: number) => Promise<unknown>
   /** Troque nos testes; por padrão, `/web/games/h2h/` do 365Scores. */
   fetchH2h?: (gameId: number) => Promise<unknown>
+  /** Troque nos testes; por padrão, `/web/game/stats/` do 365Scores. */
+  fetchStats?: (gameId: number) => Promise<unknown>
 }) {
   const linked = new Map<string, number>()
   const resolved = new Map<string, PanelGame>()
@@ -44,6 +46,8 @@ export function createMatchInfo(options: {
   const announced = new Map<string, string>()
   const games = new Map<number, { at: number; raw: Promise<unknown> }>()
   const tables = new Map<string, { at: number; raw: Promise<unknown> }>()
+  const stats = new Map<number, { at: number; raw: Promise<unknown> }>()
+  const fetchStats = options.fetchStats ?? ((gameId: number) => fetchJson(apiUrl('/web/game/stats/', { games: String(gameId) })))
   const odds = new Map<string, { at: number; raw: Promise<unknown> }>()
   const h2h = new Map<string, { at: number; raw: Promise<unknown> }>()
   const fetchOdds = options.fetchOdds ?? ((gameId: number) => fetchJson(apiUrl('/web/bets/lines/', { games: String(gameId) })))
@@ -160,6 +164,7 @@ export function createMatchInfo(options: {
     } catch {
       return { status: 'error' }
     }
+    stats.clear()
   }
 
   /** Um pedido por vez por jogo: pedidos simultâneos compartilham a mesma resposta, que vale 30 s. */
@@ -206,6 +211,34 @@ export function createMatchInfo(options: {
     }
   }
 
+  /** Estatísticas: o mesmo cache curto da escalação (a API guarda 10 s); só buscadas quando a aba pede. */
+  function rawStats(gameId: number) {
+    const cached = stats.get(gameId)
+    if (cached && Date.now() - cached.at < CACHE_MS) return cached.raw
+    const raw = fetchStats(gameId)
+    const entry = { at: Date.now(), raw }
+    stats.set(gameId, entry)
+    raw.catch(() => {
+      if (stats.get(gameId) === entry) stats.delete(gameId)
+    })
+    if (stats.size > 40) stats.delete(stats.keys().next().value as number)
+    return raw
+  }
+
+  async function loadStats(panelId: string): Promise<MatchInfoResult> {
+    const game = gameOf(panelId)
+    // Painel só com a escalação do radar William Hill: sem jogo do 365Scores, sem estatísticas.
+    if (!game) return whLineups.has(panelId) ? { status: 'none' } : { status: 'no-game' }
+    try {
+      const parsed = parseMatchStats(await rawStats(game.gameId), game.gameId, game.reversed)
+      // Jogo que ainda não começou: a resposta vem sem `games`/`statistics`.
+      if (!parsed || parsed.sections.length === 0) return { status: 'none' }
+      return { status: 'ok', tab: 'stats', teams: parsed.teams, sections: parsed.sections, live: parsed.live }
+    } catch {
+      return { status: 'error' }
+    }
+  }
+
   async function loadLineup(panelId: string): Promise<MatchInfoResult> {
     const game = gameOf(panelId)
     const wh = whLineups.get(panelId)
@@ -237,6 +270,8 @@ export function createMatchInfo(options: {
         return loadOdds(request.panelId)
       case 'games':
         return loadGames(request.panelId)
+      case 'stats':
+        return loadStats(request.panelId)
       default:
         return { status: 'error' }
     }

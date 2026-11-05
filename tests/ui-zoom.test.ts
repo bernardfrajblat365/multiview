@@ -55,6 +55,16 @@ test('no zoom command with Alt or Meta held', () => {
   assert.equal(zoomCommandOf(keyDown('+', 'NumpadAdd', { meta: true })), null)
 })
 
+test('on macOS Cmd + plus, minus and 0 zoom; Ctrl does not', () => {
+  const cmd = (key: string, code: string) => keyDown(key, code, { control: false, meta: true })
+  assert.equal(zoomCommandOf(cmd('+', 'Equal'), true), 'in')
+  assert.equal(zoomCommandOf(cmd('-', 'Minus'), true), 'out')
+  assert.equal(zoomCommandOf(cmd('0', 'Digit0'), true), 'reset')
+  assert.equal(zoomCommandOf(keyDown('+', 'Equal'), true), null)
+  assert.equal(zoomCommandOf(keyDown('+', 'Equal', { meta: true }), true), null)
+  assert.equal(zoomCommandOf(keyDown('+', 'Equal', { control: false, meta: true, alt: true }), true), null)
+})
+
 test('no zoom command for keyUp or char events', () => {
   const withType = (type: string) => ({ ...keyDown('+', 'Equal'), type }) as ZoomInput
   assert.equal(zoomCommandOf(withType('keyUp')), null)

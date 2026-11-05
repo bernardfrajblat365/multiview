@@ -6,8 +6,10 @@ export const ZOOM_LIMIT = 3
 
 type ZoomKeyInput = Pick<Electron.Input, 'type' | 'key' | 'code' | 'control' | 'alt' | 'meta'>
 
-export function zoomCommandOf(input: ZoomKeyInput): ZoomCommand | null {
-  if (!input.control || input.alt || input.meta || input.type !== 'keyDown') return null
+/** On macOS the zoom keys use Cmd (meta) instead of Ctrl, like any Mac browser. */
+export function zoomCommandOf(input: ZoomKeyInput, mac = false): ZoomCommand | null {
+  const modifier = mac ? input.meta && !input.control : input.control && !input.meta
+  if (!modifier || input.alt || input.type !== 'keyDown') return null
   const { key, code } = input
   if (key === '+' || key === '=' || code === 'NumpadAdd') return 'in'
   if (key === '-' || key === '_' || code === 'NumpadSubtract') return 'out'

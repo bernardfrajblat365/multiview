@@ -471,9 +471,28 @@ function watchFullscreenPriority(window: BaseWindow | BrowserWindow) {
   window.on('restore', scheduleFullscreenPrioritySync)
 }
 
+const isMac = process.platform === 'darwin'
+
+/** Fullscreen of the main window. On macOS the app's own button uses simple fullscreen
+ *  (same Space), so the transparent overlay window stays on top of the players. */
+function isMainFullscreen() {
+  if (!mainWindow || mainWindow.isDestroyed()) return false
+  return mainWindow.isFullScreen() || (isMac && mainWindow.isSimpleFullScreen())
+}
+
 function setNativeFullscreen(on: boolean) {
-  if (!mainWindow || mainWindow.isDestroyed() || mainWindow.isFullScreen() === on) return
-  mainWindow.setFullScreen(on)
+  if (!mainWindow || mainWindow.isDestroyed() || isMainFullscreen() === on) return
+  if (!isMac) {
+    mainWindow.setFullScreen(on)
+    return
+  }
+  // Left native fullscreen (green button) the usual way; everything else is simple fullscreen.
+  if (!on && mainWindow.isFullScreen()) {
+    mainWindow.setFullScreen(false)
+    return
+  }
+  mainWindow.setSimpleFullScreen(on)
+  onMainFullscreenChanged(on)
 }
 
 /** Overlay or panel players: where Ctrl + / Ctrl - / Ctrl + wheel zoom the overlay UI. */
@@ -508,7 +527,7 @@ function zoomOverlayByWheel(direction: 'in' | 'out') {
 // Ctrl + / Ctrl - / Ctrl 0. Chromium only zooms out natively here because the app has no
 // menu with the zoom-in accelerator; with panels open the keys reach the focused player.
 function handleZoomInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
-  const command = zoomCommandOf(input)
+  const command = zoomCommandOf(input, isMac)
   if (!command) return false
   // In the floating window the zoom keys do nothing: the grid's zoom is not its business.
   if (isPipPanelContents(contents)) {
@@ -524,7 +543,7 @@ function handleZoomInput(event: Electron.Event, input: Electron.Input, contents:
 function handleBeforeInput(event: Electron.Event, input: Electron.Input, contents: Electron.WebContents) {
   if (handleZoomInput(event, input, contents)) return
   if (input.type !== 'keyDown' || (input.key !== 'Escape' && input.code !== 'Escape')) return
-  if (!mainWindow || mainWindow.isDestroyed() || !mainWindow.isFullScreen()) return
+  if (!isMainFullscreen()) return
   event.preventDefault()
   setNativeFullscreen(false)
 }
@@ -1654,6 +1673,12 @@ function installIpcHandlers() {
   })
 }
 
+function onMainFullscreenChanged(on: boolean) {
+  syncOverlayBounds()
+  overlayWindow?.webContents.send('quadra:fullscreen-changed', on)
+  overlayWindow?.webContents.send('quadra:request-layout')
+}
+
 function createWindow() {
   mainWindow = new BaseWindow({
     title: 'Quadra — Multi-view', width: 1440, height: 900,
@@ -1674,16 +1699,8 @@ function createWindow() {
     syncOverlayBounds()
     overlayWindow?.webContents.send('quadra:request-layout')
   })
-  mainWindow.on('enter-full-screen', () => {
-    syncOverlayBounds()
-    overlayWindow?.webContents.send('quadra:fullscreen-changed', true)
-    overlayWindow?.webContents.send('quadra:request-layout')
-  })
-  mainWindow.on('leave-full-screen', () => {
-    syncOverlayBounds()
-    overlayWindow?.webContents.send('quadra:fullscreen-changed', false)
-    overlayWindow?.webContents.send('quadra:request-layout')
-  })
+  mainWindow.on('enter-full-screen', () => onMainFullscreenChanged(true))
+  mainWindow.on('leave-full-screen', () => onMainFullscreenChanged(false))
   mainWindow.on('restore', () => {
     syncOverlayBounds()
     overlayWindow?.showInactive()
@@ -1737,8 +1754,9 @@ app.whenReady().then(async () => {
   })
 })
 
+// Same as on Windows: closing the window closes Quadra (also on macOS, where apps usually stay in the Dock).
 app.on('window-all-closed', () => {
-  if (process.platform !== 'darwin') app.quit()
+  app.quit()
 })
 
 app.on('before-quit', (event) => {

@@ -28,7 +28,9 @@
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "dist": "npm run build && electron-builder --win nsis --publish never",
     "dist:release": "npm run dist",
-    "dist:drm-poc": "npm run build && electron-builder --win dir --publish never -c.directories.output=release-drm-poc -c.disableAsarIntegrity=true -c.afterPack=./electron/after-pack.cjs -c.afterSign=./electron/after-sign-poc.cjs -c.win.signAndEditExecutable=false -c.win.signExecutable=false"
+    "dist:drm-poc": "npm run build && electron-builder --win dir --publish never -c.directories.output=release-drm-poc -c.disableAsarIntegrity=true -c.afterPack=./electron/after-pack.cjs -c.afterSign=./electron/after-sign-poc.cjs -c.win.signAndEditExecutable=false -c.win.signExecutable=false",
+    "dist:mac": "npm run build && electron-builder --mac dmg --publish never -c.afterPack=./electron/after-pack-mac.cjs",
+    "dist:mac:dev": "QUADRA_MAC_VMP=dev npm run dist:mac"
   },
   "build": {
     "appId": "com.quadra.multiview",
@@ -55,6 +57,21 @@
       "owner": "bernardfrajblat365",
       "repo": "multiview",
       "releaseType": "release"
+    },
+    "mac": {
+      "target": "dmg",
+      "icon": "build/mac-icon.png",
+      "category": "public.app-category.entertainment",
+      "identity": "-",
+      "hardenedRuntime": false,
+      "gatekeeperAssess": false,
+      "notarize": false,
+      "artifactName": "Quadra-${version}-mac-${arch}.${ext}",
+      "minimumSystemVersion": "12.0"
+    },
+    "dmg": {
+      "artifactName": "Quadra-${version}-mac-${arch}.${ext}",
+      "writeUpdateInfo": false
     }
   },
   "devDependencies": {

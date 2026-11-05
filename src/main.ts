@@ -3551,8 +3551,11 @@ window.quadra?.onLiveMatch((status) => {
   updatePanelLabels()
 })
 window.quadra?.onMatchInfoReady(({ panelId, ready }) => {
-  if (ready && panelById(panelId)) matchInfoReady.add(panelId)
-  else {
+  if (ready && panelById(panelId)) {
+    matchInfoReady.add(panelId)
+    // Sent again when the panel's game changes: an open drawer must not keep the previous game's data.
+    infoDrawer.refresh(panelId)
+  } else {
     matchInfoReady.delete(panelId)
     infoDrawer.forget(panelId)
   }

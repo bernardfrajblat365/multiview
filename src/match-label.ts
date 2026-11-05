@@ -77,25 +77,31 @@ function validTeamName(value: string) {
   return Boolean(value) && !/[|]/.test(value) && value.length >= 2 && value.length <= 60
 }
 
-export function extractMatchLabel(title: string): string | null {
-  if (typeof title !== 'string') return null
-  let value = stripSoundMarkers(title)
-  if (!value) return null
+/** Title without sound/sport emojis, "(Channel)", "20:00 - " and " - YouTube". */
+function prepareTitle(title: string) {
+  if (typeof title !== 'string') return ''
+  const value = stripSoundMarkers(title)
+  if (!value) return ''
+  return stripSoundMarkers(value.replace(CHANNEL_PREFIX_RE, '').replace(TIME_PREFIX_RE, '').replace(YOUTUBE_SUFFIX_RE, ''))
+}
 
-  value = value.replace(CHANNEL_PREFIX_RE, '')
-  value = value.replace(TIME_PREFIX_RE, '')
-  value = value.replace(YOUTUBE_SUFFIX_RE, '')
-  value = stripSoundMarkers(value)
+function stripLivePrefix(value: string) {
+  let text = stripSoundMarkers(value)
+  for (let previous = ''; previous !== text; ) {
+    previous = text
+    text = stripSoundMarkers(text.replace(LIVE_PREFIX_RE, ''))
+  }
+  return text
+}
+
+export function extractMatchLabel(title: string): string | null {
+  const value = prepareTitle(title)
   if (!value) return null
 
   for (const segment of candidateSegments(value)) {
     const match = stripSoundMarkers(segment).match(MATCHUP_RE)
     if (!match) continue
-    let home = stripSoundMarkers(match[1] ?? '')
-    for (let previous = ''; previous !== home; ) {
-      previous = home
-      home = stripSoundMarkers(home.replace(LIVE_PREFIX_RE, ''))
-    }
+    const home = stripLivePrefix(match[1] ?? '')
     const away = stripSoundMarkers(match[2] ?? '')
     if (!validTeamName(home) || !validTeamName(away)) continue
     const label = `${home} x ${away}`
@@ -103,6 +109,45 @@ export function extractMatchLabel(title: string): string | null {
   }
 
   return null
+}
+
+/** Words that make one side of "A - B" something other than a team ("Highlights - Flamengo", "Rodada 30 - Brasileirão"). */
+const DASH_NOT_A_TEAM_RE = /\b(?:ao vivo|en vivo|live|youtube|highlights?|melhores momentos|resumo|gols|goals|rodada|jornada|round|matchday|pr[eé][- ]jogo|p[oó]s[- ]jogo|narra[cç][aã]o|react|assista|assistir|transmiss[aã]o|parte|epis[oó]dio|ep\.?|cap[ií]tulo)\b/iu
+/** " - " (or " – ") between two teams; a hyphen inside a name ("Saint-Germain", "Al-Ittihad") has no spaces. */
+const DASH_SEPARATOR_RE = /\s+[-–]\s+/
+const VERSUS_RE = /\s(?:x|×|vs\.?|v)\s/i
+
+function plausibleDashTeam(value: string) {
+  if (!validTeamName(value) || value.length > 40 || value.split(' ').length > 5) return false
+  if (!/\p{L}{2}/u.test(value) || /[:#@]/.test(value) || DASH_NOT_A_TEAM_RE.test(value)) return false
+  return teamTokens(value).length > 0
+}
+
+/**
+ * Teams of a "Flamengo - Palmeiras" title, used only when there is no "x"/"vs"/"v" in it. The " - " must split exactly one
+ * "|" part into exactly two plausible team names; anything more ("A - B - Liga", two such parts) is ambiguous and gives null.
+ */
+export function extractDashMatchup(title: string): { home: string; away: string } | null {
+  const value = prepareTitle(title)
+  if (!value || VERSUS_RE.test(value)) return null
+  let found: { home: string; away: string } | null = null
+  for (const part of value.split('|')) {
+    const segment = stripLivePrefix(part)
+    if (!DASH_SEPARATOR_RE.test(segment)) continue
+    const sides = segment.split(DASH_SEPARATOR_RE).map(stripSoundMarkers)
+    if (sides.length !== 2 || found) return null
+    let [home, away] = sides
+    // "Flamengo 1 - 0 Palmeiras": the score sits around the dash.
+    const score = /^(.*\S)\s+\d{1,2}$/.exec(home)
+    const awayScore = /^\d{1,2}\s+(\S.*)$/.exec(away)
+    if (score && awayScore) {
+      home = score[1]
+      away = awayScore[1]
+    }
+    if (!plausibleDashTeam(home) || !plausibleDashTeam(away)) return null
+    found = { home, away }
+  }
+  return found
 }
 
 /** Splits a label produced by `extractMatchLabel` back into its two teams. */

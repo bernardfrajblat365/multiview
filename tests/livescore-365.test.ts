@@ -92,6 +92,52 @@ test('teamsFromTitle devolve null quando o título não tem confronto', () => {
   assert.equal(teamsFromTitle('Futebol ao vivo hoje, assista agora'), null)
 })
 
+test('teamsFromTitle lê " - " entre os times quando não há "x"/"vs"', () => {
+  const cases: [string, string, string][] = [
+    ['Flamengo - Palmeiras', 'Flamengo', 'Palmeiras'],
+    ['AO VIVO | Bayern München - Dortmund | Bundesliga', 'Bayern München', 'Dortmund'],
+    ['🔴 EN VIVO - Boca Juniors - River Plate', 'Boca Juniors', 'River Plate'],
+    ['Paris Saint-Germain - Olympique Lyon | Ligue 1', 'Paris Saint-Germain', 'Olympique Lyon'],
+    ['Al-Ittihad – Al-Nassr', 'Al-Ittihad', 'Al-Nassr'],
+    ['AO VIVO: Grêmio 1 - 0 Internacional', 'Grêmio', 'Internacional'],
+    ['20:00 - Santos - Corinthians - YouTube', 'Santos', 'Corinthians'],
+  ]
+  for (const [title, home, away] of cases) {
+    const found = teamsFromTitle(title)
+    assert.ok(found, title)
+    assert.equal(found.home, home, title)
+    assert.equal(found.away, away, title)
+  }
+  assert.equal(teamsFromTitle('AO VIVO | Bayern München - Dortmund | Bundesliga')?.competition, 'Bundesliga')
+})
+
+test('teamsFromTitle não liga " - " ambíguo ou que não separa times', () => {
+  for (const title of [
+    'Flamengo - Palmeiras - Brasileirão',
+    'Flamengo - Palmeiras | Santos - Corinthians',
+    'Brasileirão - Flamengo',
+    'Melhores momentos - Flamengo',
+    'Rodada 30 - Brasileirão Série A',
+    'Paris Saint-Germain',
+    'Al-Ittihad ao vivo',
+    'Lofi hip hop radio: beats to relax - study to',
+    '2026 - 2027',
+  ]) {
+    assert.equal(teamsFromTitle(title), null, title)
+  }
+})
+
+test('teamsFromTitle com "x" continua igual quando também tem " - "', () => {
+  const found = teamsFromTitle('Flamengo x Palmeiras - Brasileirão')
+  assert.ok(found)
+  assert.equal(found.home, 'Flamengo')
+  assert.equal(found.away, 'Palmeiras')
+  const psg = teamsFromTitle('AO VIVO: LE HAVRE X PARIS SAINT-GERMAIN | LIGUE 1')
+  assert.ok(psg)
+  assert.equal(psg.home, 'LE HAVRE')
+  assert.equal(psg.away, 'PARIS SAINT-GERMAIN')
+})
+
 test('Brasileirão Série B no título não vira qualificador de reserva', () => {
   const found = teamsFromTitle('Santos x Pumas AO VIVO | Brasileirão Série B')
   assert.ok(found)
@@ -1132,4 +1178,19 @@ test('scorerUpdates: jogo sem lista de eventos (events undefined) não dá nome'
   assert.equal(alerts.length, 1)
   assert.equal(alerts[0].id, '365:777:score:home:1')
   assert.deepEqual(scorerUpdates(state, noEvents({ home: homeScore(1) }), NOW + 1000), [])
+})
+
+test('scorerUpdates: gol anulado não rouba o nome do gol seguinte do mesmo time', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [] }), NOW), [])
+  // 1º gol do mandante, ainda sem jogador.
+  const first = diffDetail(state, detail({ events: [{ ...event(1, 1, 0, 10, 20), playerId: 9 }], home: homeScore(1), players: new Map() }), NOW)
+  assert.equal(first[0].id, '365:777:1:1')
+  // VAR: o gol sai do placar e da lista de eventos.
+  diffDetail(state, detail({ events: [], home: homeScore(0) }), NOW + 60_000)
+  // Novo gol do mandante, também sem jogador no começo.
+  const second = diffDetail(state, detail({ events: [{ ...event(5, 1, 0, 10, 24), playerId: 7 }], home: homeScore(1), players: new Map() }), NOW + 120_000)
+  assert.equal(second[0].id, '365:777:5:1')
+  const named = detail({ events: [{ ...event(5, 1, 0, 10, 24), playerId: 7 }], home: homeScore(1), players: new Map([[7, 'Pedro']]) })
+  assert.deepEqual(scorerUpdates(state, named, NOW + 125_000), [{ incidentId: '365:777:5:1', player: 'Pedro' }])
 })

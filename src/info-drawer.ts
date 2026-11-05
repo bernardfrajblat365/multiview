@@ -436,6 +436,13 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     position()
   }
 
+  /** O painel passou a ver outro jogo (ou ganhou outra fonte): a gaveta aberta nele busca de novo. */
+  function refresh(id: string) {
+    if (panelId !== id || !element) return
+    results.clear()
+    void fetchInfo(id, true)
+  }
+
   /** O painel perdeu o jogo ou foi removido. */
   function forget(id: string) {
     teamChoice.delete(id)
@@ -458,5 +465,5 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     if (isOverPanel(event.clientX, event.clientY)) close()
   }, true)
 
-  return { toggle, close, sync, forget, isOverPanel, openPanelId: () => panelId }
+  return { toggle, close, sync, refresh, forget, isOverPanel, openPanelId: () => panelId }
 }

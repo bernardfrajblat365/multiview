@@ -10,6 +10,7 @@ import { sportOfBllName } from '../src/livescore-365'
 import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
+import { cancelsWhGoal, recordWhGoal, type WhGoal } from '../src/wh-var'
 import { createTeamCrests } from './team-crests'
 import { createMatchInfo, loadAthletePhotos, loadTableCrests } from './match-info'
 import { isInfoTabId, parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
@@ -31,6 +32,7 @@ import { createUiMessageBox } from './ui-dialog'
 import { createPipWindowController } from './pip-window'
 import { isValidPipState, parsePipCommand } from '../src/pip'
 import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
+import { isGrantedPermission, isOverlayNavigationAllowed } from './web-security'
 import {
   addBllProfile,
   createDefaultState,
@@ -306,10 +308,15 @@ const listEventsScript = `(() => {
     situation: Number(item.situacao),
   }))
 })()`
+/** William Hill goals alerted per panel, so a 365Scores "gol anulado" only undoes the highlight of the goal it is about. */
+const whGoals = new Map<string, WhGoal[]>()
 const scanners = createScoreboardScanners({
   onEvent: ({ panelIds, incident, teamName, score }) => {
     const label = alertLabel(incident.kind, teamName, incident.minute)
     for (const panelId of panelIds) {
+      if (incident.kind === 'goal' && (incident.team === 'home' || incident.team === 'away')) {
+        whGoals.set(panelId, recordWhGoal(whGoals.get(panelId) ?? [], { team: incident.team, minute: incident.minute, at: Date.now() }))
+      }
       overlayWindow?.webContents.send('quadra:match-event', {
         panelId,
         kind: incident.kind,
@@ -336,9 +343,12 @@ const scanners = createScoreboardScanners({
 })
 /** YouTube panels and BLL players without a William Hill feed: links the panel to a 365Scores game by the teams in its title, then polls that game. */
 const liveScores = createLiveScoreLinker({
-  onEvent: ({ panelIds, incident, teamName, score, label }) => {
+  onEvent: ({ panelIds, incident, teamName, score, label, varOnly }) => {
     for (const panelId of panelIds) {
+      // A William Hill panel's goal highlight goes only when the VAR disallowed that very goal.
+      const keepHighlight = varOnly && incident.note === 'gol anulado' && !cancelsWhGoal(whGoals.get(panelId) ?? [], incident, Date.now())
       overlayWindow?.webContents.send('quadra:match-event', {
+        ...(keepHighlight ? { keepHighlight: true } : {}),
         panelId,
         kind: incident.kind,
         teamName,
@@ -372,7 +382,12 @@ const liveScores = createLiveScoreLinker({
 const teamCrests = createTeamCrests({
   listGames: () => liveScores.listGames(),
   onCrests: (crests) => overlayWindow?.webContents.send('quadra:match-crests', crests),
-  onGame: ({ panelId, gameId, reversed }) => matchInfo.setResolved(panelId, gameId === null ? null : { gameId, reversed }),
+  onGame: ({ panelId, gameId, reversed }) => {
+    matchInfo.setResolved(panelId, gameId === null ? null : { gameId, reversed })
+    // Only William Hill panels are looked up by name; the feed has no VAR, so they take it from this 365Scores game.
+    if (gameId === null) liveScores.unwatchVar(panelId)
+    else liveScores.watchVar(panelId, gameId, reversed)
+  },
 })
 /** The 365Scores game of each panel (or William Hill's own line-up) and what the info drawer shows about it. */
 const matchInfo = createMatchInfo({
@@ -399,6 +414,12 @@ function sendMatchScore({ panelIds, home, away, score, teams }: ScannerScore) {
 }
 const testUserDataPath = process.env.QUADRA_TEST_USER_DATA
 if (testUserDataPath) app.setPath('userData', testUserDataPath)
+
+// Every session (overlay, panels, BLL accounts, hidden windows) only grants what players need.
+app.on('session-created', (created) => {
+  created.setPermissionRequestHandler((_contents, permission, callback) => callback(isGrantedPermission(permission)))
+  created.setPermissionCheckHandler((_contents, permission) => isGrantedPermission(permission))
+})
 
 /** The floating window of the panel in picture-in-picture; its view keeps loading while it moves between windows. */
 const pipWindow = createPipWindowController({
@@ -670,6 +691,7 @@ function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebCo
   contents.setWindowOpenHandler(({ url }) => {
     const playerUrl = normalizeSportsPlayerUrl(catalog, url)
     if (!playerUrl) {
+      if (!isAllowedRemoteUrl(url)) return { action: 'deny' }
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
@@ -1033,6 +1055,7 @@ function stopMatchDetection(panelId: string) {
   matchDetections.delete(panelId)
   scanners.detach(panelId)
   liveScores.detach(panelId)
+  whGoals.delete(panelId)
   teamCrests.clear(panelId)
   matchInfo.clear(panelId)
   overlayWindow?.webContents.send('quadra:match-score', { panelId, home: '', away: '', score: '' })
@@ -1494,6 +1517,12 @@ function createOverlay() {
   })
   // A reload drops whatever the overlay was showing; its dialogs count as dismissed.
   overlayWindow.webContents.on('did-start-loading', () => uiMessageBox.cancelAll())
+  // The overlay holds the privileged bridge: a dropped link or file must never load in it, nor open in a popup.
+  overlayWindow.webContents.on('will-navigate', (event, url) => {
+    const contents = overlayWindow?.webContents
+    if (!contents || !isOverlayNavigationAllowed(contents.getURL(), url)) event.preventDefault()
+  })
+  overlayWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   overlayWindow.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
   overlayWindow.webContents.on('did-finish-load', () => {
     overlayReady = true

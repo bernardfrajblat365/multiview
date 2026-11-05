@@ -15,7 +15,7 @@ type MatchCrestsPayload = { panelId: string; home: string | null; away: string |
 /** Match clock for the label; null: no clock (not started, over). */
 type MatchClockPayload = { panelId: string; clock: MatchClock | null }
 type MatchScorerPayload = { panelId: string; eventId: string; player: string }
-type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string; keepHighlight?: boolean }
 
 type QuadraBridge = {
   checkForUpdate: () => Promise<UpdateCheckResult>

@@ -13,6 +13,8 @@ import {
   type LineupPlayer,
   type LineupTeam,
   type MatchInfoResult,
+  type MatchStat,
+  type StatsSection,
   type PhotoRef,
   type FanVote,
   type GameOdds,
@@ -50,6 +52,7 @@ const EMPTY_MESSAGE: Record<InfoTabId, string> = {
   standings: 'Este jogo não tem tabela de campeonato',
   odds: 'Sem odds abertas para este jogo',
   games: 'Sem jogos anteriores destes times',
+  stats: 'Ainda sem estatísticas para este jogo',
 }
 
 const OUTCOME_NAME = { win: 'Vitória', draw: 'Empate', loss: 'Derrota' } as const
@@ -264,6 +267,27 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     return `<div class="info-list info-scroll" data-info-list>${h2hHtml(info)}<section><h3 class="info-section">Últimos jogos</h3><div class="info-teams" role="tablist" aria-label="Time">${buttons}</div>${formHtml(info.teams[index])}</section></div>`
   }
 
+  /** Uma linha por estatística: valor de cada lado, nome no meio e a barra comparativa embaixo. */
+  function statHtml(stat: MatchStat, order: readonly [0 | 1, 0 | 1]) {
+    const side = (index: 0 | 1) => stat.better === index ? ' is-better' : ''
+    const [left, right] = order
+    return `<li class="info-stat" data-info-stat>
+      <div class="info-stat__line"><span class="info-stat__value${side(left)}">${esc(stat.values[left])}</span><span class="info-stat__name" title="${esc(stat.name)}">${esc(stat.name)}</span><span class="info-stat__value${side(right)}">${esc(stat.values[right])}</span></div>
+      <div class="info-stat__bar" aria-hidden="true"><span class="info-stat__track"><span class="info-stat__fill${side(left)}" style="width:${Math.round(stat.shares[left] * 100)}%"></span></span><span class="info-stat__track"><span class="info-stat__fill${side(right)}" style="width:${Math.round(stat.shares[right] * 100)}%"></span></span></div>
+    </li>`
+  }
+
+  function statsHtml(id: string, teams: readonly [string, string], sections: readonly StatsSection[], live: boolean) {
+    // Mesma ordem do rótulo do painel: quem aparece primeiro lá fica à esquerda aqui.
+    const order: [0 | 1, 0 | 1] = deps.firstTeam(id) === 1 ? [1, 0] : [0, 1]
+    const crests = deps.crests(id)
+    const team = (index: 0 | 1) => `<span class="info-stats__team" title="${esc(teams[index])}">${crests[index] ? `<img src="${esc(crests[index])}" alt="" />` : ''}<span>${esc(teams[index])}</span></span>`
+    const titled = sections.length > 1
+    const body = sections.map((section) => `${titled ? `<li class="info-stats__section" data-info-stats-section>${esc(section.title)}</li>` : ''}${section.stats.map((stat) => statHtml(stat, order)).join('')}`).join('')
+    const note = live ? '<p class="info-note" data-info-note>Ao vivo, sem o atraso ⏱ do painel</p>' : ''
+    return `<div class="info-stats__teams">${team(order[0])}${team(order[1])}</div>${note}<ol class="info-list info-stats" data-info-list>${body}</ol>`
+  }
+
   function bodyHtml(id: string) {
     if (state.kind === 'loading') {
       return `<div class="info-skeleton" aria-busy="true">${'<div class="info-skeleton__row"></div>'.repeat(SKELETON_ROWS)}</div>`
@@ -275,6 +299,7 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     if (result.tab === 'standings') return standingsHtml(result.table, result.highlight)
     if (result.tab === 'odds') return oddsHtml(result.odds, result.live)
     if (result.tab === 'games') return gamesHtml(id, result.games)
+    if (result.tab === 'stats') return statsHtml(id, result.teams, result.sections, result.live)
     const index = selectedTeam(id)
     const team = result.teams[index]
     const note = result.source === 'wh' ? 'Fonte: William Hill' : team.confirmed ? 'Escalação confirmada' : 'Escalação provável'
@@ -479,6 +504,8 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     state = known ? { kind: 'result', result: known } : { kind: 'loading' }
     const tabs = element.querySelector<HTMLElement>('[data-info-tabs]')
     if (tabs) tabs.innerHTML = tabsHtml()
+    // Gaveta estreita: a fileira de abas rola de lado; a aba escolhida fica inteira na vista.
+    tabs?.querySelector<HTMLElement>('.info-tab.is-selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     render()
     void fetchInfo(panelId, false)
   }
@@ -514,6 +541,13 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     position()
   }
 
+  /** O painel passou a ver outro jogo (ou ganhou outra fonte): a gaveta aberta nele busca de novo. */
+  function refresh(id: string) {
+    if (panelId !== id || !element) return
+    results.clear()
+    void fetchInfo(id, true)
+  }
+
   /** O painel perdeu o jogo ou foi removido. */
   function forget(id: string) {
     teamChoice.delete(id)
@@ -536,5 +570,5 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     if (isOverPanel(event.clientX, event.clientY)) close()
   }, true)
 
-  return { toggle, close, sync, forget, isOverPanel, openPanelId: () => panelId }
+  return { toggle, close, sync, refresh, forget, isOverPanel, openPanelId: () => panelId }
 }

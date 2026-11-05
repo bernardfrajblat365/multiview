@@ -980,3 +980,28 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   .info-h2h-game { grid-template-columns: minmax(0, 1fr) 2.2rem minmax(0, 1fr); }
   .info-h2h-game .info-game__date { display: none; }
 }
+
+/* Aba Estatísticas da gaveta: valor de cada time, nome no meio e barra comparativa; o lado melhor fica no verde. */
+.info-stats__teams { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; flex: none; font-size: 0.75rem; font-weight: 700; }
+.info-stats__team { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+.info-stats__team:last-child { flex-direction: row-reverse; text-align: right; }
+.info-stats__team img { width: 1.1rem; height: 1.1rem; object-fit: contain; flex: none; }
+.info-stats__team span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-stats__section { padding: 0.5rem 0 0.15rem; color: var(--accent); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.info-stats__section:first-child { padding-top: 0.1rem; }
+.info-stat { padding: 0.25rem 0 0.3rem; border-bottom: 1px solid rgba(11, 61, 46, 0.7); }
+.info-stat__line { display: grid; grid-template-columns: minmax(2.4rem, auto) minmax(0, 1fr) minmax(2.4rem, auto); align-items: baseline; gap: 0.4rem; font-size: 0.78rem; }
+.info-stat__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; color: var(--ink-muted); font-size: 0.72rem; }
+.info-stat__value { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.info-stat__value:last-child { text-align: right; }
+.info-stat__value.is-better { color: var(--accent); }
+.info-stat__bar { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 0.2rem; }
+.info-stat__track { display: flex; height: 0.3rem; overflow: hidden; border-radius: 999px; background: var(--bg-mid); }
+.info-stat__track:first-child { justify-content: flex-end; }
+.info-stat__fill { height: 100%; border-radius: 999px; background: rgba(155, 189, 173, 0.55); }
+.info-stat__fill.is-better { background: var(--accent); }
+/* Gaveta estreita: valores e nome menores, sem quebrar a linha. */
+@container (max-width: 17rem) {
+  .info-stat__line { gap: 0.25rem; font-size: 0.72rem; grid-template-columns: minmax(2rem, auto) minmax(0, 1fr) minmax(2rem, auto); }
+  .info-stat__name { font-size: 0.66rem; }
+}

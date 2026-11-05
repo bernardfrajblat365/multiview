@@ -13,7 +13,7 @@ import { createLiveScoreLinker } from './livescore-365'
 import { cancelsWhGoal, recordWhGoal, type WhGoal } from '../src/wh-var'
 import { createTeamCrests } from './team-crests'
 import { createMatchInfo, loadAthletePhotos, loadTableCrests } from './match-info'
-import { parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
+import { isInfoTabId, parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
 import { createScoreboardScanners, type ScannerClock, type ScannerScore } from './scoreboard-scanner'
 import {
   createLoadPacer,
@@ -32,6 +32,7 @@ import { createUiMessageBox } from './ui-dialog'
 import { createPipWindowController } from './pip-window'
 import { isValidPipState, parsePipCommand } from '../src/pip'
 import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
+import { isGrantedPermission, isOverlayNavigationAllowed } from './web-security'
 import {
   addBllProfile,
   createDefaultState,
@@ -414,6 +415,12 @@ function sendMatchScore({ panelIds, home, away, score, teams }: ScannerScore) {
 const testUserDataPath = process.env.QUADRA_TEST_USER_DATA
 if (testUserDataPath) app.setPath('userData', testUserDataPath)
 
+// Every session (overlay, panels, BLL accounts, hidden windows) only grants what players need.
+app.on('session-created', (created) => {
+  created.setPermissionRequestHandler((_contents, permission, callback) => callback(isGrantedPermission(permission)))
+  created.setPermissionCheckHandler((_contents, permission) => isGrantedPermission(permission))
+})
+
 /** The floating window of the panel in picture-in-picture; its view keeps loading while it moves between windows. */
 const pipWindow = createPipWindowController({
   preloadPath: join(__dirname, '../preload/pip-preload.mjs'),
@@ -684,6 +691,7 @@ function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebCo
   contents.setWindowOpenHandler(({ url }) => {
     const playerUrl = normalizeSportsPlayerUrl(catalog, url)
     if (!playerUrl) {
+      if (!isAllowedRemoteUrl(url)) return { action: 'deny' }
       return {
         action: 'allow',
         overrideBrowserWindowOptions: {
@@ -1509,6 +1517,12 @@ function createOverlay() {
   })
   // A reload drops whatever the overlay was showing; its dialogs count as dismissed.
   overlayWindow.webContents.on('did-start-loading', () => uiMessageBox.cancelAll())
+  // The overlay holds the privileged bridge: a dropped link or file must never load in it, nor open in a popup.
+  overlayWindow.webContents.on('will-navigate', (event, url) => {
+    const contents = overlayWindow?.webContents
+    if (!contents || !isOverlayNavigationAllowed(contents.getURL(), url)) event.preventDefault()
+  })
+  overlayWindow.webContents.setWindowOpenHandler(() => ({ action: 'deny' }))
   overlayWindow.webContents.on('zoom-changed', (_event, direction) => zoomOverlayByWheel(direction))
   overlayWindow.webContents.on('did-finish-load', () => {
     overlayReady = true
@@ -1569,7 +1583,8 @@ function installIpcHandlers() {
   ipcMain.handle('quadra:match-info', async (event, request: unknown) => {
     if (!isUiSender(event)) return { status: 'error' }
     const row = request && typeof request === 'object' ? request as { panelId?: unknown; tab?: unknown } : null
-    const tab: InfoTabId | null = row?.tab === 'lineup' ? 'lineup' : row?.tab === 'standings' ? 'standings' : null
+    const rawTab = row?.tab
+    const tab: InfoTabId | null = isInfoTabId(rawTab) ? rawTab : null
     if (!row || typeof row.panelId !== 'string' || row.panelId.length > 64 || !tab) return { status: 'error' }
     return matchInfo.load({ panelId: row.panelId, tab })
   })

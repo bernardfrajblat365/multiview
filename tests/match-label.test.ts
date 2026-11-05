@@ -9,6 +9,7 @@ import {
   placeMatchLabel,
   rollColumns,
   splitMatchTeams,
+  extractDashMatchup,
   teamsReversed,
   type NormRect,
 } from '../src/match-label.ts'
@@ -421,4 +422,18 @@ test('placeMatchLabel com escudos reduz a fonte ou empilha em barra estreita', (
   const plain = placeMatchLabel(options)
   const withCrests = placeMatchLabel({ ...options, crests: true })
   assert.ok(withCrests.fontPx < plain.fontPx || (withCrests.layout === 'stacked' && plain.layout === 'inline'))
+})
+
+test('extractDashMatchup separa "A - B" e rejeita títulos com "x" ou partes demais', () => {
+  assert.deepEqual(extractDashMatchup('Flamengo - Palmeiras'), { home: 'Flamengo', away: 'Palmeiras' })
+  assert.deepEqual(extractDashMatchup('AO VIVO | Bayern München - Dortmund | Bundesliga'), { home: 'Bayern München', away: 'Dortmund' })
+  assert.equal(extractDashMatchup('Flamengo x Palmeiras - Brasileirão'), null)
+  assert.equal(extractDashMatchup('Flamengo - Palmeiras - Brasileirão'), null)
+  assert.equal(extractDashMatchup('Paris Saint-Germain'), null)
+  assert.equal(extractDashMatchup('Highlights - Flamengo'), null)
+})
+
+test('extractMatchLabel não lê " - " como confronto (rótulo do painel igual)', () => {
+  assert.equal(extractMatchLabel('Flamengo - Palmeiras'), null)
+  assert.equal(extractMatchLabel('Flamengo x Palmeiras - Brasileirão'), 'Flamengo x Palmeiras')
 })

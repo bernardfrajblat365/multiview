@@ -1,6 +1,9 @@
 import {
   INFO_TABS,
+  OUTCOME_LETTER,
   crestKeyOf,
+  formatGameDate,
+  formatOdd,
   formatRating,
   initialsOf,
   photoKey,
@@ -10,10 +13,19 @@ import {
   type LineupPlayer,
   type LineupTeam,
   type MatchInfoResult,
+  type MatchStat,
+  type StatsSection,
   type PhotoRef,
+  type FanVote,
+  type GameOdds,
+  type GamesInfo,
+  type OddsMarket,
+  type RecentGame,
   type StandingRow,
   type StandingsTable,
+  type TeamForm,
 } from './match-info'
+import type { TeamRef365 } from './livescore-365'
 
 const ICON_GOAL = new URL('./assets/lineup/goal.png', import.meta.url).href
 const ICON_ASSIST = new URL('./assets/lineup/assist.png', import.meta.url).href
@@ -34,6 +46,16 @@ export type InfoDrawerDeps = {
 }
 
 const REFRESH_MS = 60_000
+
+const EMPTY_MESSAGE: Record<InfoTabId, string> = {
+  lineup: 'Escalação ainda não divulgada',
+  standings: 'Este jogo não tem tabela de campeonato',
+  odds: 'Sem odds abertas para este jogo',
+  games: 'Sem jogos anteriores destes times',
+  stats: 'Ainda sem estatísticas para este jogo',
+}
+
+const OUTCOME_NAME = { win: 'Vitória', draw: 'Empate', loss: 'Derrota' } as const
 const NARROW_PANEL_PX = 420
 const SKELETON_ROWS = 11
 
@@ -169,15 +191,115 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     return `${title ? `<p class="info-note" data-info-note>${esc(title)}</p>` : ''}${head}<ol class="info-list info-table${showDraws ? '' : ' no-draws'}${showPoints ? '' : ' no-points'}" data-info-list>${rows}</ol>${legend}`
   }
 
+  function crestSlotHtml(ref: TeamRef365 | null, className: string) {
+    const key = ref ? crestKeyOf(ref) : ''
+    const url = key ? tableCrests.get(key) : null
+    return `<span class="${className}"${key ? ` data-crest="${esc(key)}"` : ''}>${url ? `<img src="${esc(url)}" alt="" />` : ''}</span>`
+  }
+
+  /** Uma linha por opção, nas mesmas colunas em todos os mercados: nome, odd, seta, odd de antes do jogo. */
+  function oddsMarketHtml(market: OddsMarket) {
+    const rows = market.options.map((option) => {
+      const trend = option.trend ? `<span class="info-odd__trend info-odd__trend--${option.trend}" aria-label="${option.trend === 'up' ? 'subiu' : 'caiu'}">${option.trend === 'up' ? '▲' : '▼'}</span>` : '<span class="info-odd__trend"></span>'
+      const before = `<span class="info-odd__pre"${option.prematch !== null ? ' title="Odd antes do jogo"' : ''}>${option.prematch !== null ? `antes ${formatOdd(option.prematch)}` : ''}</span>`
+      return `<li class="info-odd" data-info-odd><span class="info-odd__label" title="${esc(option.label)}">${esc(option.label)}</span><span class="info-odd__rate">${formatOdd(option.rate)}</span>${trend}${before}</li>`
+    }).join('')
+    return `<section data-info-market><h3 class="info-section">${esc(market.title)}</h3><ol class="info-odds">${rows}</ol></section>`
+  }
+
+  /** Barra dividida com valor e nome embaixo de cada parte, em colunas iguais (votos dos torcedores e confronto direto). */
+  function splitBarHtml(items: { value: string; weight: number; label: string }[]) {
+    const bars = items.map((item, i) => `<span class="info-split__bar info-split__bar--${i}" style="flex-grow:${Math.max(item.weight, 1)}"></span>`).join('')
+    const labels = items.map((item, i) => `<li class="info-split__item info-split__item--${i}"><span class="info-split__value">${esc(item.value)}</span><span class="info-split__label" title="${esc(item.label)}">${esc(item.label)}</span></li>`).join('')
+    return `<div class="info-split__track" aria-hidden="true">${bars}</div><ul class="info-split__list" style="--n:${items.length}">${labels}</ul>`
+  }
+
+  function votesHtml(votes: FanVote[]) {
+    return `<section data-info-votes><h3 class="info-section">Quem vai ganhar? · torcedores</h3>${splitBarHtml(votes.map((vote) => ({ value: `${vote.percentage}%`, weight: vote.percentage, label: vote.label })))}</section>`
+  }
+
+  function oddsHtml(odds: GameOdds, live: boolean) {
+    const source = [odds.bookmaker ? `Odds: ${odds.bookmaker}` : 'Odds do 365Scores', live ? 'ao vivo' : ''].filter(Boolean).join(' · ')
+    return `<p class="info-note" data-info-note>${esc(source)}</p><div class="info-list info-scroll" data-info-list>${odds.markets.map(oddsMarketHtml).join('')}${odds.votes.length ? votesHtml(odds.votes) : ''}</div>`
+  }
+
+  function recentGameHtml(game: RecentGame) {
+    const letter = OUTCOME_LETTER[game.outcome]
+    return `<li class="info-game" data-info-game title="${esc(game.competition)}">
+      <span class="info-game__date">${esc(formatGameDate(game.startTime))}</span>
+      <span class="info-game__where" title="${game.home ? 'Em casa' : 'Fora de casa'}">${game.home ? 'C' : 'F'}</span>
+      <span class="info-game__team">${crestSlotHtml(game.opponentRef, 'info-game__crest')}<span class="info-game__name" title="${esc(game.opponent)}">${esc(game.opponent)}</span></span>
+      <span class="info-game__score">${game.goalsFor}-${game.goalsAgainst}</span>
+      <span class="info-form info-form--${game.outcome}" title="${OUTCOME_NAME[game.outcome]}">${letter}</span>
+    </li>`
+  }
+
+  function formHtml(team: TeamForm) {
+    if (team.games.length === 0) return '<p class="info-note">Sem jogos recentes</p>'
+    const strip = team.games.slice(0, 5).map((game) => `<span class="info-form info-form--${game.outcome}" title="${OUTCOME_NAME[game.outcome]}">${OUTCOME_LETTER[game.outcome]}</span>`).join('')
+    return `<div class="info-form-strip" data-info-form aria-label="Forma recente, do mais novo ao mais antigo">${strip}</div><ol class="info-games">${team.games.map(recentGameHtml).join('')}</ol>`
+  }
+
+  function h2hHtml(info: GamesInfo) {
+    const { h2h, teams } = info
+    if (h2h.total === 0) return '<section><h3 class="info-section">Confronto direto</h3><p class="info-note">Os times não se enfrentaram recentemente</p></section>'
+    const games = h2h.games.map((game) => {
+      const homeWon = game.winnerId === game.homeId
+      const awayWon = game.winnerId === game.awayId
+      return `<li class="info-h2h-game" data-info-h2h-game title="${esc(game.competition)}"><span class="info-game__date">${esc(formatGameDate(game.startTime))}</span><span class="info-h2h-game__home${homeWon ? ' is-winner' : ''}" title="${esc(game.home)}">${esc(game.home)}</span><span class="info-game__score">${game.homeScore}-${game.awayScore}</span><span class="info-h2h-game__away${awayWon ? ' is-winner' : ''}" title="${esc(game.away)}">${esc(game.away)}</span></li>`
+    }).join('')
+    return `<section><h3 class="info-section">Confronto direto · ${h2h.total} ${h2h.total === 1 ? 'jogo' : 'jogos'}</h3>
+      <div data-info-h2h>${splitBarHtml([
+        { value: String(h2h.wins[0]), weight: h2h.wins[0], label: teams[0].name },
+        { value: String(h2h.draws), weight: h2h.draws, label: 'Empates' },
+        { value: String(h2h.wins[1]), weight: h2h.wins[1], label: teams[1].name },
+      ])}</div>
+      <ol class="info-games info-h2h-games">${games}</ol></section>`
+  }
+
+  function gamesHtml(id: string, info: GamesInfo) {
+    const index = selectedTeam(id)
+    const buttons = info.teams.map((team, i) => {
+      const selected = i === index
+      const crest = deps.crests(id)[i] ?? (team.crestRef ? tableCrests.get(crestKeyOf(team.crestRef)) ?? null : null)
+      return `<button type="button" role="tab" class="info-team${selected ? ' is-selected' : ''}" aria-selected="${selected}" data-info-team="${i}" title="${esc(team.name)}">${crest ? `<img src="${esc(crest)}" alt="" />` : ''}<span>${esc(team.name)}</span></button>`
+    }).join('')
+    return `<div class="info-list info-scroll" data-info-list>${h2hHtml(info)}<section><h3 class="info-section">Últimos jogos</h3><div class="info-teams" role="tablist" aria-label="Time">${buttons}</div>${formHtml(info.teams[index])}</section></div>`
+  }
+
+  /** Uma linha por estatística: valor de cada lado, nome no meio e a barra comparativa embaixo. */
+  function statHtml(stat: MatchStat, order: readonly [0 | 1, 0 | 1]) {
+    const side = (index: 0 | 1) => stat.better === index ? ' is-better' : ''
+    const [left, right] = order
+    return `<li class="info-stat" data-info-stat>
+      <div class="info-stat__line"><span class="info-stat__value${side(left)}">${esc(stat.values[left])}</span><span class="info-stat__name" title="${esc(stat.name)}">${esc(stat.name)}</span><span class="info-stat__value${side(right)}">${esc(stat.values[right])}</span></div>
+      <div class="info-stat__bar" aria-hidden="true"><span class="info-stat__track"><span class="info-stat__fill${side(left)}" style="width:${Math.round(stat.shares[left] * 100)}%"></span></span><span class="info-stat__track"><span class="info-stat__fill${side(right)}" style="width:${Math.round(stat.shares[right] * 100)}%"></span></span></div>
+    </li>`
+  }
+
+  function statsHtml(id: string, teams: readonly [string, string], sections: readonly StatsSection[], live: boolean) {
+    // Mesma ordem do rótulo do painel: quem aparece primeiro lá fica à esquerda aqui.
+    const order: [0 | 1, 0 | 1] = deps.firstTeam(id) === 1 ? [1, 0] : [0, 1]
+    const crests = deps.crests(id)
+    const team = (index: 0 | 1) => `<span class="info-stats__team" title="${esc(teams[index])}">${crests[index] ? `<img src="${esc(crests[index])}" alt="" />` : ''}<span>${esc(teams[index])}</span></span>`
+    const titled = sections.length > 1
+    const body = sections.map((section) => `${titled ? `<li class="info-stats__section" data-info-stats-section>${esc(section.title)}</li>` : ''}${section.stats.map((stat) => statHtml(stat, order)).join('')}`).join('')
+    const note = live ? '<p class="info-note" data-info-note>Ao vivo, sem o atraso ⏱ do painel</p>' : ''
+    return `<div class="info-stats__teams">${team(order[0])}${team(order[1])}</div>${note}<ol class="info-list info-stats" data-info-list>${body}</ol>`
+  }
+
   function bodyHtml(id: string) {
     if (state.kind === 'loading') {
       return `<div class="info-skeleton" aria-busy="true">${'<div class="info-skeleton__row"></div>'.repeat(SKELETON_ROWS)}</div>`
     }
     const result = state.result
-    if (result.status === 'none') return `<p class="info-message" data-info-message>${tab === 'standings' ? 'Este jogo não tem tabela de campeonato' : 'Escalação ainda não divulgada'}</p>`
+    if (result.status === 'none') return `<p class="info-message" data-info-message>${EMPTY_MESSAGE[tab]}</p>`
     if (result.status === 'error') return '<p class="info-message" data-info-message>Não foi possível carregar o 365Scores</p><button type="button" class="btn btn--load info-retry" data-info-retry>Tentar de novo</button>'
     if (result.status !== 'ok') return ''
     if (result.tab === 'standings') return standingsHtml(result.table, result.highlight)
+    if (result.tab === 'odds') return oddsHtml(result.odds, result.live)
+    if (result.tab === 'games') return gamesHtml(id, result.games)
+    if (result.tab === 'stats') return statsHtml(id, result.teams, result.sections, result.live)
     const index = selectedTeam(id)
     const team = result.teams[index]
     const note = result.source === 'wh' ? 'Fonte: William Hill' : team.confirmed ? 'Escalação confirmada' : 'Escalação provável'
@@ -213,8 +335,15 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
 
   /** Os escudos da tabela chegam depois do texto, como as fotos da escalação. */
   function loadCrests() {
-    if (state.kind !== 'result' || state.result.status !== 'ok' || state.result.tab !== 'standings') return
-    const refs = state.result.table.rows.flatMap((row) => row.crestRef ?? []).filter((ref) => !crestRequested.has(crestKeyOf(ref)))
+    if (state.kind !== 'result' || state.result.status !== 'ok') return
+    const result = state.result
+    const all: TeamRef365[] = result.tab === 'standings'
+      ? result.table.rows.flatMap((row) => row.crestRef ?? [])
+      : result.tab === 'games'
+        ? [...result.games.teams.flatMap((team) => [...(team.crestRef ? [team.crestRef] : []), ...team.games.flatMap((game) => game.opponentRef ?? [])])]
+        : []
+    const unique = new Map(all.map((ref) => [crestKeyOf(ref), ref]))
+    const refs = [...unique.values()].filter((ref) => !crestRequested.has(crestKeyOf(ref))).slice(0, 40)
     if (refs.length === 0) return
     for (const ref of refs) crestRequested.add(crestKeyOf(ref))
     void window.quadra?.getTableCrests(refs).then((found) => {
@@ -375,6 +504,8 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     state = known ? { kind: 'result', result: known } : { kind: 'loading' }
     const tabs = element.querySelector<HTMLElement>('[data-info-tabs]')
     if (tabs) tabs.innerHTML = tabsHtml()
+    // Gaveta estreita: a fileira de abas rola de lado; a aba escolhida fica inteira na vista.
+    tabs?.querySelector<HTMLElement>('.info-tab.is-selected')?.scrollIntoView({ block: 'nearest', inline: 'nearest' })
     render()
     void fetchInfo(panelId, false)
   }
@@ -410,6 +541,13 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     position()
   }
 
+  /** O painel passou a ver outro jogo (ou ganhou outra fonte): a gaveta aberta nele busca de novo. */
+  function refresh(id: string) {
+    if (panelId !== id || !element) return
+    results.clear()
+    void fetchInfo(id, true)
+  }
+
   /** O painel perdeu o jogo ou foi removido. */
   function forget(id: string) {
     teamChoice.delete(id)
@@ -432,5 +570,5 @@ export function createInfoDrawer(deps: InfoDrawerDeps) {
     if (isOverPanel(event.clientX, event.clientY)) close()
   }, true)
 
-  return { toggle, close, sync, forget, isOverPanel, openPanelId: () => panelId }
+  return { toggle, close, sync, refresh, forget, isOverPanel, openPanelId: () => panelId }
 }

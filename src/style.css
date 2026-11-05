@@ -897,3 +897,85 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   .info-standing { grid-template-columns: 1.5rem minmax(0, 1fr) 1.6rem 1.9rem !important; }
   .info-standing__opt { display: none; }
 }
+/* Odds e Jogos: seções empilhadas numa lista só, que rola; linhas com a mesma altura e as mesmas colunas. */
+.info-scroll { display: flex; flex-direction: column; gap: 0.6rem; padding-right: 0.15rem; }
+.info-section { margin: 0 0 0.15rem; color: var(--ink-muted); font-size: 0.68rem; font-weight: 700; letter-spacing: 0.02em; text-transform: uppercase; }
+.info-odds, .info-games { margin: 0; padding: 0; list-style: none; }
+.info-odd, .info-game, .info-h2h-game { display: grid; align-items: center; gap: 0.4rem; min-height: 1.65rem; padding: 0 0.1rem; border-bottom: 1px solid rgba(11, 61, 46, 0.7); font-size: 0.78rem; }
+.info-odd { grid-template-columns: minmax(0, 1fr) 2.6rem 0.6rem 4.3rem; }
+.info-odd__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; font-weight: 600; }
+.info-odd__rate { text-align: right; font-weight: 800; font-variant-numeric: tabular-nums; }
+.info-odd__trend { font-size: 0.55rem; text-align: center; }
+.info-odd__trend--up { color: var(--accent); }
+.info-odd__trend--down { color: #ff7a6b; }
+.info-odd__pre { color: var(--ink-muted); font-size: 0.66rem; text-align: right; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.info-split__track { display: flex; gap: 2px; height: 0.45rem; margin-top: 0.15rem; overflow: hidden; border-radius: 999px; }
+.info-split__bar { flex-basis: 0; }
+.info-split__bar--0 { background: var(--accent); }
+.info-split__bar--1 { background: var(--ink-muted); }
+.info-split__bar--2 { background: #5fb4ff; }
+.info-split__list { display: grid; grid-template-columns: repeat(var(--n, 3), minmax(0, 1fr)); gap: 0.4rem; margin: 0.25rem 0 0; padding: 0; list-style: none; font-size: 0.72rem; }
+.info-split__item { display: flex; flex-direction: column; min-width: 0; text-align: center; }
+.info-split__item:first-child { text-align: left; }
+.info-split__item:last-child { text-align: right; }
+.info-split__value { font-weight: 800; font-variant-numeric: tabular-nums; }
+.info-split__item--0 .info-split__value { color: var(--accent); }
+.info-split__item--2 .info-split__value { color: #5fb4ff; }
+.info-split__label { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--ink-muted); }
+.info-game { grid-template-columns: 3.4rem 0.7rem minmax(0, 1fr) 2.2rem 1.15rem; }
+.info-h2h-game { grid-template-columns: 3.4rem minmax(0, 1fr) 2.2rem minmax(0, 1fr); }
+.info-h2h-games { margin-top: 0.3rem; }
+.info-game__date { color: var(--ink-muted); font-size: 0.7rem; line-height: 1; font-variant-numeric: tabular-nums; }
+.info-game__where { color: var(--ink-muted); font-size: 0.62rem; font-weight: 700; text-align: center; }
+.info-game__team { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+.info-game__crest { display: grid; place-items: center; flex: none; width: 1rem; height: 1rem; }
+.info-game__crest:empty { display: none; }
+.info-game__crest img { width: 100%; height: 100%; object-fit: contain; }
+.info-game__name, .info-h2h-game__home, .info-h2h-game__away { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-h2h-game__home { text-align: right; }
+.info-h2h-game .is-winner { font-weight: 700; }
+.info-game__score { font-weight: 700; font-variant-numeric: tabular-nums; text-align: center; }
+.info-form { display: inline-grid; place-items: center; width: 1.15rem; height: 1.15rem; border-radius: 0.3rem; font-size: 0.62rem; font-weight: 800; }
+.info-form--win { background: var(--accent); color: var(--accent-ink); }
+.info-form--draw { background: rgba(155, 189, 173, 0.35); color: var(--ink); }
+.info-form--loss { background: #ff7a6b; color: #2a0b06; }
+.info-form-strip { display: flex; gap: 0.2rem; margin: 0.3rem 0; }
+.info-scroll .info-teams { margin-top: 0.3rem; }
+/* Quatro abas: na gaveta estreita ficam mais justas para caberem sem rolar. */
+.info-drawer__head { container-type: inline-size; }
+@container (max-width: 20rem) {
+  .info-tabs { gap: 0.1rem; }
+  .info-tab { padding: 0.2rem 0.3rem; font-size: 0.72rem; }
+}
+/* Gaveta estreita: sem o C/F e com a data mais curta. */
+@container (max-width: 17rem) {
+  .info-game { grid-template-columns: 3.4rem minmax(0, 1fr) 2.2rem 1.15rem; }
+  .info-game__where { display: none; }
+  .info-h2h-game { grid-template-columns: minmax(0, 1fr) 2.2rem minmax(0, 1fr); }
+  .info-h2h-game .info-game__date { display: none; }
+}
+
+/* Aba Estatísticas da gaveta: valor de cada time, nome no meio e barra comparativa; o lado melhor fica no verde. */
+.info-stats__teams { display: grid; grid-template-columns: 1fr 1fr; gap: 0.5rem; flex: none; font-size: 0.75rem; font-weight: 700; }
+.info-stats__team { display: flex; align-items: center; gap: 0.3rem; min-width: 0; }
+.info-stats__team:last-child { flex-direction: row-reverse; text-align: right; }
+.info-stats__team img { width: 1.1rem; height: 1.1rem; object-fit: contain; flex: none; }
+.info-stats__team span { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.info-stats__section { padding: 0.5rem 0 0.15rem; color: var(--accent); font-size: 0.64rem; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.info-stats__section:first-child { padding-top: 0.1rem; }
+.info-stat { padding: 0.25rem 0 0.3rem; border-bottom: 1px solid rgba(11, 61, 46, 0.7); }
+.info-stat__line { display: grid; grid-template-columns: minmax(2.4rem, auto) minmax(0, 1fr) minmax(2.4rem, auto); align-items: baseline; gap: 0.4rem; font-size: 0.78rem; }
+.info-stat__name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: center; color: var(--ink-muted); font-size: 0.72rem; }
+.info-stat__value { color: var(--ink); font-weight: 700; font-variant-numeric: tabular-nums; white-space: nowrap; }
+.info-stat__value:last-child { text-align: right; }
+.info-stat__value.is-better { color: var(--accent); }
+.info-stat__bar { display: grid; grid-template-columns: 1fr 1fr; gap: 3px; margin-top: 0.2rem; }
+.info-stat__track { display: flex; height: 0.3rem; overflow: hidden; border-radius: 999px; background: var(--bg-mid); }
+.info-stat__track:first-child { justify-content: flex-end; }
+.info-stat__fill { height: 100%; border-radius: 999px; background: rgba(155, 189, 173, 0.55); }
+.info-stat__fill.is-better { background: var(--accent); }
+/* Gaveta estreita: valores e nome menores, sem quebrar a linha. */
+@container (max-width: 17rem) {
+  .info-stat__line { gap: 0.25rem; font-size: 0.72rem; grid-template-columns: minmax(2rem, auto) minmax(0, 1fr) minmax(2rem, auto); }
+  .info-stat__name { font-size: 0.66rem; }
+}

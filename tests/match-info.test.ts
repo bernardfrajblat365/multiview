@@ -4,10 +4,20 @@ import type { Game365 } from '../src/livescore-365.ts'
 import {
   athletePhotoUrl,
   crestKeyOf,
+  formatGameDate,
+  formatOdd,
   formatRating,
+  hasAnyGame,
+  formatStatValue,
   initialsOf,
+  isInfoTabId,
+  parseFanVotes,
+  parseGamesInfo,
+  parseOdds,
+  reverseGamesInfo,
   parseLineupEventCounts,
   parseLineups,
+  parseMatchStats,
   parsePhotoRefs,
   parseStandings,
   parseStandingsTarget,
@@ -668,4 +678,284 @@ test('parseTeamRefs: versão null não deve virar 0', () => {
 test('crestKeyOf é id:versão', () => {
   assert.equal(crestKeyOf({ id: 10, imageVersion: 4 }), '10:4')
   assert.equal(crestKeyOf({ id: 10, imageVersion: 0 }), '10:0')
+})
+
+
+// ── Odds (`/web/bets/lines/`) e Jogos (`/web/games/h2h/`): formato lido na API real em 05/11/2026 (São Paulo x Corinthians, 4632614). ──
+
+const ODDS_GAME = 4632614
+
+function line(lineTypeId: number, name: string, options: [string, number, number?, Raw?][], extra: Raw = {}): Raw {
+  return {
+    lineId: lineTypeId * 1000, gameId: ODDS_GAME, bookmakerId: 16, lineTypeId,
+    lineType: { id: lineTypeId, name, shortName: null, title: name, internalOptionType: -1 },
+    options: options.map(([optionName, decimal, trend, more], i) => ({ num: i + 1, name: optionName, rate: { decimal, fractional: '1/1', american: '+100' }, bookmakerId: 16, trend, ...more })),
+    ...extra,
+  }
+}
+
+const LINES = {
+  lastUpdateId: 1, requestedUpdateId: -1, ttl: 30,
+  bookmakers: [{ id: 16, name: '365Scores', nameForURL: '365scores', color: '#03A7F2', imageVersion: 3 }],
+  lines: [
+    line(1, 'Resultado Final', [['1', 3.76, 3, { prematchRate: { decimal: 2.56 } }], ['X', 1.73, 1, { prematchRate: { decimal: 3.01 } }], ['2', 4.77, 2, { prematchRate: { decimal: 4.77 } }]]),
+    line(14, 'Chance Dupla', [['1X', 1.16, 1], ['12', 1.99, 3], ['X2', 1.24, 3]]),
+    line(12, 'Ambos marcam', [['Sim', 11, 3], ['Não', 1.04, 1]]),
+    line(3, 'Total de Gols', [['Menos que', 1.91, 1], ['Mais que', 1.91, 3, { isWon: true }]], { internalOptionValue: '0.5', isConcluded: true }),
+    line(3, 'Total de Gols', [['Menos que', 1.14, 3], ['Mais que', 6, 1]], { internalOptionValue: '1.5' }),
+    line(3, 'Total de Gols', [['Menos que', 1.02, 1], ['Mais que', 21, 3]], { internalOptionValue: '2.5' }),
+    line(11, 'Handicap asiático', [['Casa', 2.74, 3], ['Fora', 1.42, 1]], { internalOptionValue: '-0.25' }),
+    line(15, 'Empate não tem aposta ', [['Casa', 1.66, 1], ['Fora', 2.09, 3]]),
+    line(126, 'Resultado correto', [['V', 1.92, 1]], { internalOptionValue: '0-0' }),
+  ],
+}
+
+test('isInfoTabId aceita só as cinco abas', () => {
+  for (const tab of ['lineup', 'standings', 'odds', 'games', 'stats']) assert.equal(isInfoTabId(tab), true)
+  for (const tab of ['', null, 1, 'ODDS', 'STATS']) assert.equal(isInfoTabId(tab), false)
+})
+
+test('parseOdds: resultado, chance dupla, ambos marcam, empate anula e o total mais equilibrado', () => {
+  const odds = parseOdds(LINES, ODDS_GAME, 'São Paulo', 'Corinthians')
+  assert.ok(odds)
+  assert.equal(odds.bookmaker, '365Scores')
+  assert.deepEqual(odds.markets.map((market) => market.title), ['Resultado Final', 'Chance Dupla', 'Ambos marcam', 'Empate não tem aposta', 'Total de Gols (1,5)'])
+  const result = odds.markets[0]
+  assert.deepEqual(result.options.map((option) => option.label), ['São Paulo', 'Empate', 'Corinthians'])
+  assert.deepEqual(result.options.map((option) => option.trend), ['up', 'down', null])
+  // A odd de antes do jogo só aparece quando mudou.
+  assert.deepEqual(result.options.map((option) => option.prematch), [2.56, 3.01, null])
+  assert.deepEqual(odds.markets[3].options.map((option) => option.label), ['São Paulo', 'Corinthians'])
+})
+
+test('parseOdds: linhas decididas (isConcluded ou opção isWon) ficam de fora', () => {
+  const odds = parseOdds(LINES, ODDS_GAME, 'A', 'B')
+  assert.ok(odds)
+  assert.equal(odds.markets.some((market) => market.title.includes('0,5')), false)
+  // Ao vivo a API marca "Mais que 0.5" como ganha sem `isConcluded`: essa linha não pode virar "a mais equilibrada".
+  const wonOnly = { lines: [line(3, 'Total de Gols', [['Menos que', 1.91, 2], ['Mais que', 1.91, 2, { isWon: true }]], { internalOptionValue: '0.5' }), line(3, 'Total de Gols', [['Menos que', 1.5, 2], ['Mais que', 2.5, 2]], { internalOptionValue: '2.5' })] }
+  assert.deepEqual(parseOdds(wonOnly, ODDS_GAME, 'A', 'B')?.markets.map((market) => market.title), ['Total de Gols (2,5)'])
+  const finished = { lines: [line(1, 'Resultado Final', [['1', 2, 2], ['X', 3, 2], ['2', 4, 2]], { isConcluded: true })] }
+  assert.equal(parseOdds(finished, ODDS_GAME, 'A', 'B'), null)
+})
+
+test('parseOdds: basquete (Vencedor e Pontos totais), resposta vazia e de outro jogo', () => {
+  const basket = { lines: [line(33, 'Vencedor', [['1', 1.28, 2], ['2', 3.28, 2]]), line(34, 'Pontos totais', [['Menos que', 1.7, 2], ['Mais que', 1.99, 2]], { internalOptionValue: '171' }), line(34, 'Pontos totais', [['Menos que', 1.82, 2], ['Mais que', 1.82, 2]], { internalOptionValue: '171.5' })] }
+  const odds = parseOdds(basket, ODDS_GAME, 'Lakers', 'Celtics')
+  assert.deepEqual(odds?.markets.map((market) => market.title), ['Vencedor', 'Pontos totais (171,5)'])
+  assert.equal(odds?.bookmaker, '')
+  // Jogo sem odds: a API responde só `lastUpdateId`/`ttl`.
+  assert.equal(parseOdds({ lastUpdateId: 1, requestedUpdateId: -1, ttl: 30 }, ODDS_GAME, 'A', 'B'), null)
+  assert.equal(parseOdds(LINES, ODDS_GAME + 1, 'A', 'B'), null)
+  assert.equal(parseOdds(null, ODDS_GAME, 'A', 'B'), null)
+})
+
+test('parseOdds descarta odds absurdas ou sem número', () => {
+  const bad = { lines: [line(1, 'Resultado Final', [['1', 0, 2], ['X', 3, 2], ['2', 4, 2]]), line(12, 'Ambos marcam', [['Sim', Number.NaN, 2], ['Não', 1.1, 2]])] }
+  assert.equal(parseOdds(bad, ODDS_GAME, 'A', 'B'), null)
+})
+
+test('parseFanVotes lê "Quem vai ganhar?" do detalhe do jogo', () => {
+  const vote = (name: string, percentage: number) => ({ num: 1, name, symbol: 0, vote: { count: 1, key: 'x', percentage } })
+  const raw = { game: { id: ODDS_GAME, promotedPredictions: { predictions: [
+    { id: 2, type: 3, title: 'Total de Gols (2.5)', options: [vote('Mais', 60), vote('Menos', 40)] },
+    { id: 1, type: 1, title: 'Quem vai ganhar?', options: [vote('São Paulo', 52), vote('Empate', 10), vote('Corinthians', 38)] },
+  ] } } }
+  assert.deepEqual(parseFanVotes(raw, ODDS_GAME), [{ label: 'São Paulo', percentage: 52 }, { label: 'Empate', percentage: 10 }, { label: 'Corinthians', percentage: 38 }])
+  assert.deepEqual(parseFanVotes(raw, ODDS_GAME + 1), [])
+  assert.deepEqual(parseFanVotes({ game: { id: ODDS_GAME } }, ODDS_GAME), [])
+})
+
+test('formatOdd e formatGameDate', () => {
+  assert.equal(formatOdd(3.76), '3,76')
+  assert.equal(formatOdd(11), '11,00')
+  assert.equal(formatGameDate('2026-10-28T21:30:00-03:00'), '28/10/26')
+  assert.equal(formatGameDate('lixo'), '')
+})
+
+const SP = { id: 1225, name: 'São Paulo', imageVersion: 9 }
+const COR = { id: 1267, name: 'Corinthians', imageVersion: 8 }
+
+function played(id: number, date: string, home: Raw, homeScore: number, away: Raw, awayScore: number, winner: number, extra: Raw = {}): Raw {
+  return {
+    id, sportId: 1, competitionId: 113, competitionDisplayName: 'Brasileirão - Série A', startTime: `${date}T21:30:00-03:00`, statusGroup: 4, statusText: 'Fim',
+    homeCompetitor: { ...home, score: homeScore }, awayCompetitor: { ...away, score: awayScore }, winner, scores: [homeScore, awayScore], ...extra,
+  }
+}
+
+const H2H = {
+  game: {
+    id: ODDS_GAME,
+    homeCompetitor: { ...SP, recentGames: [
+      played(1, '2026-10-28', { id: 1, name: 'Bahia', imageVersion: 3 }, 3, SP, 2, 1, { outcome: 0 }),
+      played(2, '2026-10-24', { id: 2, name: 'Mirassol', imageVersion: 1 }, 1, SP, 1, -1),
+      played(3, '2026-10-17', SP, 1, { id: 3, name: 'Vasco da Gama', imageVersion: 2 }, 0, 1),
+      { ...played(4, '2026-11-08', SP, 0, { id: 4, name: 'Santos', imageVersion: 2 }, 0, -1), statusGroup: 2 },
+      // Pênaltis: empate no placar, `winner` diz quem passou.
+      played(5, '2026-09-01', SP, 1, { id: 5, name: 'Palmeiras', imageVersion: 2 }, 1, 2),
+    ] },
+    awayCompetitor: { ...COR, recentGames: [played(6, '2026-10-30', COR, 2, { id: 2, name: 'Mirassol', imageVersion: 1 }, 0, 1)] },
+    h2hGames: [
+      played(10, '2026-05-10', COR, 3, SP, 2, 1),
+      played(11, '2026-01-18', COR, 1, SP, 1, -1),
+      played(12, '2025-07-19', SP, 2, COR, 0, 1),
+      played(13, '2025-01-26', SP, 3, COR, 1, 1),
+      played(14, '2024-09-29', SP, 3, COR, 1, 1),
+      played(15, '2024-06-16', COR, 2, SP, 2, -1),
+      { ...played(16, '2026-11-04', SP, 0, COR, 0, -1), statusGroup: 3 },
+      played(17, '2020-01-01', SP, 1, { id: 99, name: 'Outro', imageVersion: 1 }, 0, 1),
+    ],
+  },
+}
+
+test('parseGamesInfo: últimos jogos do ponto de vista de cada time, só os encerrados', () => {
+  const info = parseGamesInfo(H2H, ODDS_GAME)
+  assert.ok(info)
+  const [sp, cor] = info.teams
+  assert.equal(sp.name, 'São Paulo')
+  assert.deepEqual(sp.crestRef, { id: 1225, imageVersion: 9 })
+  assert.deepEqual(sp.games.map((game) => [game.opponent, game.home, `${game.goalsFor}-${game.goalsAgainst}`, game.outcome]), [
+    ['Bahia', false, '2-3', 'loss'],
+    ['Mirassol', false, '1-1', 'draw'],
+    ['Vasco da Gama', true, '1-0', 'win'],
+    ['Palmeiras', true, '1-1', 'loss'],
+  ])
+  assert.deepEqual(sp.games[0].opponentRef, { id: 1, imageVersion: 3 })
+  assert.equal(cor.games.length, 1)
+  assert.equal(cor.games[0].outcome, 'win')
+})
+
+test('parseGamesInfo: confronto direto conta vitórias e empates e mostra os 5 mais novos', () => {
+  const info = parseGamesInfo(H2H, ODDS_GAME)
+  assert.ok(info)
+  assert.equal(info.h2h.total, 6)
+  assert.deepEqual(info.h2h.wins, [3, 1])
+  assert.equal(info.h2h.draws, 2)
+  assert.equal(info.h2h.games.length, 5)
+  assert.deepEqual(info.h2h.games[0], { gameId: 10, startTime: '2026-05-10T21:30:00-03:00', home: 'Corinthians', away: 'São Paulo', homeId: 1267, awayId: 1225, homeScore: 3, awayScore: 2, winnerId: 1267, competition: 'Brasileirão - Série A' })
+  assert.equal(info.h2h.games[1].winnerId, null)
+})
+
+test('reverseGamesInfo troca os times e as vitórias; hasAnyGame', () => {
+  const info = parseGamesInfo(H2H, ODDS_GAME)
+  assert.ok(info)
+  const reversed = reverseGamesInfo(info)
+  assert.equal(reversed.teams[0].name, 'Corinthians')
+  assert.deepEqual(reversed.h2h.wins, [1, 3])
+  assert.equal(hasAnyGame(info), true)
+  const empty = parseGamesInfo({ game: { id: ODDS_GAME, homeCompetitor: { id: 1 }, awayCompetitor: { id: 2 }, h2hGames: [] } }, ODDS_GAME)
+  assert.ok(empty)
+  assert.equal(hasAnyGame(empty), false)
+})
+
+test('parseGamesInfo recusa resposta de outro jogo ou sem times', () => {
+  assert.equal(parseGamesInfo(H2H, ODDS_GAME + 1), null)
+  assert.equal(parseGamesInfo({ game: { id: ODDS_GAME } }, ODDS_GAME), null)
+  assert.equal(parseGamesInfo(null, ODDS_GAME), null)
+})
+
+// Forma real de `/web/game/stats/?games=<id>` (São Paulo x Corinthians, lida em 05/11/2026), reduzida.
+const STATS_GAME = 4632614
+function statRow(id: number, competitorId: number, name: string, value: string, valuePercentage: number, extra: Raw = {}): Raw {
+  return { id, name, competitorId, value, valuePercentage, order: 0, ...extra }
+}
+function statsResponse(statistics: Raw[], statusGroup = 3): Raw {
+  return {
+    statisticsFilters: [{ filterId: -1, name: 'Partida' }],
+    statistics,
+    games: [{ id: STATS_GAME, statusGroup, homeCompetitor: { id: 1225, name: 'São Paulo' }, awayCompetitor: { id: 1267, name: 'Corinthians' } }],
+  }
+}
+const REAL_STATS = statsResponse([
+  statRow(10, 1225, 'Posse de Bola', '53%', 0.53, { order: 0, isTop: true, markedTeam: 1 }),
+  statRow(76, 1225, 'Gols esperados (xG)', '1.72', 0.58, { order: 1, isTop: true, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(8, 1225, 'Escanteios', '6', 0.43, { order: 5, isTop: true, markedTeam: 2 }),
+  statRow(52, 1225, 'Cruzamentos completos', '10/29 (34%)', 0.6, { order: 32, markedTeam: 1, categoryId: 47, categoryName: 'Passes', categoryOrder: 2 }),
+  statRow(5, 1225, 'Chutes para fora', '10', 0.62, { order: 11, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(25, 1225, 'Trave', '0', 0, { order: 13, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(29, 1225, 'Substituição', '5', 0.5, { order: 99 }),
+  statRow(12, 1225, 'Faltas', '13', 0.48, { order: 91, markedTeam: 1, categoryId: 50, categoryName: 'Disciplina', categoryOrder: 5 }),
+  statRow(10, 1267, 'Posse de Bola', '47%', 0.47, { order: 0, isTop: true, markedTeam: 1 }),
+  statRow(76, 1267, 'Gols esperados (xG)', '1.24', 0.42, { order: 1, isTop: true, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(8, 1267, 'Escanteios', '8', 0.57, { order: 5, isTop: true, markedTeam: 2 }),
+  statRow(52, 1267, 'Cruzamentos completos', '3/13 (23%)', 0.4, { order: 32, markedTeam: 1, categoryId: 47, categoryName: 'Passes', categoryOrder: 2 }),
+  statRow(5, 1267, 'Chutes para fora', '6', 0.38, { order: 11, markedTeam: 1, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(25, 1267, 'Trave', '0', 0, { order: 13, categoryId: 46, categoryName: 'Chutes', categoryOrder: 1 }),
+  statRow(29, 1267, 'Substituição', '5', 0.5, { order: 99 }),
+  statRow(12, 1267, 'Faltas', '14', 0.52, { order: 91, markedTeam: 1, categoryId: 50, categoryName: 'Disciplina', categoryOrder: 5 }),
+])
+
+test('parseMatchStats: junta os dois times por estatística, Principais primeiro, categorias na ordem e Geral no fim', () => {
+  const parsed = parseMatchStats(REAL_STATS, STATS_GAME)
+  assert.ok(parsed)
+  assert.deepEqual(parsed.teams, ['São Paulo', 'Corinthians'])
+  assert.equal(parsed.live, true)
+  assert.deepEqual(parsed.sections.map((section) => section.title), ['Principais', 'Chutes', 'Passes', 'Disciplina', 'Geral'])
+  assert.deepEqual(parsed.sections[0].stats.map((stat) => stat.name), ['Posse de Bola', 'Gols esperados (xG)', 'Escanteios'])
+  const possession = parsed.sections[0].stats[0]
+  assert.deepEqual(possession.values, ['53%', '47%'])
+  assert.equal(possession.better, 0)
+  assert.ok(Math.abs(possession.shares[0] - 0.53) < 1e-9 && Math.abs(possession.shares[1] - 0.47) < 1e-9)
+  assert.deepEqual(parsed.sections[0].stats[1].values, ['1,72', '1,24'])
+  assert.equal(parsed.sections[0].stats[2].better, 1)
+  assert.deepEqual(parsed.sections[1].stats.map((stat) => stat.name), ['Chutes para fora', 'Trave'])
+  assert.deepEqual(parsed.sections[2].stats[0].values, ['10/29 (34%)', '3/13 (23%)'])
+})
+
+test('parseMatchStats: zero dos dois lados deixa a barra vazia e sem time melhor', () => {
+  const trave = parseMatchStats(REAL_STATS, STATS_GAME)?.sections.flatMap((section) => section.stats).find((stat) => stat.name === 'Trave')
+  assert.ok(trave)
+  assert.deepEqual(trave.shares, [0, 0])
+  assert.equal(trave.better, null)
+})
+
+test('parseMatchStats: as fatias da barra somam 1 mesmo quando o 365Scores não soma', () => {
+  const parsed = parseMatchStats(statsResponse([
+    statRow(3, 1225, 'Total de chutes', '8', 0.6),
+    statRow(3, 1267, 'Total de chutes', '2', 0.2),
+  ]), STATS_GAME)
+  const [home, away] = parsed!.sections[0].stats[0].shares
+  assert.ok(Math.abs(home - 0.75) < 1e-9 && Math.abs(away - 0.25) < 1e-9)
+})
+
+test('parseMatchStats: invertido segue a ordem do feed do painel (valores, barra, time melhor e nomes)', () => {
+  const parsed = parseMatchStats(REAL_STATS, STATS_GAME, true)
+  assert.ok(parsed)
+  assert.deepEqual(parsed.teams, ['Corinthians', 'São Paulo'])
+  const possession = parsed.sections[0].stats[0]
+  assert.deepEqual(possession.values, ['47%', '53%'])
+  assert.equal(possession.better, 1)
+  assert.ok(possession.shares[1] > possession.shares[0])
+})
+
+test('parseMatchStats: estatística de um time só, de outro competidor ou de um tempo (filterId) fica de fora', () => {
+  const parsed = parseMatchStats(statsResponse([
+    statRow(10, 1225, 'Posse de Bola', '60%', 0.6),
+    statRow(10, 1267, 'Posse de Bola', '40%', 0.4),
+    statRow(10, 1225, 'Posse de Bola', '70%', 0.7, { filterId: 6 }),
+    statRow(3, 1225, 'Total de chutes', '8', 0.8),
+    statRow(4, 999, 'Chutes no gol', '1', 1),
+    statRow(4, 1267, 'Chutes no gol', '2', 1),
+  ], 4), STATS_GAME)
+  assert.ok(parsed)
+  assert.equal(parsed.live, false)
+  assert.deepEqual(parsed.sections.flatMap((section) => section.stats.map((stat) => [stat.name, stat.values])), [['Posse de Bola', ['60%', '40%']]])
+})
+
+test('parseMatchStats: resposta de jogo sem estatísticas, de outro jogo ou sem formato', () => {
+  // Jogo que ainda não começou: a API responde só `lastUpdateId`/`ttl`.
+  assert.equal(parseMatchStats({ lastUpdateId: 1, requestedUpdateId: -1, ttl: 10 }, STATS_GAME), null)
+  assert.deepEqual(parseMatchStats(statsResponse([]), STATS_GAME)?.sections, [])
+  assert.equal(parseMatchStats(REAL_STATS, STATS_GAME + 1), null)
+  assert.equal(parseMatchStats(null, STATS_GAME), null)
+  assert.equal(parseMatchStats([], STATS_GAME), null)
+})
+
+test('formatStatValue: decimal com vírgula; porcentagem e frações como vêm', () => {
+  assert.equal(formatStatValue('1.72'), '1,72')
+  assert.equal(formatStatValue('0.8'), '0,8')
+  assert.equal(formatStatValue('53%'), '53%')
+  assert.equal(formatStatValue('10/29 (34%)'), '10/29 (34%)')
+  assert.equal(formatStatValue(3), '3')
+  assert.equal(formatStatValue(null), '')
 })

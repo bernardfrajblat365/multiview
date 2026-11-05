@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.2',
+    label: '1.3.2',
+    notes: [
+      { title: 'VAR nos jogos da BLL com radar', body: 'Os jogos da BLL com o radar da William Hill, que não informa o VAR, agora mostram o VAR pelo 365Scores: o selo azul e o destaque enquanto o árbitro revisa e o alerta com a decisão. Gols e cartões continuam vindo da William Hill.' },
+    ],
+  },
+  {
     version: '1.3.1',
     label: '1.3.1',
     notes: [

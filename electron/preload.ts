@@ -15,7 +15,7 @@ type MatchCrestsPayload = { panelId: string; home: string | null; away: string |
 type MatchClockPayload = { panelId: string; clock: MatchClock | null }
 /** A goal's scorer, known after its alert went out. */
 type MatchScorerPayload = { panelId: string; eventId: string; player: string }
-type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string }
+type MatchEventPayload = { panelId: string; kind: AlertKind; teamName: string; minute: number; score: string; ownGoal: boolean; team?: 'home' | 'away' | 'match'; note?: string; label: string; eventId?: string; player?: string; keepHighlight?: boolean }
 
 const quadra = {
   ready: () => ipcRenderer.send('quadra:ready'),

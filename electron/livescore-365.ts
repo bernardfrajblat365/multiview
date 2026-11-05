@@ -36,8 +36,10 @@ import { alertLabel, type MatchIncident } from '../src/match-events'
 import { logScanner } from './scanner-log'
 import type { ScannerClock, ScannerScore } from './scoreboard-scanner'
 import { sameClock, type MatchClock } from '../src/match-clock'
+import { flipScore, orientReview, varOnly } from '../src/wh-var'
 
-export type LiveEvent = { panelIds: string[]; incident: MatchIncident; teamName: string; score: string; label: string }
+/** `varOnly`: a William Hill panel that takes only the VAR from 365Scores (incident and score already in the feed's order). */
+export type LiveEvent = { panelIds: string[]; incident: MatchIncident; teamName: string; score: string; label: string; varOnly?: boolean }
 
 /** The VAR review in progress (null once it is over), with the reviewed team's name. */
 export type LiveVar = { panelIds: string[]; review: (VarReview & { teamName: string }) | null }
@@ -60,7 +62,10 @@ type Poller = {
   label: string
   /** Basketball: names, crests and score only. American football: touchdowns and field goals. Neither closes the panel at the end. */
   sport: Sport365
+  /** Panels linked to this game for everything (YouTube, BLL without a William Hill feed). */
   panelIds: Set<string>
+  /** William Hill panels that take only the VAR from this game, with `reversed` (the feed lists the teams the other way round). */
+  varPanels: Map<string, boolean>
   state: LiveState
   americanFootball: AmericanFootballState
   coverage: 'events' | 'score' | null
@@ -160,6 +165,8 @@ export function createLiveScoreLinker(options: {
   onList?: (games: Game365[]) => void
 }) {
   const links = new Map<string, PanelLink>()
+  /** William Hill panels linked to a 365Scores game only for the VAR. */
+  const varLinks = new Map<string, { gameId: number; reversed: boolean }>()
   const pollers = new Map<number, Poller>()
   const listCache = new Map<Sport365, { at: number; games: Game365[] }>()
   const listPending = new Map<Sport365, Promise<Game365[]>>()
@@ -225,14 +232,26 @@ export function createLiveScoreLinker(options: {
   function emit(poller: Poller, incidents: MatchIncident[], fromCommentary = false) {
     for (const incident of dropRepeatedVar(poller.state, incidents)) {
       const teamName = incident.team === 'home' ? poller.home : incident.team === 'away' ? poller.away : ''
-      logScanner(`[${poller.label}] ${incident.kind.toUpperCase()} ${incident.team}${incident.minute ? ` ${incident.minute}'` : ''} ${teamName}${incident.note ? ` (${incident.note})` : ''}${incident.player && (incident.kind === 'goal' || incident.kind === 'red') ? ` — ${incident.player}` : ''}${fromCommentary ? ' · narração' : ''}`, '365')
-      options.onEvent({
-        panelIds: [...poller.panelIds],
-        incident,
-        teamName,
-        score: poller.score,
-        label: alertLabel(incident.kind, teamName, incident.minute),
-      })
+      const varPanels = incident.kind === 'var' ? [...poller.varPanels] : []
+      if (poller.panelIds.size === 0 && varPanels.length === 0) continue
+      logScanner(`[${poller.label}] ${incident.kind.toUpperCase()} ${incident.team}${incident.minute ? ` ${incident.minute}'` : ''} ${teamName}${incident.note ? ` (${incident.note})` : ''}${incident.player && (incident.kind === 'goal' || incident.kind === 'red') ? ` — ${incident.player}` : ''}${fromCommentary ? ' · narração' : ''}${poller.panelIds.size === 0 ? ' · só VAR (painel William Hill)' : ''}`, '365')
+      const label = alertLabel(incident.kind, teamName, incident.minute)
+      if (poller.panelIds.size > 0) options.onEvent({ panelIds: [...poller.panelIds], incident, teamName, score: poller.score, label })
+      // William Hill panels: only the VAR, in the feed's home/away order; their goals and cards come from William Hill.
+      for (const [panelId, reversed] of varPanels) {
+        const [oriented] = varOnly([incident], reversed)
+        options.onEvent({ panelIds: [panelId], incident: oriented, teamName, score: reversed ? flipScore(poller.score) : poller.score, label, varOnly: true })
+      }
+    }
+  }
+
+  /** The review in progress to every panel of the game (`only`: just these), turned for William Hill panels listed the other way round. */
+  function sendVar(poller: Poller, only?: readonly string[]) {
+    const wanted = (panelId: string) => !only || only.includes(panelId)
+    const full = [...poller.panelIds].filter(wanted)
+    if (full.length > 0) options.onVar?.({ panelIds: full, review: poller.varReview })
+    for (const [panelId, reversed] of poller.varPanels) {
+      if (wanted(panelId)) options.onVar?.({ panelIds: [panelId], review: orientReview(poller.varReview, reversed) })
     }
   }
 
@@ -265,7 +284,7 @@ export function createLiveScoreLinker(options: {
       poller.varReview = { ...review, teamName }
       logScanner(`[${poller.label}] VAR ATIVO: revisão de ${VAR_NAMES[review.kind]}${review.minute ? ` ${review.minute}'` : ''}${teamName ? ` ${teamName}` : ''}${review.player ? ` — ${review.player}` : ''}`, '365')
     }
-    options.onVar?.({ panelIds: [...poller.panelIds], review: poller.varReview })
+    sendVar(poller)
   }
 
   function fail(poller: Poller, reason: string, kind: 'stall' | 'http') {
@@ -368,7 +387,10 @@ export function createLiveScoreLinker(options: {
     if (detail.statusGroup === 4) {
       logScanner(`[${poller.label}] jogo encerrado (${poller.score}); 365Scores parou de consultar`, '365')
       poller.stopped = true
-      if (poller.varReview) options.onVar?.({ panelIds: [...poller.panelIds], review: null })
+      if (poller.varReview) {
+        poller.varReview = null
+        sendVar(poller)
+      }
       if (poller.sawLive) options.onEnd?.({ panelIds: [...poller.panelIds] })
       return
     }
@@ -391,7 +413,21 @@ export function createLiveScoreLinker(options: {
     const poller = pollers.get(link.gameId)
     if (!poller) return
     poller.panelIds.delete(panelId)
-    if (poller.panelIds.size === 0) stopPoller(poller)
+    stopIfUnused(poller)
+  }
+
+  function stopIfUnused(poller: Poller) {
+    if (poller.panelIds.size === 0 && poller.varPanels.size === 0) stopPoller(poller)
+  }
+
+  function ensurePoller(gameId: number, label: string, sport: Sport365): Poller {
+    let poller = pollers.get(gameId)
+    if (!poller) {
+      poller = { gameId, label, sport, panelIds: new Set(), varPanels: new Map(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', clock: null, sentClock: null, failures: 0, failingSince: 0, lastPbpAt: 0, varKey: '', varSince: 0, varReview: null, varInFlight: false, stopped: false, sawLive: false }
+      pollers.set(gameId, poller)
+      schedulePoll(poller, 0)
+    }
+    return poller
   }
 
   function link(panelId: string, game: Game365) {
@@ -400,17 +436,12 @@ export function createLiveScoreLinker(options: {
     entry.gameId = game.id
     entry.candidates = []
     const label = `${game.home} x ${game.away}`
-    let poller = pollers.get(game.id)
-    if (!poller) {
-      poller = { gameId: game.id, label, sport: entry.sport, panelIds: new Set(), state: createLiveState(), americanFootball: createAmericanFootballState(), coverage: null, sentKey: '', home: '', away: '', score: '', clock: null, sentClock: null, failures: 0, failingSince: 0, lastPbpAt: 0, varKey: '', varSince: 0, varReview: null, varInFlight: false, stopped: false, sawLive: false }
-      pollers.set(game.id, poller)
-      schedulePoll(poller, 0)
-    }
+    const poller = ensurePoller(game.id, label, entry.sport)
     poller.panelIds.add(panelId)
     sendStatus(panelId, { status: 'linked', label, coverage: poller.coverage, sport: poller.sport })
     publishScore(poller, [panelId], true)
     publishClock(poller, [panelId], true)
-    if (poller.varReview) options.onVar?.({ panelIds: [panelId], review: poller.varReview })
+    if (poller.varReview) sendVar(poller, [panelId])
     logScanner(`[${panelId}] painel vinculado ao jogo "${label}" (365Scores ${game.id}${poller.sport === 'basketball' ? ', basquete: só placar' : poller.sport === 'american-football' ? ', futebol americano: touchdowns e field goals' : ''})`, '365')
   }
 
@@ -477,7 +508,41 @@ export function createLiveScoreLinker(options: {
     logScanner(`[${panelId}] 365Scores: usuário disse que nenhum jogo corresponde`, '365')
   }
 
+  /**
+   * A William Hill panel whose game was found on 365Scores (by the feed's team names): it takes only the VAR
+   * from there. No status goes to the UI, so the panel stays a William Hill one (immediate alerts, no ⏱).
+   */
+  function watchVar(panelId: string, gameId: number, reversed: boolean) {
+    if (links.has(panelId)) return
+    const current = varLinks.get(panelId)
+    if (current && current.gameId === gameId && current.reversed === reversed) return
+    unwatchVar(panelId)
+    const game = listCache.get('football')?.games.find((entry) => entry.id === gameId)
+    const poller = ensurePoller(gameId, game ? `${game.home} x ${game.away}` : `jogo 365Scores ${gameId}`, 'football')
+    if (poller.sport !== 'football') {
+      stopIfUnused(poller)
+      return
+    }
+    varLinks.set(panelId, { gameId, reversed })
+    poller.varPanels.set(panelId, reversed)
+    if (poller.varReview) sendVar(poller, [panelId])
+    logScanner(`[${panelId}] painel William Hill ligado a "${poller.label}" (365Scores ${gameId}) só para o VAR`, '365')
+  }
+
+  function unwatchVar(panelId: string) {
+    const current = varLinks.get(panelId)
+    if (!current) return
+    varLinks.delete(panelId)
+    const poller = pollers.get(current.gameId)
+    if (!poller) return
+    // A review on screen goes with the link.
+    if (poller.varReview && poller.varPanels.has(panelId)) options.onVar?.({ panelIds: [panelId], review: null })
+    poller.varPanels.delete(panelId)
+    stopIfUnused(poller)
+  }
+
   function detach(panelId: string) {
+    unwatchVar(panelId)
     if (!links.has(panelId)) return
     unlink(panelId)
     sendStatus(panelId, { status: 'off' })
@@ -485,6 +550,7 @@ export function createLiveScoreLinker(options: {
 
   function destroyAll() {
     for (const panelId of [...links.keys()]) unlink(panelId)
+    varLinks.clear()
     for (const poller of [...pollers.values()]) stopPoller(poller)
   }
 
@@ -510,7 +576,7 @@ export function createLiveScoreLinker(options: {
     return links.get(panelId)?.gameId ?? null
   }
 
-  return { consider, choose, detach, destroyAll, listGames, findScorer, gameIdOf, size: () => pollers.size }
+  return { consider, choose, detach, watchVar, unwatchVar, destroyAll, listGames, findScorer, gameIdOf, size: () => pollers.size }
 }
 
 /** Cheap pre-check so pages without "A x B" in the title never hit the API. */

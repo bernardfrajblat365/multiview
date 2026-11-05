@@ -10,6 +10,7 @@ import { sportOfBllName } from '../src/livescore-365'
 import { monitorHtml } from './monitor-html'
 import { prepareProtectedPlayback } from './protected-playback'
 import { createLiveScoreLinker } from './livescore-365'
+import { cancelsWhGoal, recordWhGoal, type WhGoal } from '../src/wh-var'
 import { createTeamCrests } from './team-crests'
 import { createMatchInfo, loadAthletePhotos, loadTableCrests } from './match-info'
 import { parsePhotoRefs, parseTeamRefs, type InfoTabId } from '../src/match-info'
@@ -306,10 +307,15 @@ const listEventsScript = `(() => {
     situation: Number(item.situacao),
   }))
 })()`
+/** William Hill goals alerted per panel, so a 365Scores "gol anulado" only undoes the highlight of the goal it is about. */
+const whGoals = new Map<string, WhGoal[]>()
 const scanners = createScoreboardScanners({
   onEvent: ({ panelIds, incident, teamName, score }) => {
     const label = alertLabel(incident.kind, teamName, incident.minute)
     for (const panelId of panelIds) {
+      if (incident.kind === 'goal' && (incident.team === 'home' || incident.team === 'away')) {
+        whGoals.set(panelId, recordWhGoal(whGoals.get(panelId) ?? [], { team: incident.team, minute: incident.minute, at: Date.now() }))
+      }
       overlayWindow?.webContents.send('quadra:match-event', {
         panelId,
         kind: incident.kind,
@@ -336,9 +342,12 @@ const scanners = createScoreboardScanners({
 })
 /** YouTube panels and BLL players without a William Hill feed: links the panel to a 365Scores game by the teams in its title, then polls that game. */
 const liveScores = createLiveScoreLinker({
-  onEvent: ({ panelIds, incident, teamName, score, label }) => {
+  onEvent: ({ panelIds, incident, teamName, score, label, varOnly }) => {
     for (const panelId of panelIds) {
+      // A William Hill panel's goal highlight goes only when the VAR disallowed that very goal.
+      const keepHighlight = varOnly && incident.note === 'gol anulado' && !cancelsWhGoal(whGoals.get(panelId) ?? [], incident, Date.now())
       overlayWindow?.webContents.send('quadra:match-event', {
+        ...(keepHighlight ? { keepHighlight: true } : {}),
         panelId,
         kind: incident.kind,
         teamName,
@@ -372,7 +381,12 @@ const liveScores = createLiveScoreLinker({
 const teamCrests = createTeamCrests({
   listGames: () => liveScores.listGames(),
   onCrests: (crests) => overlayWindow?.webContents.send('quadra:match-crests', crests),
-  onGame: ({ panelId, gameId, reversed }) => matchInfo.setResolved(panelId, gameId === null ? null : { gameId, reversed }),
+  onGame: ({ panelId, gameId, reversed }) => {
+    matchInfo.setResolved(panelId, gameId === null ? null : { gameId, reversed })
+    // Only William Hill panels are looked up by name; the feed has no VAR, so they take it from this 365Scores game.
+    if (gameId === null) liveScores.unwatchVar(panelId)
+    else liveScores.watchVar(panelId, gameId, reversed)
+  },
 })
 /** The 365Scores game of each panel (or William Hill's own line-up) and what the info drawer shows about it. */
 const matchInfo = createMatchInfo({
@@ -1033,6 +1047,7 @@ function stopMatchDetection(panelId: string) {
   matchDetections.delete(panelId)
   scanners.detach(panelId)
   liveScores.detach(panelId)
+  whGoals.delete(panelId)
   teamCrests.clear(panelId)
   matchInfo.clear(panelId)
   overlayWindow?.webContents.send('quadra:match-score', { panelId, home: '', away: '', score: '' })

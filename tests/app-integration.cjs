@@ -357,6 +357,17 @@ async function run() {
       } }))
       return
     }
+    if (request.url?.startsWith('/web/bets/lines/')) {
+      // 1X2 of Coritiba x Avaí for the label and the Odds tab; the other games have no odds (the API answers without "lines").
+      const gameId = Number(new URL(request.url, 'http://fixture').searchParams.get('games'))
+      const option = (num, name, decimal, trend) => ({ num, name, rate: { decimal, fractional: '1/1', american: '+100' }, bookmakerId: 16, trend })
+      response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
+      response.end(JSON.stringify(gameId === 9001 ? {
+        ttl: 30, bookmakers: [{ id: 16, name: '365Scores' }],
+        lines: [{ lineId: 1, gameId, bookmakerId: 16, lineTypeId: 1, lineType: { id: 1, name: 'Resultado Final' }, options: [option(1, '1', 2.1, 3), option(2, 'X', 3.2, 2), option(3, '2', 3.6, 1)] }],
+      } : { ttl: 30 }))
+      return
+    }
     if (request.url?.startsWith('/web/standings/')) {
       response.writeHead(200, { 'content-type': 'application/json; charset=utf-8' })
       response.end(JSON.stringify(standingsFixture()))
@@ -649,6 +660,17 @@ async function run() {
       throw new Error(`${error.message}; escudos pedidos: ${JSON.stringify(crestRequests)}`)
     })
     assert.ok(crestRequests.some((url) => url.endsWith('/v3/Competitors/1')), 'O escudo usa a versão de imagem do time.')
+    // 1X2 odds under each name and under the score; the ⋯ menu option hides and brings them back.
+    const labelOdds = `[...document.querySelectorAll('.panel[data-slot="1"] .panel__label .panel__label-odd')].map((node) => node.textContent).join('|')`
+    await waitForExpression(target, `${labelOdds} === '2,10▲|X 3,20|3,60▼'`, 9000).catch(async (error) => {
+      throw new Error(`${error.message}; odds na legenda: ${await evaluate(target.webSocketDebuggerUrl, labelOdds)}`)
+    })
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] .panel__label').hasAttribute('data-odds')`), true)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="0"] .panel__label-odd') === null`), true, 'Painel sem jogo do 365Scores fica sem odds.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-label-odds').click()`)
+    await waitForExpression(target, `${labelOdds} === '' && document.querySelector('#btn-label-odds').textContent === 'Mostrar odds na legenda'`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-label-odds').click()`)
+    await waitForExpression(target, `${labelOdds} === '2,10▲|X 3,20|3,60▼'`, 9000)
     // The shirt button appears on a panel with a 365Scores game, right before the delay button, and opens the line-up drawer.
     await waitForExpression(target, `document.querySelector('.panel[data-slot="1"] .panel__info') !== null`)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `(() => {
@@ -708,6 +730,10 @@ async function run() {
       selected: document.querySelector('.info-drawer .info-tab.is-selected').textContent,
     }))()`), { highlighted: ['Coritiba', 'Avaí'], title: 'Brasileirão', first: ['1', 'Palmeiras', '10', '5', '2', '3', '+4', '30'], legend: ['Libertadores', 'Rebaixamento'], selected: 'Tabela' })
     await waitForExpression(target, `document.querySelector('.info-drawer .info-standing__crest img') !== null`)
+    // The Odds tab lists the result with the team names, one row per option.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-tab="odds"]').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-odd]').length === 3`)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `[...document.querySelectorAll('.info-drawer [data-info-odd] .info-odd__label')].map((node) => node.textContent)`), ['Coritiba', 'Empate', 'Avaí'])
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-tab="lineup"]').click()`)
     await waitForExpression(target, `document.querySelectorAll('.info-drawer [data-info-row]').length === 11`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.info-drawer [data-info-close]').click()`)

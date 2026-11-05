@@ -489,7 +489,13 @@ export type OddsMarket = { lineTypeId: number; title: string; options: OddsOptio
 /** Votos dos usuários do 365Scores em "Quem vai ganhar?". */
 export type FanVote = { label: string; percentage: number }
 
-export type GameOdds = { bookmaker: string; markets: OddsMarket[]; votes: FanVote[] }
+/** Uma odd do resultado final, para a legenda do painel. */
+export type OddValue = { rate: number; trend: OddsTrend }
+
+/** Resultado final (1X2) com os lados do 365Scores, ou na ordem do feed do painel depois de `reverseMoneyline`; sem empate no basquete. */
+export type Moneyline = { home: OddValue; draw: OddValue | null; away: OddValue }
+
+export type GameOdds = { bookmaker: string; markets: OddsMarket[]; votes: FanVote[]; moneyline: Moneyline | null }
 
 /** Mercados mostrados, na ordem: resultado (futebol / basquete), chance dupla, ambos marcam, empate anula, total. */
 const ODDS_RESULT = [1, 33]
@@ -573,10 +579,30 @@ export function parseOdds(raw: unknown, gameId: number, home: string, away: stri
   }
   if (total) markets.push(total)
   if (markets.length === 0) return null
+  const resultLine = ODDS_RESULT.map((id) => lines.find((item) => Number(item.lineTypeId) === id)).find(Boolean)
+  const moneyline = resultLine ? moneylineOf(resultLine) : null
   const bookmakerId = Number(lines.find((line) => Number(line.lineTypeId) === markets[0].lineTypeId)?.bookmakerId)
   const bookmakers = Array.isArray(response.bookmakers) ? response.bookmakers.map(record) : []
   const bookmaker = text(bookmakers.find((item) => item && Number(item.id) === bookmakerId)?.name, 40)
-  return { bookmaker, markets }
+  return { bookmaker, markets, moneyline }
+}
+
+/** "1" / "X" / "2" de uma linha de resultado (os nomes que a API usa antes de virarem nomes de time). */
+function moneylineOf(line: Record<string, unknown>): Moneyline | null {
+  const options = Array.isArray(line.options) ? line.options.map(record) : []
+  const value = (name: string): OddValue | null => {
+    const row = options.find((option) => option && text(option.name, 4).toUpperCase() === name)
+    const rate = row ? rateOf(row.rate) : null
+    return row && rate !== null ? { rate, trend: row.trend === 3 ? 'up' : row.trend === 1 ? 'down' : null } : null
+  }
+  const home = value('1')
+  const away = value('2')
+  return home && away ? { home, draw: value('X'), away } : null
+}
+
+/** Troca mandante e visitante (o painel lista o visitante do 365Scores primeiro). */
+export function reverseMoneyline(moneyline: Moneyline): Moneyline {
+  return { home: moneyline.away, draw: moneyline.draw, away: moneyline.home }
 }
 
 /** "Quem vai ganhar?" (`promotedPredictions`, tipo 1) do `/web/game/`: porcentagem de votos de cada opção. */

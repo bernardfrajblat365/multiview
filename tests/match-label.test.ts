@@ -437,3 +437,36 @@ test('extractMatchLabel não lê " - " como confronto (rótulo do painel igual)'
   assert.equal(extractMatchLabel('Flamengo - Palmeiras'), null)
   assert.equal(extractMatchLabel('Flamengo x Palmeiras - Brasileirão'), 'Flamengo x Palmeiras')
 })
+
+// ── Odds 1X2 embaixo dos nomes ──
+
+test('odds na legenda sobre o vídeo: mesma fonte, um pouco mais alta', () => {
+  const base = { panelWidth: 960, panelHeight: 540, videoRect: { x: 0, y: 0, width: 1, height: 1 }, home: 'São Paulo', away: 'Corinthians', score: { home: 0, away: 0 }, crests: true, clockChars: 8 }
+  const without = placeMatchLabel(base)
+  const withOdds = placeMatchLabel({ ...base, odds: true })
+  assert.equal(without.odds, false)
+  assert.equal(withOdds.odds, true)
+  assert.equal(withOdds.mode, 'overlay-bottom')
+  assert.equal(withOdds.layout, 'inline')
+  assert.equal(withOdds.fontPx, without.fontPx)
+  assert.ok(withOdds.box.height > without.box.height)
+  // Cresce pouco: menos de meia linha a mais.
+  assert.ok((withOdds.box.height - without.box.height) * 540 < 0.5 * withOdds.fontPx)
+  assertInsidePanel(withOdds.box)
+})
+
+test('odds ficam de fora quando os nomes já não cabem em uma linha', () => {
+  const placement = placeMatchLabel({ panelWidth: 200, panelHeight: 112, videoRect: { x: 0, y: 0, width: 1, height: 1 }, home: 'Borussia Mönchengladbach', away: 'Wolverhampton Wanderers', score: { home: 1, away: 1 }, crests: true, clockChars: 8, odds: true })
+  assert.equal(placement.layout, 'stacked')
+  assert.equal(placement.odds, false)
+})
+
+test('odds na barra preta: só se couberem na altura da barra sem encolher muito os nomes', () => {
+  const thin = placeMatchLabel({ panelWidth: 640, panelHeight: 380, videoRect: { x: 0, y: 0, width: 1, height: 354 / 380 }, home: 'Bahia', away: 'Vitória', score: { home: 0, away: 0 }, odds: true })
+  assert.equal(thin.mode, 'bar-bottom')
+  assert.equal(thin.odds, false, 'barra de 26 px: com odds a fonte cairia demais')
+  const tall = placeMatchLabel({ panelWidth: 640, panelHeight: 460, videoRect: { x: 0, y: 0, width: 1, height: 360 / 460 }, home: 'Bahia', away: 'Vitória', score: { home: 0, away: 0 }, odds: true })
+  assert.equal(tall.mode, 'bar-bottom')
+  assert.equal(tall.odds, true)
+  assert.ok(tall.fontPx * 1.75 <= 100 + 1e-9)
+})

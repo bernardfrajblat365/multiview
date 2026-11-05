@@ -12,6 +12,8 @@ export type MatchLabelPlacement = {
   layout: MatchLabelLayout
   box: NormRect
   fontPx: number
+  /** Room for the 1X2 odds under each name (only in one line, and only when asked for). */
+  odds: boolean
 }
 
 const MATCHUP_RE = /^(.{2,60}?)\s+(?:x|×|vs\.?|v)\s+(.{2,60})$/i
@@ -40,6 +42,10 @@ const LINE_EM = 1.3
 /** Dismiss button + horizontal padding, in em. */
 const CHROME_EM = 2.2
 const STACKED_HEIGHT_EM = 2 * LINE_EM + 0.4
+/** One line with the odds under the names: the name (line height 1) and the odds at 70% right under it, plus the score box. */
+const ODDS_LINE_EM = 1.75
+/** The odds may cost the names this much of their size at most; below that the label drops them. */
+const ODDS_MIN_SCALE = 0.85
 /** One crest (1.15 em) plus the gap beside it. */
 const CREST_EM = 1.6
 const SCORE_RE = /^(\d{1,3})\s*[-–:x]\s*(\d{1,3})$/i
@@ -248,15 +254,25 @@ function stackedWidthEm(home: string, away: string, hasScore: boolean, hasCrests
   return CHAR_EM * Math.max(home.length, away.length) + (hasScore ? 1.8 : 0) + CHROME_EM + (hasCrests ? CREST_EM : 0) + clockWidthEm(clockChars)
 }
 
-type Fit = { layout: MatchLabelLayout; fontPx: number }
+type Fit = { layout: MatchLabelLayout; fontPx: number; odds: boolean }
 
 /** Largest font (≤ preferred) that fits the full names in a horizontal box: one line first, then two rows. */
-function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean, hasCrests: boolean, clockChars: number): Fit | null {
-  const inline = Math.min(preferredPx, heightPx / LINE_EM, widthPx / inlineWidthEm(home, away, hasScore, hasCrests, clockChars))
-  if (inline >= MIN_FIT_FONT_PX) return { layout: 'inline', fontPx: inline }
+function fitHorizontal(widthPx: number, heightPx: number, preferredPx: number, home: string, away: string, hasScore: boolean, hasCrests: boolean, clockChars: number, odds: boolean): Fit | null {
+  const width = inlineWidthEm(home, away, hasScore, hasCrests, clockChars)
+  const inline = Math.min(preferredPx, heightPx / LINE_EM, widthPx / width)
+  if (odds && inline >= MIN_FIT_FONT_PX) {
+    const withOdds = Math.min(preferredPx, heightPx / ODDS_LINE_EM, widthPx / (width + oddsExtraWidthEm(hasScore)))
+    if (withOdds >= MIN_FIT_FONT_PX && withOdds >= inline * ODDS_MIN_SCALE) return { layout: 'inline', fontPx: withOdds, odds: true }
+  }
+  if (inline >= MIN_FIT_FONT_PX) return { layout: 'inline', fontPx: inline, odds: false }
   const stacked = Math.min(preferredPx, heightPx / STACKED_HEIGHT_EM, widthPx / stackedWidthEm(home, away, hasScore, hasCrests, clockChars))
-  if (stacked >= MIN_FIT_FONT_PX) return { layout: 'stacked', fontPx: stacked }
+  if (stacked >= MIN_FIT_FONT_PX) return { layout: 'stacked', fontPx: stacked, odds: false }
   return null
+}
+
+/** "X 1,73" under the "x" is wider than the "x" itself; under a score box it fits. */
+function oddsExtraWidthEm(hasScore: boolean) {
+  return hasScore ? 0 : 1.6
 }
 
 function roundFont(value: number) {
@@ -281,6 +297,8 @@ export function placeMatchLabel(options: {
   crests?: boolean
   /** Characters of the match clock box after the names ("2T 67:12"); 0 or absent when there is none. */
   clockChars?: number
+  /** The panel has 1X2 odds to show under the names. */
+  odds?: boolean
 }): MatchLabelPlacement {
   const panelWidth = Math.max(1, options.panelWidth)
   const panelHeight = Math.max(1, options.panelHeight)
@@ -288,6 +306,7 @@ export function placeMatchLabel(options: {
   const hasScore = Boolean(options.score)
   const hasCrests = Boolean(options.crests)
   const clockChars = Math.max(0, options.clockChars ?? 0)
+  const wantsOdds = Boolean(options.odds)
   const preferredPx = clamp(panelHeight * 0.05, MIN_FONT_PX, MAX_FONT_PX)
   const videoRect = options.videoRect ?? containRect(panelWidth, panelHeight, REFERENCE_ASPECT)
   const videoBottom = videoRect.y + videoRect.height
@@ -295,8 +314,8 @@ export function placeMatchLabel(options: {
   const topBarPx = videoRect.y * panelHeight
   const bottomBarPx = (1 - videoBottom) * panelHeight
 
-  const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore, hasCrests, clockChars) : null
-  const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore, hasCrests, clockChars) : null
+  const bottom = bottomBarPx > 0 ? fitHorizontal(barWidthPx, bottomBarPx, preferredPx, home, away, hasScore, hasCrests, clockChars, wantsOdds) : null
+  const top = topBarPx > 0 ? fitHorizontal(barWidthPx, topBarPx, preferredPx, home, away, hasScore, hasCrests, clockChars, wantsOdds) : null
   // A single line beats two rows of the same size; ties go to the bottom bar.
   const rank = (fit: Fit | null) => (fit ? fit.fontPx + (fit.layout === 'inline' ? 0.5 : 0) : -1)
   if (bottom && rank(bottom) >= rank(top)) {
@@ -305,6 +324,7 @@ export function placeMatchLabel(options: {
       layout: bottom.layout,
       box: { x: videoRect.x, y: videoBottom, width: videoRect.width, height: 1 - videoBottom },
       fontPx: roundFont(bottom.fontPx),
+      odds: bottom.odds,
     }
   }
   if (top) {
@@ -313,6 +333,7 @@ export function placeMatchLabel(options: {
       layout: top.layout,
       box: { x: videoRect.x, y: 0, width: videoRect.width, height: videoRect.y },
       fontPx: roundFont(top.fontPx),
+      odds: top.odds,
     }
   }
 
@@ -321,20 +342,31 @@ export function placeMatchLabel(options: {
   const maxWidthPx = Math.max(1, videoRect.width * panelWidth)
   const overlayPreferred = clamp(panelHeight * 0.06, MIN_FIT_FONT_PX, MAX_OVERLAY_FONT_PX)
   let layout: MatchLabelLayout = 'inline'
-  let fontPx = Math.min(overlayPreferred, maxWidthPx / inlineWidthEm(home, away, hasScore, hasCrests, clockChars))
+  const inlineWidth = inlineWidthEm(home, away, hasScore, hasCrests, clockChars)
+  let fontPx = Math.min(overlayPreferred, maxWidthPx / inlineWidth)
+  // Over the video the odds only add height: the names keep their size, unless "X 1,73" under an "x" needs a bit more width.
+  let odds = false
+  if (wantsOdds && fontPx >= Math.min(overlayPreferred, 12)) {
+    const withOdds = Math.min(overlayPreferred, maxWidthPx / (inlineWidth + oddsExtraWidthEm(hasScore)))
+    if (withOdds >= Math.min(overlayPreferred, 12) && withOdds >= fontPx * ODDS_MIN_SCALE) {
+      fontPx = withOdds
+      odds = true
+    }
+  }
   if (fontPx < Math.min(overlayPreferred, 12)) {
     layout = 'stacked'
     // Never below the minimum: very long names wrap inside their row instead of being cut.
     fontPx = Math.max(MIN_FIT_FONT_PX, Math.min(overlayPreferred, maxWidthPx / stackedWidthEm(home, away, hasScore, hasCrests, clockChars)))
   }
   // Extra height above the text is the gradient's fade-in.
-  const heightPx = (layout === 'inline' ? LINE_EM + OVERLAY_FADE_EM : STACKED_HEIGHT_EM + OVERLAY_FADE_EM) * fontPx
+  const heightPx = ((layout === 'stacked' ? STACKED_HEIGHT_EM : odds ? ODDS_LINE_EM : LINE_EM) + OVERLAY_FADE_EM) * fontPx
   const height = Math.max(0, Math.min(videoRect.height, heightPx / panelHeight))
   return {
     mode: 'overlay-bottom',
     layout,
     box: { x: videoRect.x, y: videoBottom - height, width: videoRect.width, height },
     fontPx: roundFont(fontPx),
+    odds,
   }
 }
 

@@ -66,7 +66,7 @@ npm run test:toolbar
 
 ### Decisão pendente do usuário
 
-- [ ] **Odds 1X2 na legenda do painel** (embaixo do nome de cada time, ligada por padrão, opção no menu ⋯). Foi feita pela sessão das abas Odds/Jogos sem ter sido pedida, por isso ficou fora da `main`: está no commit `5be341a` da branch `feat/info-drawer-odds-games`. Se o usuário quiser, trazer esse commit num PR próprio (vai conflitar com a `main` na gaveta; resolver mantendo as 5 abas).
+- [ ] **Odds 1X2 na legenda do painel** (embaixo do nome de cada time, ligada por padrão, opção "Ocultar/Mostrar odds na legenda" no menu ⋯). Foi feita pela sessão das abas Odds/Jogos sem ter sido pedida, por isso ficou fora da `main`; o usuário pediu o PR depois: [#51](https://github.com/bernardfrajblat365/multiview/pull/51) (CI verde, inclusive `test:app`). Antes de mergear, o usuário decide no Windows: a legenda com odds ocupa pouco espaço extra nos painéis pequenos, o atraso ⏱ segura as odds junto com o placar, e jogo da BLL com feed William Hill invertido e basquete (sem empate) mostram as odds certas. Depois do merge, marcar este item e apagar o commit `5be341a` das referências.
 
 ---
 

@@ -1,6 +1,6 @@
 # AGENTS.md — Quadra Multi-view (Single Source of Truth)
 
-Este arquivo é a **fonte única de verdade** para qualquer agente de IA que operar neste repositório. Antes de alterar código, leia este documento por completo e consulte a seção [6. Histórico de Tarefas, Decisões e Estado Atual](#6-histórico-de-tarefas-decisões-e-estado-atual).
+Este arquivo é a **fonte única de verdade** para qualquer agente de IA que operar neste repositório. Antes de alterar código, leia este documento por completo e consulte a seção [6. Histórico de Tarefas, Decisões e Estado Atual](#6-histórico-de-tarefas-decisões-e-estado-atual). **Antes de qualquer release, comece pela seção [0. Validação pendente no Windows](#0-validação-pendente-no-windows-antes-do-próximo-release-132).**
 
 Documentação humana complementar (não substitui este arquivo):
 
@@ -12,6 +12,61 @@ Documentação humana complementar (não substitui este arquivo):
 | `PLANO-FULLSCREEN.md` | Diagnóstico de barra de tarefas sobre controles em tela cheia |
 | `docs/disney-plus-drm.md` | Investigação Widevine/ECS/EVS e limites de evidência Disney+ |
 | `docs/historico-tarefas.md` | Entradas antigas da tabela da seção 6 (consultar só por área/arquivo, não ler tudo) |
+
+---
+
+## 0. Validação pendente no Windows antes do próximo release (1.3.2)
+
+**Leia isto primeiro.** As mudanças abaixo entraram na `main` em 2026-11-05, feitas e testadas em sessões na nuvem (Linux): passaram em `typecheck`, `npm test`, `build` e no CI Windows (`fast`, `app`, `toolbar`), mas **nada foi conferido no app de verdade, com jogo ao vivo, login BLL ou DRM**. Antes de abrir o PR de release (`release/1.3.2`), o agente deve passar por esta lista com o usuário no Windows, marcar cada item com `[x]` e a data quando o usuário confirmar, e anotar o que falhar (com o PR de correção). Depois do release, apague esta seção.
+
+Preparação: `npm ci`, `npm run dev` (ou `npm run dist` e instalar o `.exe` de `release/`), com a BLL logada.
+
+### Segurança: permissões e navegação do overlay ([#43](https://github.com/bernardfrajblat365/multiview/pull/43))
+
+- [ ] Jogo BLL real (Widevine) abre, toca e entra em tela cheia. As páginas agora só recebem `fullscreen`, `mediaKeySystem`, escrita no clipboard e storage-access (`electron/web-security.ts`).
+- [ ] Disney+ toca (só vale com o instalador com VMP de produção; ver `docs/disney-plus-drm.md`).
+- [ ] Live do YouTube toca, entra em tela cheia e não pede nenhuma permissão nova.
+- [ ] Arrastar um link ou arquivo para a janela não troca a interface do Quadra por outra página.
+- [ ] Se algum player parar de funcionar: ver no DevTools do painel qual permissão foi negada e incluí-la em `GRANTED_PERMISSIONS`, com teste em `tests/web-security.test.ts`.
+
+### Gaveta de informações: 5 abas ([#44](https://github.com/bernardfrajblat365/multiview/pull/44), [#47](https://github.com/bernardfrajblat365/multiview/pull/47), [#48](https://github.com/bernardfrajblat365/multiview/pull/48))
+
+- [ ] As 5 abas (Escalação, Tabela, Odds, Jogos, Estatísticas) cabem na fileira num painel pequeno e num destaque; a aba escolhida rola para a vista.
+- [ ] Estatísticas com jogo ao vivo do YouTube e de um painel BLL com radar William Hill (ordem dos times igual à do rótulo, inclusive com o feed invertido).
+- [ ] Odds ao vivo e antes do jogo (setas ▲/▼, "antes", palpite dos torcedores); basquete sem empate.
+- [ ] Jogos: confronto direto e forma dos dois times, com escudos.
+- [ ] Com a gaveta aberta, o painel passar a acompanhar outro jogo (ex.: WH achado no 365Scores) recarrega a gaveta com o jogo novo.
+
+### Alertas e vínculo com o 365Scores
+
+- [ ] VAR em jogo BLL com radar William Hill ([#49](https://github.com/bernardfrajblat365/multiview/pull/49)): selo azul "Revisão" durante o VAR e alerta da decisão, sem atraso ⏱; gols e cartões continuam vindo do WH, sem alerta repetido; "gol anulado" só solta o destaque do gol certo.
+- [ ] Alertas WH continuam chegando (gol, cartão, fim de jogo, relógio) depois da mudança dos scripts injetados para `electron/scoreboard-hook.ts` ([#46](https://github.com/bernardfrajblat365/multiview/pull/46)).
+- [ ] Live do YouTube com título "Time A - Time B" se liga ao jogo do 365Scores ([#45](https://github.com/bernardfrajblat365/multiview/pull/45)).
+- [ ] Gol anulado pelo VAR seguido de outro gol do mesmo time (365Scores): o nome de quem marcou vai para o gol novo ([#44](https://github.com/bernardfrajblat365/multiview/pull/44); ver linhas `nome do gol` no Monitor).
+
+### Ainda sem conferência, da 1.3.1 (ver tabela da seção 6)
+
+- [ ] Várias contas BLL com 2 logins reais (trocar de conta, Auto e alertas seguem).
+- [ ] Ícones novos dos controles do painel e da janelinha PIP.
+- [ ] Placar certo no alerta de gol da William Hill com um gol real.
+
+### Smokes no Windows (o CI já roda, mas vale rodar uma vez local antes do release)
+
+```bash
+npm run test:app
+```
+
+```bash
+npm run test:close
+```
+
+```bash
+npm run test:toolbar
+```
+
+### Decisão pendente do usuário
+
+- [ ] **Odds 1X2 na legenda do painel** (embaixo do nome de cada time, ligada por padrão, opção no menu ⋯). Foi feita pela sessão das abas Odds/Jogos sem ter sido pedida, por isso ficou fora da `main`: está no commit `5be341a` da branch `feat/info-drawer-odds-games`. Se o usuário quiser, trazer esse commit num PR próprio (vai conflitar com a `main` na gaveta; resolver mantendo as 5 abas).
 
 ---
 
@@ -305,6 +360,7 @@ Entradas antigas estão em `docs/historico-tarefas.md`. Só consulte esse arquiv
 
 | Data | Tarefa / Escopo | Status (Concluído / Parcial / Bloqueado) | Arquivos Principais Afetados | Detalhes & Decisões Tomadas | Próximos Passos |
 | :--- | :--- | :--- | :--- | :--- | :--- |
+| 2026-11-05 | Checklist de validação no Windows antes do release 1.3.2 (seção 0) | Concluído (só texto) | `AGENTS.md` | Pedido do usuário: oito PRs desta leva (#42–#49) foram feitos e mergeados por sessões na nuvem (Linux), com CI Windows verde mas sem teste no app real, com jogo ao vivo, login BLL ou DRM. A seção 0 lista o que conferir por PR, os smokes locais e a decisão pendente das odds na legenda (commit `5be341a`, fora da `main`). | Passar a seção 0 com o usuário no Windows antes do PR `release/1.3.2`; apagar a seção depois do release. |
 | 2026-11-05 | VAR do 365Scores nos painéis BLL com radar William Hill (o feed WH não tem VAR) | Concluído no código (typecheck, `npm test` 602/602 com o novo `tests/wh-var.test.ts`, `build`, `test:app` com o caso novo `whVarFrom365`, `test:renderer`, `test:evs`, `test:installer-verifier`, `test:startup`, rodados num container Linux; sem VAR real) | `src/wh-var.ts`, `electron/livescore-365.ts`, `electron/main.ts`, `electron/preload.ts`, `src/electron.d.ts`, `src/alert-ui.ts`, `src/main.ts`, `tests/wh-var.test.ts`, `tests/app-integration.cjs`, `package.json`, `src/release-notes.ts`, `AGENTS.md` | Pedido do usuário. Investigação: o host `score.kwddw.com` é bloqueado pela política de rede do container (CONNECT 403), então o `scoreboard.js` não foi relido; vale o registrado: o hook só vê `commentaries`/`animations`/`penalties`/`statistics`, os períodos do WH (`NOT_STARTED`…`GAME_FINISHED`) e os lances lidos (`GOAL`, `PENALTY`, cartões, `STOP_1_ST_HALF`/`HALF_TIME`, `END_OF_MATCH`) não têm VAR, e a linha de 22/10 já dizia "Feed não tem VAR"; nenhum código ou fixture do repo menciona tipo de VAR do WH. Por isso o VAR vem do 365Scores: o `onGame` dos escudos (`findLinkedGame`, só vínculo claro, com `reversed`) agora chama `liveScores.watchVar(panelId, gameId, reversed)` (e `unwatchVar` quando o jogo some). O poller do 365Scores ganhou `varPanels` ao lado de `panelIds`: o mesmo poller (detalhe, game center, narração) serve os dois, mas os painéis WH recebem só `kind === 'var'` (`varOnly`) e o `quadra:live-var`, com lado/placar virados quando a ordem do feed é inversa (`flipSide`/`flipScore`/`orientReview`); placar, relógio, status, fim, artilheiro, gols, cartões e pênalti marcado da narração não vão para eles. Sem `quadra:live-match`, então o painel continua WH: alertas imediatos, sem ⏱. VAR "gol anulado": o main guarda os gols WH de cada painel (`recordWhGoal`) e só deixa soltar o auto-destaque se o gol anulado é do mesmo time, a até 3 min de jogo e 10 min de relógio de um gol WH (`cancelsWhGoal`); senão manda `keepHighlight: true` (campo opcional novo no `MatchEventPayload`), e a UI mostra o alerta sem soltar o destaque. Nota na nova entrada `1.3.2`. `test:app`: evento WH 7401 "Sport Recife x Ceará" ligado ao jogo 365Scores 9301 "Ceará x Sport Recife" (ordem inversa): gol WH, selo "Revisão: gol · 52' Gabriel Silva", alerta "VAR · Sport Recife · 52' (gol anulado) · 1 - 0" (placar na ordem do feed), sem o vermelho que o 365Scores manda no mesmo jogo e sem ⏱; com o filtro só-VAR desligado de propósito o teste falha (vermelho chega), então a checagem pega a regressão. A gravação dos alertas usa `MutationObserver`: depois de minutos em segundo plano o Chromium segura `setInterval` do overlay. Smokes no Linux (só para quem rodar de novo num container): `npm ci --ignore-scripts` e depois `node node_modules/electron/install.js` (baixa o ECS v44.1.0 para Linux); link local `electron.exe` → `electron` em `node_modules/electron/dist`; `xvfb-run` com `ELECTRON_DISABLE_SANDBOX=1`; e um `--require` em `NODE_OPTIONS` que troca `dialog.showErrorBox` por log, porque sem Widevine (CDM não baixa) a caixa nativa bloqueia a abertura. Mesmo assim, `test:close` (processo não sai no Linux e a limpeza usa `taskkill`) e `test:toolbar` (Xvfb sem gerenciador de janelas não aplica `setContentSize`, "16:9 window before labels") falham igual na `main`; `test:ecs` exige Windows. | Conferir ao vivo num jogo BLL com radar WH e VAR: linha "painel William Hill ligado a … só para o VAR" e "· só VAR (painel William Hill)" no Monitor, selo azul e destaque, e o gol anulado soltando o destaque certo. CI do Windows roda `test:close` e `test:toolbar`. |
 | 2026-11-05 | Abas "Odds" e "Jogos" na gaveta de informações do jogo, ao lado de Escalação e Tabela | Concluído no código (typecheck, `npm test` 602/602 com os parsers novos em `tests/match-info.test.ts`, `build`; parsers conferidos com respostas reais de 05/11 (São Paulo x Corinthians ao vivo, Viking x Sabah, jogo sem odds, basquete encerrado); gaveta renderizada no Chromium com os dados reais em 960/380/260 px; sem `test:app`/smokes Electron (container Linux) nem teste no app) | `src/match-info.ts`, `src/info-drawer.ts`, `electron/match-info.ts`, `electron/main.ts`, `src/style.css`, `src/release-notes.ts`, `tests/match-info.test.ts`, README, `AGENTS.md` | Pedido do usuário. Lido na API real em 05/11: o `/web/game/` só traz o 1X2 (`bestOdds`) e os ids dos jogos recentes; o resto vem de `/web/bets/lines/?games=<id>` (todas as linhas, `ttl` 30, só a casa 365Scores com `userCountryId=21`; jogo sem odds responde só `lastUpdateId`/`ttl`) e de `/web/games/h2h/?gameId=<id>` (`h2hGames` até 15 e `recentGames` por time, com `winner` 1/2/-1 e `outcome` do time). **Odds:** resultado (tipo 1, ou 33 "Vencedor" no basquete), chance dupla (14), ambos marcam (12), empate anula (15) e o total (3 / 34 no basquete) na linha com as duas odds mais próximas; títulos como a API escreve; "1"/"2"/"Casa"/"Fora" viram os nomes dos times; `trend` 3/1/2 = ▲/▼/igual; `prematchRate` mostrado como "antes" quando difere. Linha decidida sai: `isConcluded` **ou** opção `isWon` (ao vivo o "Mais que 0.5" vem ganho sem `isConcluded` e seria a linha "mais equilibrada"). Handicap, placar exato, escanteios, cartões e chutes ficaram de fora (pedido era "simples"). Mais o "Quem vai ganhar?" dos torcedores (`promotedPredictions` tipo 1 do `/web/game/`, já em cache). Cache 30 s; a gaveta relê a cada 60 s com o jogo ao vivo. **Jogos:** confronto direto (vitórias/empates nos jogos encerrados que a API traz e os 5 mais novos) e, com os botões de time, forma (V/E/D dos 5) e os 6 últimos jogos com data, C/F, escudo do adversário (canal `quadra:table-crests`) e placar; vencedor pelo `winner` (pênaltis). Cache 10 min. `GamesInfo` vira na ordem do feed (`reverseGamesInfo`) quando o vínculo WH está invertido. Validação da aba no main por `isInfoTabId`. As 4 abas ficam mais justas em gaveta < 20rem. Nota na nova entrada `1.3.2`. Ajuste visual pedido pelo usuário depois das capturas: sem cartões; odds em linhas com as mesmas colunas em todos os mercados (nome, odd, seta, "antes"), e o confronto direto na mesma barra dividida dos votos dos torcedores (`splitBarHtml`); cada bloco numa `<section>` para os espaços entre blocos serem iguais; espaço do escudo vazio some (`:empty`). | Conferir no app (YouTube e BLL com WH, jogo ao vivo e pré-jogo, painel pequeno); ver se o 365Scores mostra outra casa de apostas fora do Brasil. |
 | 2026-11-05 | Aba "Estatísticas" na gaveta de informações do jogo (365Scores) | Concluído no código (typecheck, `npm test` 598/598 com os casos novos de `parseMatchStats`, `build`; gaveta renderizada no Chromium com a resposta real de São Paulo x Corinthians em 340 e 240 px; sem `test:app`/`test:renderer` (Windows) nem conferência no app) | `src/match-info.ts`, `electron/match-info.ts`, `electron/main.ts`, `src/info-drawer.ts`, `src/style.css`, `tests/match-info.test.ts`, `src/release-notes.ts`, README, `AGENTS.md` | Pedido do usuário. Lido na API real em 05/11: o `/web/game/` não traz estatísticas (só `hasStats`); o site usa `/web/game/stats/?games=<id>` (mesmos parâmetros comuns; `?gameId=` dá 500), com `statistics` (uma linha por estatística **e por time**: `id`, `name`, `competitorId`, `value` em texto — "53%", "1.72", "10/29 (34%)" —, `valuePercentage` para a barra, `markedTeam` 1/2 = time em vantagem, inclusive "menos é melhor" em faltas/cartões, `isTop`, `order`, `categoryName`/`categoryOrder`) e `games[0]` com mandante/visitante. Jogo grande: 44 estatísticas; liga pequena: ~12, sem categorias; jogo não começado: resposta só com `ttl`. `parseMatchStats` junta os dois lados por `id`, ignora `filterId` de tempo, decimal com vírgula, fatias normalizadas, "Principais" + categorias + "Geral" no fim, e inverte com `reversed` (feed William Hill). Cache de 30 s por jogo (a API diz `ttl` 10), buscado só quando a aba abre; a releitura de 60 s com a gaveta aberta e jogo ao vivo é a mesma das outras abas. **Atraso ⏱: não segue** — a gaveta só mostra o agora (não guarda histórico para atrasar, e polling contínuo para isso foi descartado), como a escalação (que já mostra gols/cartões) e a tabela; a nota "Ao vivo, sem o atraso ⏱ do painel" avisa. Painel só com a escalação WH responde `none`. Mudanças aditivas por causa da branch paralela `feat/info-drawer-odds-games` (entrada em `INFO_TABS`/`InfoTabId`, `case 'stats'`, funções e bloco CSS novos no fim do `style.css`); único toque em código existente: `selectTab` rola a aba escolhida para a vista (em gaveta estreita ela ficava cortada). Nota na nova entrada `1.3.2` de `RELEASES`. | Conferir no app com jogo ao vivo (YouTube e BLL com WH invertido) e a fileira de abas com Odds/Jogos juntas; avaliar se "Geral"/estatísticas zeradas de ligas pequenas poluem. |

@@ -1133,3 +1133,18 @@ test('scorerUpdates: jogo sem lista de eventos (events undefined) não dá nome'
   assert.equal(alerts[0].id, '365:777:score:home:1')
   assert.deepEqual(scorerUpdates(state, noEvents({ home: homeScore(1) }), NOW + 1000), [])
 })
+
+test('scorerUpdates: gol anulado não rouba o nome do gol seguinte do mesmo time', () => {
+  const state = createLiveState()
+  assert.deepEqual(diffDetail(state, detail({ events: [] }), NOW), [])
+  // 1º gol do mandante, ainda sem jogador.
+  const first = diffDetail(state, detail({ events: [{ ...event(1, 1, 0, 10, 20), playerId: 9 }], home: homeScore(1), players: new Map() }), NOW)
+  assert.equal(first[0].id, '365:777:1:1')
+  // VAR: o gol sai do placar e da lista de eventos.
+  diffDetail(state, detail({ events: [], home: homeScore(0) }), NOW + 60_000)
+  // Novo gol do mandante, também sem jogador no começo.
+  const second = diffDetail(state, detail({ events: [{ ...event(5, 1, 0, 10, 24), playerId: 7 }], home: homeScore(1), players: new Map() }), NOW + 120_000)
+  assert.equal(second[0].id, '365:777:5:1')
+  const named = detail({ events: [{ ...event(5, 1, 0, 10, 24), playerId: 7 }], home: homeScore(1), players: new Map([[7, 'Pedro']]) })
+  assert.deepEqual(scorerUpdates(state, named, NOW + 125_000), [{ incidentId: '365:777:5:1', player: 'Pedro' }])
+})

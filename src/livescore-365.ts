@@ -790,6 +790,8 @@ export function diffDetail(state: LiveState, detail: Detail365, now = Date.now()
       const before = team === 'home' ? state.home : state.away
       if (score < before) {
         state.alertedGoals[team] = Math.min(state.alertedGoals[team], score)
+        // The goals taken off stop waiting for a name, or the next goal of that side would hand its name to them.
+        state.unnamedGoals = state.unnamedGoals.filter((goal) => goal.team !== team || goal.nth <= score)
         // A goal taken back off the board is the VAR (or a data fix); with events, their "goal disallowed" says it.
         if (!detail.events) push('var', team, `score:${team}:${before}-${score}`, 'gol anulado')
       }

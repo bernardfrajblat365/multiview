@@ -19,6 +19,7 @@ import {
   type OrganizerChoice,
   type OrganizerDraft,
 } from './organizer'
+import { ghostOut, initMotion, markResizing, oneShot } from './motion'
 
 type View = 'choose' | 'grid'
 type Panel = { id: PanelId; url: string; draftUrl: string; muted: boolean }
@@ -33,6 +34,7 @@ type LayoutSnapshot = {
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
+initMotion()
 const APP_VERSION = `v${version}`
 const MIN_PANELS = 1
 const MAX_PANELS = 16
@@ -63,6 +65,7 @@ let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let weddbetsTargetId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
+let lastRenderedView: View | null = null
 
 function createPanel(): Panel {
   return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted() }
@@ -250,6 +253,8 @@ function removePanel(id: PanelId) {
 
 function setEditor(open: boolean) {
   captureDrafts()
+  const wasOpen = editorOpen
+  if (wasOpen && !open) ghostOut(app.querySelector('.organize-panel'), 'organize-panel', 'motion-ghost--organize', 120)
   editorOpen = open
 
   if (open) {
@@ -263,6 +268,7 @@ function setEditor(open: boolean) {
   }
 
   renderGrid()
+  if (open && !wasOpen) oneShot(app.querySelector('.organize-panel'), 'is-entering')
   app.querySelector<HTMLButtonElement>(open ? '[data-composition]' : '#btn-organize')?.focus()
 }
 
@@ -709,6 +715,7 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
     </div>`
     const finish = (value: boolean) => {
       document.removeEventListener('keydown', onKey)
+      ghostOut(backdrop, 'confirm', 'motion-ghost--confirm', 120)
       backdrop.remove()
       resolve(value)
     }
@@ -720,6 +727,7 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
     backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish(false) })
     document.addEventListener('keydown', onKey)
     document.body.appendChild(backdrop)
+    oneShot(backdrop, 'is-entering')
     backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
   })
 }
@@ -845,9 +853,18 @@ function bindMoreMenu() {
   const panel = app.querySelector<HTMLElement>('#toolbar-more-menu')
   if (!menu || !trigger || !panel) return
   const setOpen = (open: boolean) => {
+    const wasOpen = !panel.hidden
     menu.classList.toggle('is-open', open)
     trigger.setAttribute('aria-expanded', String(open))
     panel.hidden = !open
+    if (open === wasOpen) return
+    if (open) {
+      panel.classList.remove('is-leaving')
+      oneShot(panel, 'is-entering')
+    } else {
+      panel.classList.remove('is-entering')
+      oneShot(panel, 'is-leaving')
+    }
   }
   trigger.addEventListener('click', (event) => { event.stopPropagation(); setOpen(panel.hasAttribute('hidden')) }, { signal })
   app.querySelector('#btn-equal')?.addEventListener('click', () => { makeEqual(); setOpen(false) }, { signal })
@@ -882,21 +899,26 @@ function bindUpdateCheck(): void {
   const button = app.querySelector<HTMLButtonElement>('#btn-check-updates')
   const status = app.querySelector<HTMLElement>('#update-status')
   if (!button || !status) return
+  const setStatus = (text: string) => {
+    if (status.textContent === text) return
+    status.textContent = text
+    oneShot(status, 'is-updating')
+  }
 
   button.addEventListener('click', () => {
     if (button.disabled) return
     const check = window.quadra?.checkForUpdate
     if (!check) {
-      status.textContent = updateCheckMessage('disabled')
+      setStatus(updateCheckMessage('disabled'))
       return
     }
 
     button.disabled = true
     button.setAttribute('aria-busy', 'true')
-    status.textContent = 'Consultando atualizações...'
+    setStatus('Consultando atualizações...')
     void check()
-      .then((result) => { status.textContent = updateCheckMessage(result) })
-      .catch(() => { status.textContent = updateCheckMessage('error') })
+      .then((result) => { setStatus(updateCheckMessage(result)) })
+      .catch(() => { setStatus(updateCheckMessage('error')) })
       .finally(() => {
         button.disabled = false
         button.removeAttribute('aria-busy')
@@ -920,12 +942,14 @@ function renderChoose() {
   window.quadra?.setBllsportTarget(null)
   document.body.classList.remove('is-grid')
   setChromeInteractive(true)
-  app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
+  const entering = view === 'choose' && lastRenderedView !== 'choose'
+  lastRenderedView = 'choose'
+  app.innerHTML = `<main class="chooser${entering ? ' is-entering' : ''}"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a 16 jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><span>Adicione outras telas quando quiser.</span><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><span>Adicione outras telas quando quiser.</span><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status"><span class="btn__spinner" aria-hidden="true"></span>Verificar atualizações</button><span id="update-status" role="status" aria-live="polite"></span></div>
     <div class="chooser__options" role="group" aria-label="Número de telas">
-      ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
+      ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}" style="--i:${count - 1}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
     </div>
   </div></main>`
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
@@ -1066,6 +1090,7 @@ function renderGrid() {
   toolbarAbort = null
   toolbarResizeObserver?.disconnect()
   document.body.classList.add('is-grid')
+  lastRenderedView = 'grid'
   const canUndo = history.length > 0
   app.innerHTML = `<div class="grid-shell is-toolbar-visible${editorOpen ? ' is-editor-open' : ''}">
     <div class="toolbar" role="toolbar" aria-label="Controles">
@@ -1133,6 +1158,7 @@ function render() {
 
 window.quadra?.onRequestLayout(() => scheduleSyncLayout())
 window.quadra?.onFullscreenChange((on) => {
+  markResizing()
   nativeFullscreen = on
   updateFullscreenButton()
   scheduleSyncLayout()
@@ -1155,6 +1181,7 @@ document.addEventListener('keydown', (event) => {
   setEditor(false)
 })
 window.addEventListener('resize', () => {
+  markResizing()
   if (view !== 'grid') {
     scheduleSyncLayout()
     return

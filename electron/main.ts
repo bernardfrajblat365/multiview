@@ -533,6 +533,12 @@ function applyLayout(payload: LayoutPayload) {
   raiseOverlay()
 }
 
+function withQuery(url: string, query: Record<string, string>) {
+  const target = new URL(url)
+  for (const [key, value] of Object.entries(query)) target.searchParams.set(key, value)
+  return target.toString()
+}
+
 function createOverlay() {
   if (!mainWindow) return
   overlayWindow = new BrowserWindow({
@@ -569,9 +575,11 @@ function createOverlay() {
     scheduleFullscreenPrioritySync()
     overlayWindow?.webContents.send('quadra:request-layout')
   })
+  // QUADRA_MOTION=off turns every UI animation into an instant cut (visual tests).
+  const motionQuery: Record<string, string> = process.env.QUADRA_MOTION === 'off' ? { motion: 'off' } : {}
   const load = isDev
-    ? overlayWindow.webContents.loadURL(process.env.ELECTRON_RENDERER_URL!)
-    : overlayWindow.webContents.loadFile(join(__dirname, '../renderer/index.html'))
+    ? overlayWindow.webContents.loadURL(withQuery(process.env.ELECTRON_RENDERER_URL!, motionQuery))
+    : overlayWindow.webContents.loadFile(join(__dirname, '../renderer/index.html'), { query: motionQuery })
   void load.catch(() => {})
 }
 

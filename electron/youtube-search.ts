@@ -4,6 +4,7 @@ import { readFile } from 'node:fs/promises'
 import { dirname, join, resolve } from 'node:path'
 import {
   chooseYoutubeApiKey,
+  finishedVideoIds,
   isValidYoutubeApiKey,
   isYoutubeChannelId,
   MAX_YOUTUBE_CHANNELS,
@@ -29,6 +30,12 @@ const PARALLEL_REQUESTS = 8
 const CACHE_MS = 60000
 let cached: { at: number; key: string; result: YoutubeLivesResult } | null = null
 let pending: { key: string; promise: Promise<YoutubeLivesResult> } | null = null
+/**
+ * Uploads already seen that can never go live (clips, replays, ended lives): not checked again, so a repeated read
+ * (Auto mode reads every few minutes) costs about 1 unit per channel instead of 2. Memory only, capped.
+ */
+const finishedVideos = new Set<string>()
+const MAX_FINISHED_VIDEOS = 20000
 
 class ApiError extends Error {
   readonly status: Exclude<YoutubeApiError, 'no-key'>
@@ -117,13 +124,15 @@ async function searchChannels(channelIds: readonly string[]): Promise<YoutubeLiv
     const uploads = await mapLimited(channelIds, PARALLEL_REQUESTS, async (channelId) => parsePlaylistVideoIds(
       await callApi('playlistItems', { part: 'contentDetails', playlistId: uploadsPlaylistId(channelId), maxResults: UPLOADS_PER_CHANNEL }, auth.key),
     ))
-    const videoIds = [...new Set(uploads.flat())]
+    const videoIds = [...new Set(uploads.flat())].filter((id) => !finishedVideos.has(id))
     const chunks = Array.from({ length: Math.ceil(videoIds.length / 50) }, (_, index) => videoIds.slice(index * 50, index * 50 + 50))
     const pages = await mapLimited(chunks, PARALLEL_REQUESTS, (ids) => callApi('videos', { part: 'snippet,liveStreamingDetails', id: ids.join(','), maxResults: '50' }, auth.key))
     const items = pages.flatMap((page) => {
       const pageItems = page && typeof page === 'object' ? (page as { items?: unknown }).items : null
       return Array.isArray(pageItems) ? pageItems : []
     })
+    if (finishedVideos.size > MAX_FINISHED_VIDEOS) finishedVideos.clear()
+    for (const id of finishedVideoIds({ items })) finishedVideos.add(id)
     return { status: 'ok', events: parseLiveVideos({ items }) }
   } catch (error) {
     return { status: error instanceof ApiError ? error.status : 'unavailable' }

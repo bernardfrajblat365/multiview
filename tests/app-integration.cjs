@@ -157,6 +157,8 @@ async function run() {
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-app-integration-'))
   const youtubeTestKey = `AIza${'T'.repeat(35)}`
   const youtubeQueries = []
+  // Slow answers for the BLL list and the YouTube lives, so the skeleton screens of the first Auto search can be seen.
+  const fixtureDelayMs = { bll: 0, youtube: 0 }
   let detailRequests = 0
   let gameCenterRequests = 0
   // Ceará x Sport Recife (365Scores 9301) is William Hill event 7401 ("Sport Recife x Ceará"): the panel borrows only its VAR.
@@ -177,6 +179,12 @@ async function run() {
   let bllEndListLoads = 0
   const port = 46000 + Math.floor(Math.random() * 1000)
   const server = http.createServer((request, response) => {
+    const slow = request.url?.startsWith('/bll/') ? fixtureDelayMs.bll : request.url?.startsWith('/youtube/') ? fixtureDelayMs.youtube : 0
+    if (slow > 0 && !request.quadraDelayed) {
+      request.quadraDelayed = true
+      setTimeout(() => server.emit('request', request, response), slow)
+      return
+    }
     if (request.url?.startsWith('/bll/')) {
       // Once its player opens, "game-bllend" is listed live on the next home load, then under "Encerrados".
       const bllEnd = bllEndOpened ? (bllEndListLoads++ === 0 ? 3 : 4) : 0
@@ -449,7 +457,7 @@ async function run() {
     env: {
       ...childEnv, QUADRA_TEST_USER_DATA: userData, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_365SCORES_URL: baseUrl, QUADRA_365SCORES_IMAGE_URL: baseUrl,
       QUADRA_YOUTUBE_API_URL: `${baseUrl}/youtube`, QUADRA_YOUTUBE_WATCH_ORIGIN: baseUrl, QUADRA_YOUTUBE_API_KEY: youtubeTestKey,
-      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`, QUADRA_BLL_END_POLL_MS: '1500', QUADRA_AUTO_OPEN_POLL_MS: '1500',
+      QUADRA_SCOREBOARD_URL: `${baseUrl}/scoreboard/index.html`, QUADRA_BLL_END_POLL_MS: '1500', QUADRA_AUTO_OPEN_POLL_MS: '1500', QUADRA_AUTO_OPEN_YOUTUBE_POLL_MS: '1500',
     },
   })
   try {
@@ -1196,6 +1204,8 @@ async function run() {
     while (Date.now() < catalogClosedDeadline &&
       (await fetchJson(`http://127.0.0.1:${port}/json`)).some((candidate) => candidate.id === bllCatalog.id)) await wait(100)
     // Auto mode from the start screen: games live in a listed competition open on their own; a game the user closes stays closed.
+    // While the first read runs, the dialog closes and 4 skeleton screens show the search; the 2 games take two of them.
+    fixtureDelayMs.bll = 2500
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-auto-open').click()`)
     await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-add-competition]'))`)
     await evaluate(target.webSocketDebuggerUrl, `(() => {
@@ -1204,10 +1214,18 @@ async function run() {
       form.dispatchEvent(new Event('submit', { bubbles: true, cancelable: true }))
       document.querySelector('.auto-open [data-auto-open-toggle]').click()
     })()`)
-    await waitForExpression(target, `Boolean(document.querySelector('.grid--2'))`, 20000)
+    await waitForExpression(target, `!document.querySelector('.auto-open') && document.querySelectorAll('.grid--4 .panel--searching').length === 4 &&
+      document.querySelector('.panel--searching .panel__slot')?.textContent === 'Procurando jogos ao vivo…' &&
+      document.querySelector('.panel--searching .panel__searching')?.getAttribute('aria-busy') === 'true'`, 3000)
+    await waitForExpression(target, `Boolean(document.querySelector('.grid--2')) && !document.querySelector('.panel--searching')`, 20000)
+    fixtureDelayMs.bll = 0
     assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
       `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => new URL(input.value).pathname)`),
     ['/view/game-c', '/view/game-d'], 'O modo Auto abre só os jogos ao vivo da competição da lista (sem o previsto nem o de basquete).')
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] [data-mute]').getAttribute('aria-pressed')`), 'true',
+      'Um jogo que o modo Auto abre com outro já na tela entra mudo.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-auto-open-status]'))`)
     assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-status]').textContent`), /^Ligado · lista lida às \d\d:\d\d · 2 jogos abertos pelo modo Auto/)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-cancel]').click()`)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').classList.contains('is-auto-open')`), true)
@@ -1219,6 +1237,76 @@ async function run() {
     await waitForExpression(target, `document.querySelector('.auto-open [data-auto-open-toggle]')?.textContent === 'Desligar modo Auto'`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-toggle]').click(); document.querySelector('.auto-open [data-cancel]').click()`)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').classList.contains('is-auto-open')`), false)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-layout').click(); document.querySelector('.confirm [data-ok]').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.chooser'))`)
+
+    // Grid with an empty screen and nothing live in the lists: the skeleton says so, then turns back into a normal empty screen.
+    // "Começar com uma tela" keeps the first panel of the last grid (with its game): clear it for an empty screen.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-one').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 1`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').click(); document.querySelector('#btn-clear-all').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel--empty').length === 1`)
+    fixtureDelayMs.bll = 1500
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-custom-competition="0"]'))`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const select = document.querySelector('.auto-open [data-custom-competition="0"]')
+      select.value = 'off'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      document.querySelector('.auto-open [data-auto-open-toggle]').click()
+    })()`)
+    await waitForExpression(target, `!document.querySelector('.auto-open') && document.querySelectorAll('.panel--searching:not(.is-searching-done)').length === 1`, 3000)
+    await waitForExpression(target, `document.querySelector('.panel--searching.is-searching-done .panel__slot')?.textContent === 'Nenhum jogo ao vivo agora · o Auto segue procurando'`, 15000)
+    await waitForExpression(target, `!document.querySelector('.panel--searching') && document.querySelectorAll('.panel').length === 1 && Boolean(document.querySelector('.panel--empty input[name="url"]'))`, 10000)
+    // Turning Auto mode off during the search takes the skeletons away at once.
+    fixtureDelayMs.bll = 5000
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)
+    await waitForExpression(target, `document.querySelector('.auto-open [data-auto-open-toggle]')?.textContent === 'Desligar modo Auto'`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-toggle]').click(); document.querySelector('.auto-open [data-auto-open-toggle]').click()`)
+    await waitForExpression(target, `!document.querySelector('.auto-open') && document.querySelectorAll('.panel--searching').length === 1`, 3000)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-custom-competition="0"]'))`)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.auto-open [data-auto-open-toggle]').click()
+      return !document.querySelector('.panel--searching') && Boolean(document.querySelector('.panel--empty input[name="url"]'))
+    })()`), true, 'Desligar o modo Auto durante a busca tira as telas-esqueleto na hora.')
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      const select = document.querySelector('.auto-open [data-custom-competition="0"]')
+      select.value = 'all'
+      select.dispatchEvent(new Event('change', { bubbles: true }))
+      document.querySelector('.auto-open [data-cancel]').click()
+    })()`)
+    fixtureDelayMs.bll = 0
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-layout').click(); document.querySelector('.confirm [data-ok]')?.click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.chooser'))`)
+
+    // Auto mode on YouTube only: the live of a listed competition (Copa do Brasil) opens; the one outside the lists doesn't.
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-auto-open').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-source="youtube"]'))`)
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      for (const [source, on] of [['bll', false], ['youtube', true]]) {
+        const box = document.querySelector('.auto-open [data-source="' + source + '"]')
+        if (box.checked !== on) box.click()
+      }
+      document.querySelector('.auto-open [data-auto-open-toggle]').click()
+    })()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.grid--1')) && !document.querySelector('.panel--searching')`, 20000)
+    assert.deepEqual(await evaluate(target.webSocketDebuggerUrl, `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => input.value)`),
+      ['https://www.youtube.com/watch?v=ytLiveAAAA1'], 'O modo Auto do YouTube abre só a live da competição da lista.')
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)
+    await waitForExpression(target, `Boolean(document.querySelector('.auto-open [data-auto-open-status]'))`)
+    assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-status]').textContent`),
+      /^Ligado · YouTube lido às \d\d:\d\d · 1 jogo aberto pelo modo Auto/)
+    await wait(3500)
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelectorAll('.panel').length`), 1, 'A mesma live não abre de novo nas leituras seguintes.')
+    await evaluate(target.webSocketDebuggerUrl, `(() => {
+      document.querySelector('.auto-open [data-auto-open-toggle]').click()
+      for (const [source, on] of [['bll', true], ['youtube', false]]) {
+        const box = document.querySelector('.auto-open [data-source="' + source + '"]')
+        if (box.checked !== on) box.click()
+      }
+      document.querySelector('.auto-open [data-cancel]').click()
+    })()`)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-layout').click(); document.querySelector('.confirm [data-ok]').click()`)
     await waitForExpression(target, `Boolean(document.querySelector('.chooser'))`)
 

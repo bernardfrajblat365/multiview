@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
+  finishedVideoIds,
   DEFAULT_YOUTUBE_CHANNELS,
   MAX_YOUTUBE_CHANNELS,
   chooseYoutubeApiKey,
@@ -752,4 +753,10 @@ test('youtubeErrorStatus devolve unavailable para erro de servidor sem motivo co
 test('youtubeErrorStatus dá prioridade a quota sobre outros motivos', () => {
   const raw = { error: { errors: [{ reason: 'keyInvalid' }, { reason: 'quotaExceeded' }] } }
   assert.equal(youtubeErrorStatus(403, raw), 'quota')
+})
+
+test('finishedVideoIds keeps only videos that can never go live', () => {
+  const item = (id: string, liveBroadcastContent: string) => ({ id, snippet: { liveBroadcastContent } })
+  assert.deepEqual(finishedVideoIds({ items: [item('aaaaaaaaaa1', 'none'), item('aaaaaaaaaa2', 'live'), item('aaaaaaaaaa3', 'upcoming'), item('bad id', 'none'), { id: 'aaaaaaaaaa4' }] }), ['aaaaaaaaaa1'])
+  assert.deepEqual(finishedVideoIds(null), [])
 })

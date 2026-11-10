@@ -1,6 +1,6 @@
 import type { BllEvent } from './bll-batch.ts'
 import { teamQualifiers, teamTokens } from './livescore-365.ts'
-import { splitMatchTeams } from './match-label.ts'
+import { extractMatchLabel, splitMatchTeams } from './match-label.ts'
 
 /** What Auto mode opens from a competition: every game, only games of a main team, or nothing. */
 export type CompetitionMode = 'all' | 'teams' | 'off'
@@ -16,7 +16,10 @@ export type CompetitionRule = {
   alone?: readonly string[]
 }
 export type CustomCompetition = { name: string; mode: CompetitionMode }
+/** Where Auto mode looks for games: the BLL list, the lives of the YouTube channel list, or both. */
+export type AutoOpenSources = { bll: boolean; youtube: boolean }
 export type AutoOpenSettings = {
+  sources: AutoOpenSources
   competitions: Record<string, CompetitionMode>
   custom: CustomCompetition[]
   /** Main teams, each "Name / alias / alias". */
@@ -89,6 +92,7 @@ export const DEFAULT_TEAMS: readonly string[] = [
 
 export function defaultAutoOpenSettings(): AutoOpenSettings {
   return {
+    sources: { bll: true, youtube: false },
     competitions: Object.fromEntries(COMPETITIONS.map((rule) => [rule.id, TEAMS_ONLY.has(rule.id) ? 'teams' : 'all'])),
     custom: [],
     teams: [...DEFAULT_TEAMS],
@@ -137,6 +141,12 @@ export function parseAutoOpenSettings(raw: string | null): AutoOpenSettings {
       }).slice(0, MAX_TEAMS)
     }
     if (typeof parsed?.teamsAnywhere === 'boolean') next.teamsAnywhere = parsed.teamsAnywhere
+    const sources = parsed?.sources
+    if (sources && typeof sources === 'object') {
+      const { bll, youtube } = sources as Partial<Record<keyof AutoOpenSources, unknown>>
+      if (typeof bll === 'boolean') next.sources.bll = bll
+      if (typeof youtube === 'boolean') next.sources.youtube = youtube
+    }
   } catch {
     /* corrupt value: defaults */
   }
@@ -238,6 +248,73 @@ export function autoOpenDecision(event: Pick<BllEvent, 'name' | 'competition' | 
   return { open: listed || anywhere, mainTeam }
 }
 
+/** Competition labels of YouTube titles (`detectCompetition`) that are listed competitions. */
+const YOUTUBE_COMPETITION_RULES: Record<string, string> = {
+  'Brasileirão': 'brasileirao',
+  'Copa do Brasil': 'copa-do-brasil',
+  'Champions League': 'champions-league',
+  'Europa League': 'europa-league',
+  'Conference League': 'conference-league',
+  'Premier League': 'premier-league',
+  'La Liga': 'laliga',
+  'Ligue 1': 'ligue-1',
+  'Bundesliga': 'bundesliga',
+}
+const YOUTUBE_OTHER_SPORTS = new Set(['NFL', 'NBA'])
+
+/** Whole words of `name` inside `text` ("Libertadores" in "Flamengo x Racing | Libertadores 2026"). */
+function hasWords(text: string, name: string) {
+  const words = plainWords(name)
+  return words.length > 0 && ` ${plainWords(text)} `.includes(` ${words} `)
+}
+
+/**
+ * Whether Auto mode opens this YouTube live, and if a main team plays in it. `competition` is the label found in the
+ * title (or the channel name); an added competition also counts when its name is in the title. Only football, men's first teams.
+ */
+export function youtubeAutoOpenDecision(live: { name: string; competition: string }, settings: AutoOpenSettings): { open: boolean; mainTeam: string | null } {
+  if (YOUTUBE_OTHER_SPORTS.has(live.competition)) return { open: false, mainTeam: null }
+  const mainTeam = mainTeamOf(extractMatchLabel(live.name) ?? live.name, settings.teams)
+  const ruleId = YOUTUBE_COMPETITION_RULES[live.competition]
+  const notMainSide = NOT_MAIN_SIDE.test(live.name) || NOT_MAIN_SIDE.test(live.competition)
+  const custom = settings.custom.find((item) => (compact(item.name) === compact(live.competition) || hasWords(live.name, item.name)) &&
+    (!notMainSide || NOT_MAIN_SIDE.test(item.name)))
+  const mode: CompetitionMode = ruleId && !notMainSide ? settings.competitions[ruleId] ?? 'off' : custom?.mode ?? 'off'
+  const listed = mode === 'all' || (mode === 'teams' && mainTeam !== null)
+  const anywhere = settings.teamsAnywhere && mainTeam !== null && !notMainSide
+  return { open: listed || anywhere, mainTeam }
+}
+
+/** The two teams of a game, in any order ("Flamengo x Palmeiras" = "AO VIVO: Palmeiras x Flamengo | Brasileirão"), or null. */
+export function gameKey(name: string): string | null {
+  const sides = splitMatchTeams(extractMatchLabel(name) ?? name)
+  if (!sides) return null
+  // A title without a separator leaves its tail on the second team ("Santos x São Paulo AO VIVO com imagens").
+  const keys = [sides.home, sides.away].map((side) => teamKey(side.replace(/\s+(?:ao vivo|en vivo|live|com imagens?|agora|hoje)(?![\p{L}\d]).*$/iu, '')))
+  return keys.every(Boolean) ? keys.sort().join(' x ') : null
+}
+
+/**
+ * One panel per game: a game found more than once (on the BLL and on YouTube, or on two channels) keeps its first
+ * candidate, in the order given (BLL first, then the most watched live), and a game already open in another panel is left out.
+ */
+export function mergeAutoOpenCandidates(candidates: readonly AutoOpenCandidate[], open: readonly { url: string; name: string }[]): AutoOpenCandidate[] {
+  const taken = new Map<string, string>()
+  for (const panel of open) {
+    const key = panel.url ? gameKey(panel.name) : null
+    if (key && !taken.has(key)) taken.set(key, panel.url)
+  }
+  const kept: AutoOpenCandidate[] = []
+  for (const candidate of candidates) {
+    const key = gameKey(candidate.name)
+    const owner = key ? taken.get(key) : undefined
+    if (owner !== undefined && owner !== candidate.url) continue
+    if (key) taken.set(key, candidate.url)
+    kept.push(candidate)
+  }
+  return kept
+}
+
 /**
  * Where each new game goes: empty panels first, then new panels up to `maxPanels`. When the grid is full,
  * a main-team game takes the panel of a game Auto mode opened without a main team (in the order given,
@@ -266,4 +343,52 @@ export function planAutoOpen(panels: readonly AutoOpenPanel[], candidates: reado
     else plan.skipped += 1
   }
   return plan
+}
+
+export type AutoOpenSoundPanel = { id: string; url: string; muted: boolean }
+export type AutoOpenSound = {
+  /** Mute of each filled or replaced panel, by panel id. */
+  panels: Map<string, boolean>
+  /** Mute of each new panel, in the order of `plan.extra`. */
+  extra: boolean[]
+}
+
+/**
+ * Sound of the games a plan opens. A game Auto mode opens never plays over another one: it starts muted
+ * whenever a game is already on screen (or opened just before it in the same plan), even if only some panels are muted.
+ * Only the first game of an empty grid keeps the panel's own state (`allMuted` for a new panel).
+ * A replaced panel keeps its sound: it is the same slot the user was listening to (or not).
+ */
+export function autoOpenSound(panels: readonly AutoOpenSoundPanel[], plan: AutoOpenPlan, allMuted: boolean): AutoOpenSound {
+  let gameOpen = panels.some((panel) => panel.url)
+  const sound: AutoOpenSound = { panels: new Map(), extra: [] }
+  for (const { panelId } of plan.replace) sound.panels.set(panelId, panels.find((panel) => panel.id === panelId)?.muted ?? allMuted)
+  for (const { panelId } of plan.fill) {
+    sound.panels.set(panelId, (panels.find((panel) => panel.id === panelId)?.muted ?? allMuted) || gameOpen)
+    gameOpen = true
+  }
+  for (let index = 0; index < plan.extra.length; index++) {
+    sound.extra.push(allMuted || gameOpen)
+    gameOpen = true
+  }
+  return sound
+}
+
+/** What the first search of Auto mode shows while it reads the lists: the panels it marks and how many temporary ones it adds. */
+export interface AutoSearchPlaceholders {
+  mark: string[]
+  addTemporary: number
+}
+
+/** Panels shown on the start screen when Auto mode is turned on there: the same 4 screens the app starts with. */
+export const AUTO_SEARCH_CHOOSER_PANELS = 4
+
+/**
+ * Skeleton screens of the first Auto search. From the start screen, 4 temporary panels; in the grid, the empty panels;
+ * a full grid gets 1 temporary panel while it fits; at the maximum nothing (the status line is the feedback).
+ */
+export function autoSearchPlaceholders(options: { emptyPanelIds: readonly string[]; panelCount: number; maxPanels: number; fromChooser: boolean }): AutoSearchPlaceholders {
+  if (options.fromChooser) return { mark: [], addTemporary: Math.min(AUTO_SEARCH_CHOOSER_PANELS, options.maxPanels) }
+  if (options.emptyPanelIds.length > 0) return { mark: [...options.emptyPanelIds], addTemporary: 0 }
+  return { mark: [], addTemporary: options.panelCount < options.maxPanels ? 1 : 0 }
 }

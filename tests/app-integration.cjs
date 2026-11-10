@@ -1208,6 +1208,8 @@ async function run() {
     assert.deepEqual(await evaluate(target.webSocketDebuggerUrl,
       `[...document.querySelectorAll('.panel input[name="url"]')].map((input) => new URL(input.value).pathname)`),
     ['/view/game-c', '/view/game-d'], 'O modo Auto abre só os jogos ao vivo da competição da lista (sem o previsto nem o de basquete).')
+    assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.panel[data-slot="1"] [data-mute]').getAttribute('aria-pressed')`), 'true',
+      'Um jogo que o modo Auto abre com outro já na tela entra mudo.')
     assert.match(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-auto-open-status]').textContent`), /^Ligado · lista lida às \d\d:\d\d · 2 jogos abertos pelo modo Auto/)
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('.auto-open [data-cancel]').click()`)
     assert.equal(await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').classList.contains('is-auto-open')`), true)

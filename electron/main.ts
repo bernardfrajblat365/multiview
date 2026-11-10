@@ -1,4 +1,4 @@
-import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, net, session, WebContentsView } from 'electron'
+import { app, BaseWindow, BrowserWindow, components, dialog, ipcMain, net, screen, session, webFrameMain, WebContentsView } from 'electron'
 import electronUpdater from 'electron-updater'
 import { dirname, join } from 'node:path'
 import { fileURLToPath } from 'node:url'
@@ -1148,6 +1148,14 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
       matchInfo.clear(slotId)
     }
   })
+  if (slotId) {
+    contents.on('did-frame-finish-load', (_event, isMainFrame, frameProcessId, frameRoutingId) => {
+      if (isMainFrame) return
+      const state = slotViews.get(slotId)
+      const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
+      if (state && frame) syncFrameCursors(state, frame)
+    })
+  }
   contents.on('did-finish-load', () => {
     youtubeCssKey = undefined // full load clears inserted CSS
     void syncYoutubePlayer()
@@ -1231,7 +1239,53 @@ function destroySlotView(id: string) {
   slotViews.delete(id)
 }
 
+/**
+ * Hidden cursor in every frame of a player: `insertCSS` only reaches the main frame (many players live in an iframe)
+ * and loses to the page's own `!important` cursor rules. A constructed sheet (not blocked by the page's CSP, removable
+ * at will) whose ids in `:not()` outrank those rules.
+ */
+function frameCursorScript(hidden: boolean) {
+  return `(() => {
+    const key = Symbol.for('quadra-hidden-cursor')
+    let sheet = window[key]
+    if (${hidden}) {
+      if (!sheet) {
+        sheet = new CSSStyleSheet()
+        const root = ':root' + ':not(#quadra)'.repeat(5)
+        sheet.replaceSync(root + ', ' + root + ' * { cursor: none !important; }')
+        Object.defineProperty(window, key, { value: sheet })
+      }
+      if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
+    } else if (sheet) {
+      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== sheet)
+    }
+  })()`
+}
+
+/** Applies the cursor policy to every frame of the player (or just one iframe that finished loading). */
+function syncFrameCursors(state: SlotViewState, frame?: Electron.WebFrameMain) {
+  const contents = state.view.webContents
+  if (contents.isDestroyed()) return
+  const hidden = cursorHidden && state.host === 'main'
+  // A frame that just loaded has no sheet yet: nothing to remove while the cursor shows.
+  if (frame && !hidden) return
+  let frames: Electron.WebFrameMain[]
+  try {
+    frames = frame ? [frame] : contents.mainFrame.framesInSubtree
+  } catch {
+    return
+  }
+  for (const item of frames) {
+    try {
+      void item.executeJavaScript(frameCursorScript(hidden)).catch(() => {})
+    } catch {
+      // The frame went away meanwhile.
+    }
+  }
+}
+
 async function syncSlotCursor(state: SlotViewState) {
+  syncFrameCursors(state)
   const revision = ++state.cursorRevision
   const previousKey = state.cursorCssKey
   state.cursorCssKey = undefined
@@ -1241,6 +1295,8 @@ async function syncSlotCursor(state: SlotViewState) {
   if (state.view.webContents.isDestroyed()) return
   // Keep guest cursor under Quadra control. Sites like Zapping set cursor:none on the
   // player; with click-through that makes the system pointer vanish over the panel.
+  // (Author origin on purpose: Electron's removeInsertedCSS can't remove a user-origin sheet. `syncFrameCursors`
+  // covers the page's own `!important` cursor rules.)
   const css = cursorHidden && state.host === 'main'
     ? '* { cursor: none !important; }'
     : '* { cursor: auto !important; }'
@@ -1257,6 +1313,21 @@ function setCursorHidden(hidden: boolean) {
   if (cursorHidden === hidden) return
   cursorHidden = hidden
   for (const state of slotViews.values()) void syncSlotCursor(state)
+}
+
+/** The grid panel whose view is under the mouse cursor, if any. */
+function slotUnderCursor() {
+  if (!mainWindow || mainWindow.isDestroyed()) return null
+  const point = screen.getCursorScreenPoint()
+  const content = mainWindow.getContentBounds()
+  const x = point.x - content.x
+  const y = point.y - content.y
+  for (const state of slotViews.values()) {
+    if (state.host !== 'main' || state.view.webContents.isDestroyed()) continue
+    const bounds = state.view.getBounds()
+    if (x >= bounds.x && x < bounds.x + bounds.width && y >= bounds.y && y < bounds.y + bounds.height) return state
+  }
+  return null
 }
 
 function destroyAllSlotViews() {
@@ -1613,9 +1684,12 @@ function installIpcHandlers() {
     if (!isUiSender(event) || typeof interactive !== 'boolean' || !overlayWindow) return
     overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true })
     // A focused overlay leaves the panel views in the background, where live players stop painting.
-    if (!interactive && refocusPlayers === true && overlayWindow.isFocused() && mainWindow && !mainWindow.isDestroyed()) {
-      mainWindow.focus()
-    }
+    if (interactive || (refocusPlayers !== true && refocusPlayers !== 'idle') || !overlayWindow.isFocused() || !mainWindow || mainWindow.isDestroyed()) return
+    mainWindow.focus()
+    // Idle screen: the player under the still cursor takes the focus. Chromium only redraws the cursor without a mouse
+    // move in an active page, so otherwise the hidden cursor stays on screen. Only from the overlay: a panel the user is
+    // typing in keeps its focus.
+    if (refocusPlayers === 'idle') slotUnderCursor()?.view.webContents.focus()
   })
   ipcMain.on('quadra:set-fullscreen', (event, on: unknown) => {
     if (isUiSender(event) && typeof on === 'boolean') setNativeFullscreen(on)

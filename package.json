@@ -17,6 +17,7 @@
     "test:routing": "node --experimental-strip-types --test tests/routing.test.ts",
     "test:renderer": "node tests/renderer-smoke.cjs",
     "test:toolbar": "node tests/toolbar-smoke.cjs",
+    "test:idle": "node tests/idle-screen-smoke.cjs",
     "test:release-metadata": "node tests/metadata-check.cjs",
     "test:ecs": "node tests/check-ecs-install.cjs",
     "test:installer-verifier": "node tests/verify-installer.cjs --self-test",

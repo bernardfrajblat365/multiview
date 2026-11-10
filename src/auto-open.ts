@@ -267,3 +267,32 @@ export function planAutoOpen(panels: readonly AutoOpenPanel[], candidates: reado
   }
   return plan
 }
+
+export type AutoOpenSoundPanel = { id: string; url: string; muted: boolean }
+export type AutoOpenSound = {
+  /** Mute of each filled or replaced panel, by panel id. */
+  panels: Map<string, boolean>
+  /** Mute of each new panel, in the order of `plan.extra`. */
+  extra: boolean[]
+}
+
+/**
+ * Sound of the games a plan opens. A game Auto mode opens never plays over another one: it starts muted
+ * whenever a game is already on screen (or opened just before it in the same plan), even if only some panels are muted.
+ * Only the first game of an empty grid keeps the panel's own state (`allMuted` for a new panel).
+ * A replaced panel keeps its sound: it is the same slot the user was listening to (or not).
+ */
+export function autoOpenSound(panels: readonly AutoOpenSoundPanel[], plan: AutoOpenPlan, allMuted: boolean): AutoOpenSound {
+  let gameOpen = panels.some((panel) => panel.url)
+  const sound: AutoOpenSound = { panels: new Map(), extra: [] }
+  for (const { panelId } of plan.replace) sound.panels.set(panelId, panels.find((panel) => panel.id === panelId)?.muted ?? allMuted)
+  for (const { panelId } of plan.fill) {
+    sound.panels.set(panelId, (panels.find((panel) => panel.id === panelId)?.muted ?? allMuted) || gameOpen)
+    gameOpen = true
+  }
+  for (let index = 0; index < plan.extra.length; index++) {
+    sound.extra.push(allMuted || gameOpen)
+    gameOpen = true
+  }
+  return sound
+}

@@ -123,6 +123,9 @@ jobs:
       - name: Application integration smoke
         run: npm run test:app
 
+      - name: Idle screen smoke
+        run: npm run test:idle
+
   toolbar:
     needs: changes
     if: needs.changes.outputs.layout == 'true'

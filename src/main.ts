@@ -14,6 +14,7 @@ import {
 import { setAlertAudioAwake } from './alert-sounds'
 import {
   autoOpenDecision,
+  autoOpenSound,
   COMPETITION_MODE_LABEL,
   COMPETITIONS,
   defaultAutoOpenSettings,
@@ -1747,12 +1748,19 @@ function applyBatch(urls: string[], source: BatchSource, firstPanelId: PanelId |
   else window.quadra?.setBllsportTarget(null)
 }
 
-/** From the start screen: one panel per chosen game, replacing whatever the grid held before. */
-function startWithGames(urls: string[]) {
+/**
+ * From the start screen: one panel per chosen game, replacing whatever the grid held before.
+ * `autoOpen`: games Auto mode opens, where only the first one may start with sound.
+ */
+function startWithGames(urls: string[], autoOpen = false) {
   const games = [...new Set(urls)].slice(0, MAX_PANELS)
   if (games.length === 0) return
   for (const panel of panels) clearPanelMatchState(panel.id)
-  panels = games.map((url) => ({ ...createPanel(), url, draftUrl: url }))
+  const sound = autoOpen ? autoOpenSound([], { fill: [], extra: games, replace: [], skipped: 0 }, allPanelsMuted()) : null
+  panels = games.map((url, index) => {
+    const panel = { ...createPanel(), url, draftUrl: url }
+    return sound ? { ...panel, muted: sound.extra[index] ?? panel.muted } : panel
+  })
   highlighted.clear()
   layoutMode = 'auto'
   highlightPosition = undefined
@@ -2102,7 +2110,7 @@ function applyAutoOpen() {
     if (candidates.some((candidate) => !autoOpenSeen.has(candidate.url))) {
       const chosen = [...candidates].sort((a, b) => Number(b.mainTeam) - Number(a.mainTeam))
       autoOpenSkipped = Math.max(0, chosen.length - MAX_PANELS)
-      startWithGames(chosen.slice(0, MAX_PANELS).map((candidate) => candidate.url))
+      startWithGames(chosen.slice(0, MAX_PANELS).map((candidate) => candidate.url), true)
       autoOpenPanels.clear()
       for (const panel of panels) markAutoOpened(panel.id, panel.url, mainTeam.get(panel.url) ?? false)
     }
@@ -2117,15 +2125,18 @@ function applyAutoOpen() {
   const plan = planAutoOpen(ordered.map((panel) => ({ id: panel.id, url: panel.url, auto: autoOpenPanels.has(panel.id) && !pipPanels.has(panel.id), mainTeam: autoOpenPanels.get(panel.id)?.mainTeam ?? false })), candidates, MAX_PANELS)
   autoOpenSkipped = plan.skipped
   if (plan.fill.length + plan.extra.length + plan.replace.length > 0) {
+    // Decided before any panel changes: a new game never starts playing over one already on screen.
+    const sound = autoOpenSound(panels, plan, allPanelsMuted())
     for (const { panelId, url } of [...plan.fill, ...plan.replace]) {
       const panel = panelById(panelId)
       if (!panel) continue
       clearPanelMatchState(panelId)
       panel.url = url
       panel.draftUrl = url
+      panel.muted = sound.panels.get(panelId) ?? panel.muted
       markAutoOpened(panelId, url, mainTeam.get(url) ?? false)
     }
-    const added = plan.extra.map((url) => ({ ...createPanel(), url, draftUrl: url }))
+    const added = plan.extra.map((url, index) => ({ ...createPanel(), url, draftUrl: url, muted: sound.extra[index] ?? allPanelsMuted() }))
     panels = [...panels, ...added]
     for (const panel of added) markAutoOpened(panel.id, panel.url, mainTeam.get(panel.url) ?? false)
     buildCurrentLayout()
@@ -2901,13 +2912,26 @@ function showReleaseNotesIfNew() {
   showReleaseNotes(release)
 }
 
+/** Typing in the overlay, or an open delay list (handing the focus to the players would blur the overlay and close it). */
+function overlayEditing() {
+  const active = document.activeElement
+  return (active instanceof HTMLElement && active.matches('input, textarea, select, [contenteditable]')) || liveDelayMenuPanel !== null
+}
+
 function setChromeInteractive(interactive: boolean) {
   if (lastChromeInteractive === interactive) return
   lastChromeInteractive = interactive
-  const active = document.activeElement
-  // An open delay list also keeps the focus: handing it to the players would blur the overlay and close the list.
-  const editing = (active instanceof HTMLElement && active.matches('input, textarea, select, [contenteditable]')) || liveDelayMenuPanel !== null
-  window.quadra?.setChromeInteractive(interactive, !interactive && !editing)
+  window.quadra?.setChromeInteractive(interactive, !interactive && !overlayEditing())
+}
+
+/**
+ * Hands the focus back to the players when the screen goes idle. A player only redraws the cursor without a mouse
+ * move while its window is active: with the overlay focused (any click on a Quadra button) a still cursor stayed on screen.
+ */
+function refocusPlayers() {
+  if (overlayEditing()) return
+  lastChromeInteractive = false
+  window.quadra?.setChromeInteractive(false, 'idle')
 }
 
 /** The alert output stays open while a game can alert, even with every panel muted. */
@@ -3099,6 +3123,8 @@ let toolbarAbort: AbortController | null = null
 let moreMenuAbort: AbortController | null = null
 let toolbarResizeObserver: ResizeObserver | null = null
 let toolbarHideTimer: number | null = null
+/** Whether the toolbar (and with it every panel's controls and the cursor) shows; a re-render keeps it as it is. */
+let toolbarShown = true
 
 function clearToolbarHideTimer() {
   if (toolbarHideTimer !== null) window.clearTimeout(toolbarHideTimer)
@@ -3107,11 +3133,15 @@ function clearToolbarHideTimer() {
 
 function setToolbarVisible(visible: boolean) {
   if (!visible && dragState) return
+  toolbarShown = visible
   const shell = app.querySelector<HTMLElement>('.grid-shell')
   shell?.classList.toggle('is-toolbar-visible', visible)
   document.body.classList.toggle('is-cursor-hidden', !visible)
   window.quadra?.setCursorHidden(!visible)
-  if (!visible) setChromeInteractive(false)
+  if (!visible) {
+    setChromeInteractive(false)
+    refocusPlayers()
+  }
 }
 
 function scheduleToolbarHide() {
@@ -3212,7 +3242,6 @@ function bindToolbar() {
   toolbarResizeObserver = new ResizeObserver(updateToolbarHeight)
   toolbarResizeObserver.observe(toolbar)
   updateToolbarHeight()
-  revealToolbar()
   // Windows forwards mouse movement while the transparent overlay passes
   // clicks through to a video. Re-enable input as soon as it reaches a control.
   document.addEventListener('mousemove', (event) => {
@@ -3228,6 +3257,13 @@ function bindToolbar() {
   document.addEventListener('keydown', revealToolbar, { signal, passive: true })
   toolbar.addEventListener('pointerenter', () => setChromeInteractive(true), { signal })
   toolbar.addEventListener('focusin', () => setChromeInteractive(true), { signal })
+  // Only real input (mouse, keys) or entering the grid reveals the controls. A re-render the user didn't cause
+  // (goal highlight, Auto mode, a game closing) keeps an idle screen clean: no toolbar, panel controls or cursor.
+  if (!toolbarShown) {
+    setChromeInteractive(false)
+    return
+  }
+  if (toolbarHideTimer === null) scheduleToolbarHide()
   setChromeInteractive(Boolean(toolbar.matches(':hover')))
 }
 
@@ -3314,6 +3350,8 @@ function bindUpdateCheck(): void {
 function renderChoose() {
   cancelAutoMode()
   clearToolbarHideTimer()
+  // Entering the grid again shows its controls.
+  toolbarShown = true
   organizerDraft = null
   organizerChoices = []
   organizerBaselineKey = ''
@@ -3475,7 +3513,6 @@ function updateOrganizerPanel(focusSelector?: string): void {
 
 function renderGrid() {
   cancelPanelDrag()
-  clearToolbarHideTimer()
   clearBackHideTimer()
   moreMenuAbort?.abort()
   moreMenuAbort = null
@@ -3484,7 +3521,7 @@ function renderGrid() {
   toolbarResizeObserver?.disconnect()
   document.body.classList.add('is-grid')
   const canUndo = history.length > 0
-  app.innerHTML = `<div class="grid-shell is-toolbar-visible${editorOpen ? ' is-editor-open' : ''}">
+  app.innerHTML = `<div class="grid-shell${toolbarShown ? ' is-toolbar-visible' : ''}${editorOpen ? ' is-editor-open' : ''}">
     <button type="button" class="btn btn--ghost back-corner" id="btn-layout" aria-label="Voltar à escolha de telas">Voltar</button>
     <div class="toolbar" role="toolbar" aria-label="Controles">
       <button type="button" class="btn btn--load" id="btn-open-all">Abrir todos</button>

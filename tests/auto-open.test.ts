@@ -2,6 +2,7 @@ import assert from 'node:assert/strict'
 import test from 'node:test'
 import {
   autoOpenDecision,
+  autoOpenSound,
   competitionRuleOf,
   defaultAutoOpenSettings,
   mainTeamOf,
@@ -156,4 +157,31 @@ test('planAutoOpen puts main-team games first in the remaining room', () => {
   ], 2)
   assert.deepEqual(plan.extra, ['m1'])
   assert.equal(plan.skipped, 1)
+})
+
+test('autoOpenSound: a game Auto mode opens is muted while another game is on screen', () => {
+  // The user listens to game a (sound on) and the empty panel b is not muted: the new games still start muted.
+  const panels = [{ id: 'a', url: 'u1', muted: false }, { id: 'b', url: '', muted: false }]
+  const sound = autoOpenSound(panels, { fill: [{ panelId: 'b', url: 'u2' }], extra: ['u3'], replace: [], skipped: 0 }, false)
+  assert.equal(sound.panels.get('b'), true)
+  assert.deepEqual(sound.extra, [true])
+})
+
+test('autoOpenSound: only the first game of an empty grid keeps the panel sound', () => {
+  const panels = [{ id: 'a', url: '', muted: false }, { id: 'b', url: '', muted: false }]
+  const sound = autoOpenSound(panels, { fill: [{ panelId: 'a', url: 'u1' }, { panelId: 'b', url: 'u2' }], extra: ['u3'], replace: [], skipped: 0 }, false)
+  assert.equal(sound.panels.get('a'), false)
+  assert.equal(sound.panels.get('b'), true)
+  assert.deepEqual(sound.extra, [true])
+  // From the start screen (no panels): the first new panel follows "Mutar todos", the others are muted.
+  assert.deepEqual(autoOpenSound([], { fill: [], extra: ['u1', 'u2'], replace: [], skipped: 0 }, false).extra, [false, true])
+  assert.deepEqual(autoOpenSound([], { fill: [], extra: ['u1', 'u2'], replace: [], skipped: 0 }, true).extra, [true, true])
+})
+
+test('autoOpenSound: muted panels stay muted and a replaced panel keeps its own sound', () => {
+  const panels = [{ id: 'a', url: 'u1', muted: false }, { id: 'b', url: 'u2', muted: true }, { id: 'c', url: '', muted: true }]
+  const sound = autoOpenSound(panels, { fill: [{ panelId: 'c', url: 'u4' }], extra: [], replace: [{ panelId: 'a', url: 'm1' }, { panelId: 'b', url: 'm2' }], skipped: 0 }, false)
+  assert.equal(sound.panels.get('a'), false)
+  assert.equal(sound.panels.get('b'), true)
+  assert.equal(sound.panels.get('c'), true)
 })

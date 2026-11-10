@@ -1607,6 +1607,7 @@ function createOverlay() {
   const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off', 'first-steps': 'off' } : {}
   // Smokes read the BLL list for Auto mode faster than the minute the app uses.
   if (Number(process.env.QUADRA_AUTO_OPEN_POLL_MS) > 0) query['auto-open-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_POLL_MS))
+  if (Number(process.env.QUADRA_AUTO_OPEN_YOUTUBE_POLL_MS) > 0) query['auto-open-youtube-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_YOUTUBE_POLL_MS))
   const devUrl = new URL(process.env.ELECTRON_RENDERER_URL ?? 'http://localhost')
   for (const [key, value] of Object.entries(query)) devUrl.searchParams.set(key, value)
   const load = isDev

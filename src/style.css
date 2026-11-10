@@ -404,6 +404,21 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   width: 100%; max-width: 100%; min-width: 0; height: 100%;
   padding: clamp(0.35rem, 2.2cqw, 1rem); text-align: center; color: var(--ink-muted);
 }
+/* First search of Auto mode: a light sweeps the empty screens until the games found take them. */
+.panel--searching::after {
+  content: ""; position: absolute; inset: 0; pointer-events: none;
+  background: linear-gradient(105deg, transparent 30%, rgba(200,245,96,0.12) 50%, transparent 70%);
+  transform: translateX(-100%); animation: panel-searching 1.6s ease-in-out infinite;
+}
+.panel--searching.is-searching-done::after { animation: none; opacity: 0; }
+.panel__searching .panel__slot { max-width: 22em; font-size: clamp(0.7rem, 3.2cqw, 1rem); line-height: 1.35; color: var(--ink-muted); }
+.panel--searching:not(.is-searching-done) .panel__slot::after { content: ""; display: inline-block; width: 0.5em; height: 0.5em; margin-left: 0.45em; border-radius: 50%; background: var(--accent, #c8f560); vertical-align: middle; animation: panel-searching-dot 1.2s ease-in-out infinite; }
+@keyframes panel-searching { to { transform: translateX(100%); } }
+@keyframes panel-searching-dot { 50% { opacity: 0.25; } }
+@media (prefers-reduced-motion: reduce) {
+  .panel--searching::after { animation: none; transform: none; background: rgba(200,245,96,0.05); }
+  .panel--searching .panel__slot::after { animation: none; }
+}
 .panel__slot { margin: 0; font-family: 'Neuton', serif; font-weight: 700; font-size: clamp(1.05rem, 5cqw, 2.6rem); color: var(--ink); }
 
 .organize-panel {

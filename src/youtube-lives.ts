@@ -208,6 +208,19 @@ export function parseLiveVideos(raw: unknown, year = new Date().getFullYear()): 
   return lives.sort((a, b) => b.viewers - a.viewers).map(({ viewers: _viewers, ...live }) => live)
 }
 
+/**
+ * Videos of a `videos.list` response that will never be live: ordinary uploads and lives that already ended
+ * (`liveBroadcastContent: 'none'`). Scheduled (`upcoming`) and live ones change, so they are checked again on the next read.
+ */
+export function finishedVideoIds(raw: unknown): string[] {
+  const items = raw && typeof raw === 'object' ? (raw as { items?: unknown }).items : null
+  if (!Array.isArray(items)) return []
+  return items.flatMap((row) => {
+    const item = row && typeof row === 'object' ? row as { id?: unknown; snippet?: { liveBroadcastContent?: unknown } } : null
+    return item && typeof item.id === 'string' && VIDEO_ID.test(item.id) && item.snippet?.liveBroadcastContent === 'none' ? [item.id] : []
+  })
+}
+
 /** The first channel of a `channels.list` response (`part=snippet`). */
 export function parseChannelList(raw: unknown): YoutubeChannel | null {
   const items = raw && typeof raw === 'object' ? (raw as { items?: unknown }).items : null

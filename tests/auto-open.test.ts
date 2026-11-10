@@ -3,12 +3,16 @@ import test from 'node:test'
 import {
   autoOpenDecision,
   autoOpenSound,
+  autoSearchPlaceholders,
   competitionRuleOf,
   defaultAutoOpenSettings,
+  gameKey,
   mainTeamOf,
+  mergeAutoOpenCandidates,
   matchesCustomCompetition,
   parseAutoOpenSettings,
   planAutoOpen,
+  youtubeAutoOpenDecision,
   type AutoOpenPanel,
 } from '../src/auto-open.ts'
 
@@ -184,4 +188,65 @@ test('autoOpenSound: muted panels stay muted and a replaced panel keeps its own 
   assert.equal(sound.panels.get('a'), false)
   assert.equal(sound.panels.get('b'), true)
   assert.equal(sound.panels.get('c'), true)
+})
+
+test('sources: BLL on and YouTube off by default, kept by the stored settings', () => {
+  assert.deepEqual(defaultAutoOpenSettings().sources, { bll: true, youtube: false })
+  assert.deepEqual(parseAutoOpenSettings(JSON.stringify({ sources: { bll: false, youtube: true } })).sources, { bll: false, youtube: true })
+  // Settings saved before the sources existed, or a broken value, keep the defaults.
+  assert.deepEqual(parseAutoOpenSettings(JSON.stringify({ teams: ['Flamengo'] })).sources, { bll: true, youtube: false })
+  assert.deepEqual(parseAutoOpenSettings(JSON.stringify({ sources: { bll: 'yes', youtube: 1 } })).sources, { bll: true, youtube: false })
+})
+
+test('youtubeAutoOpenDecision maps the competition of the title to the listed ones', () => {
+  const yt = (name: string, competition: string, custom = settings) => youtubeAutoOpenDecision({ name, competition }, custom)
+  assert.equal(yt('AO VIVO: Flamengo x Palmeiras | Brasileirão 2026', 'Brasileirão').open, true)
+  assert.equal(yt('Arsenal x Chelsea - Premier League AO VIVO', 'Premier League').mainTeam, 'Arsenal')
+  assert.equal(yt('Porto x Benfica | Champions League', 'Champions League').open, true)
+  // Domestic cups only open main-team games; a game outside the lists doesn't open.
+  assert.equal(yt('Flamengo x Racing | Libertadores', 'Libertadores').open, false)
+  assert.equal(yt('Time A x Time B', 'CazéTV').open, false)
+  // Not football, or not the men's first team.
+  assert.equal(yt('Chiefs x Eagles | NFL', 'NFL').open, false)
+  assert.equal(yt('Corinthians x Palmeiras | Brasileirão Feminino', 'Brasileirão Feminino').open, false)
+  // Main team anywhere, and an added competition found in the title or as the channel name.
+  assert.equal(yt('Real Madrid x Flamengo | Amistoso', 'CazéTV', { ...settings, teamsAnywhere: true }).mainTeam, 'Real Madrid')
+  assert.equal(yt('Real Madrid x Flamengo | Amistoso', 'CazéTV', { ...settings, teamsAnywhere: true }).open, true)
+  const custom = { ...settings, custom: [{ name: 'Libertadores', mode: 'all' as const }, { name: 'ge tv', mode: 'all' as const }] }
+  assert.equal(yt('Flamengo x Racing | Libertadores 2026', 'Libertadores', custom).open, true)
+  assert.equal(yt('Flamengo x Racing | CONMEBOL Libertadores', 'CONMEBOL', custom).open, true)
+  assert.equal(yt('Fortaleza x Ceará', 'ge tv', custom).open, true)
+  assert.equal(yt('Flamengo x Racing | Libertadores Feminina', 'Libertadores Feminina', custom).open, false)
+})
+
+test('gameKey: the same two teams in any order and title format', () => {
+  assert.equal(gameKey('Flamengo x Palmeiras'), gameKey('AO VIVO: Palmeiras x Flamengo | Brasileirão'))
+  assert.notEqual(gameKey('Flamengo x Palmeiras'), gameKey('Flamengo x Santos'))
+  assert.equal(gameKey('Melhores momentos'), null)
+})
+
+test('mergeAutoOpenCandidates opens each game once, BLL first', () => {
+  const bll = { url: 'bll/1', name: 'Flamengo x Palmeiras', mainTeam: false }
+  const ytSame = { url: 'yt/1', name: 'AO VIVO: Flamengo x Palmeiras | Brasileirão', mainTeam: false }
+  const ytOther = { url: 'yt/2', name: 'Santos x São Paulo | Paulistão', mainTeam: false }
+  const ytOtherAgain = { url: 'yt/3', name: 'SANTOS X SÃO PAULO AO VIVO', mainTeam: false }
+  assert.deepEqual(mergeAutoOpenCandidates([bll, ytSame, ytOther, ytOtherAgain], []).map((item) => item.url), ['bll/1', 'yt/2'])
+  // A game open in another panel is left out; the candidate of that same panel stays (the plan skips it as open).
+  assert.deepEqual(mergeAutoOpenCandidates([bll, ytOther], [{ url: 'yt/9', name: 'Palmeiras x Flamengo' }]).map((item) => item.url), ['yt/2'])
+  assert.deepEqual(mergeAutoOpenCandidates([bll], [{ url: 'bll/1', name: 'Flamengo x Palmeiras' }]).map((item) => item.url), ['bll/1'])
+  // Without teams in the name there is nothing to compare: kept.
+  assert.equal(mergeAutoOpenCandidates([{ url: 'yt/4', name: 'Live', mainTeam: false }, { url: 'yt/5', name: 'Live', mainTeam: false }], []).length, 2)
+})
+
+test('autoSearchPlaceholders: 4 temporary screens from the start screen', () => {
+  assert.deepEqual(autoSearchPlaceholders({ emptyPanelIds: ['a', 'b'], panelCount: 6, maxPanels: 18, fromChooser: true }), { mark: [], addTemporary: 4 })
+})
+
+test('autoSearchPlaceholders: a grid with empty panels marks them', () => {
+  assert.deepEqual(autoSearchPlaceholders({ emptyPanelIds: ['panel-2', 'panel-4'], panelCount: 4, maxPanels: 18, fromChooser: false }), { mark: ['panel-2', 'panel-4'], addTemporary: 0 })
+})
+
+test('autoSearchPlaceholders: a full grid gets one temporary screen, none at the maximum', () => {
+  assert.deepEqual(autoSearchPlaceholders({ emptyPanelIds: [], panelCount: 6, maxPanels: 18, fromChooser: false }), { mark: [], addTemporary: 1 })
+  assert.deepEqual(autoSearchPlaceholders({ emptyPanelIds: [], panelCount: 18, maxPanels: 18, fromChooser: false }), { mark: [], addTemporary: 0 })
 })

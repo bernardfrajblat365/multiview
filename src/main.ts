@@ -9,12 +9,14 @@ import {
   saveYoutubeChannels,
   type YoutubeChannel,
   type YoutubeChannelResult,
+  type YoutubeLive,
   type YoutubeLivesResult,
 } from './youtube-lives'
 import { setAlertAudioAwake } from './alert-sounds'
 import {
   autoOpenDecision,
   autoOpenSound,
+  autoSearchPlaceholders,
   COMPETITION_MODE_LABEL,
   COMPETITIONS,
   defaultAutoOpenSettings,
@@ -22,9 +24,11 @@ import {
   mainTeamOf,
   MAX_CUSTOM_COMPETITIONS,
   MAX_TEAMS,
+  mergeAutoOpenCandidates,
   planAutoOpen,
   saveAutoOpenSettings,
   teamDisplayName,
+  youtubeAutoOpenDecision,
   type AutoOpenCandidate,
   type AutoOpenSettings,
   type CompetitionMode,
@@ -203,6 +207,47 @@ let autoOpenReading = false
 let autoOpenReadAt = 0
 let autoOpenError = ''
 let autoOpenSkipped = 0
+/**
+ * Auto mode on YouTube: the lives of the channel list (the one of "Abrir jogos ao vivo do YouTube"). Each read costs
+ * YouTube API quota (shared by everyone using the built-in key), so it runs every 5 minutes instead of 25 s.
+ */
+const AUTO_OPEN_YOUTUBE_POLL_MS = Number(new URLSearchParams(location.search).get('auto-open-youtube-poll-ms')) || 300_000
+let autoOpenYoutube: YoutubeLive[] = []
+let autoOpenYoutubeTimer: number | null = null
+let autoOpenYoutubeReading = false
+let autoOpenYoutubeReadAt = 0
+let autoOpenYoutubeError = ''
+type AutoSearchSource = 'bll' | 'youtube'
+/**
+ * The first search after Auto mode is turned on: the empty screens become skeletons ("Procurando jogos ao vivo…") until
+ * every chosen source was read once, and the games found take them. Later reads show nothing, so the grid doesn't blink.
+ */
+let autoSearch: {
+  phase: 'searching' | 'none-found' | 'error'
+  message: string
+  pending: Set<AutoSearchSource>
+  errors: Map<AutoSearchSource, string>
+  /** Empty panels shown as skeletons, temporary ones included. */
+  marked: Set<PanelId>
+  /** Panels added only for the search: the ones still empty go away when it ends. */
+  temporary: Set<PanelId>
+  /** The search started on the start screen: finding nothing goes back there. */
+  fromChooser: boolean
+  timer: number | null
+} | null = null
+/** How long the skeletons say nothing was found (or the read failed) before turning back into normal screens. */
+const AUTO_SEARCH_NONE_MS = 4000
+const AUTO_SEARCH_ERROR_MS = 6000
+const AUTO_SEARCH_SEARCHING = 'Procurando jogos ao vivo…'
+const AUTO_SEARCH_NONE = 'Nenhum jogo ao vivo agora · o Auto segue procurando'
+/** Short versions of the read errors, to fit in a screen. */
+const AUTO_SEARCH_YOUTUBE_ERRORS: Record<Exclude<YoutubeLivesResult['status'], 'ok'>, string> = {
+  'no-key': 'YouTube sem chave da API',
+  'invalid-key': 'Chave do YouTube recusada',
+  'api-disabled': 'API do YouTube desativada',
+  quota: 'A cota do YouTube acabou por hoje',
+  unavailable: 'Não deu para ler o YouTube',
+}
 /** A panel can't close while the user is organizing, dragging or answering a dialog; it tries again after this. */
 const FINISHED_RETRY_MS = 5000
 
@@ -727,6 +772,8 @@ function cloneSnapshot(): LayoutSnapshot {
 
 function pushHistory() {
   cancelAutoMode()
+  // The user changed the layout by hand: the skeletons stay as normal empty screens.
+  clearAutoSearch({ render: false, keepPanels: true })
   forgetHalftimeSwaps()
   captureDrafts()
   history = [...history.slice(-(HISTORY_LIMIT - 1)), cloneSnapshot()]
@@ -2052,12 +2099,21 @@ function dismissAutoOpen(id: PanelId) {
 
 function autoOpenStatusText() {
   if (!autoOpenOn) return 'Desligado. Ligue para o Quadra abrir sozinho os jogos que começarem.'
-  if (!autoOpenReadAt) return autoOpenError || 'Ligado · lendo a lista da BLL…'
-  const time = new Date(autoOpenReadAt).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  const { sources } = autoOpenSettings
+  if (!sources.bll && !sources.youtube) return 'Ligado, mas sem fonte: escolha BLL, YouTube ou as duas.'
+  const time = (at: number) => new Date(at).toLocaleTimeString('pt-BR', { hour: '2-digit', minute: '2-digit' })
+  const reads: string[] = []
+  if (sources.bll && autoOpenReadAt) reads.push(sources.youtube ? `BLL lida às ${time(autoOpenReadAt)}` : `lista lida às ${time(autoOpenReadAt)}`)
+  if (sources.youtube && autoOpenYoutubeReadAt) reads.push(`YouTube lido às ${time(autoOpenYoutubeReadAt)}`)
+  const errors = [sources.bll ? autoOpenError : '', sources.youtube ? autoOpenYoutubeError : ''].filter(Boolean).join(' ')
+  if (reads.length === 0) {
+    const waiting = sources.bll && sources.youtube ? 'a BLL e o YouTube' : sources.bll ? 'a lista da BLL' : 'as lives do YouTube'
+    return errors || `Ligado · lendo ${waiting}…`
+  }
   const opened = autoOpenPanels.size
-  const parts = [`Ligado · lista lida às ${time}`, `${opened} ${opened === 1 ? 'jogo aberto' : 'jogos abertos'} pelo modo Auto`]
+  const parts = [`Ligado · ${reads.join(' · ')}`, `${opened} ${opened === 1 ? 'jogo aberto' : 'jogos abertos'} pelo modo Auto`]
   if (autoOpenSkipped > 0) parts.push(`${autoOpenSkipped} sem time principal esperando tela livre`)
-  return `${parts.join(' · ')}.${autoOpenError ? ` ${autoOpenError}` : ''}`
+  return `${parts.join(' · ')}.${errors ? ` ${errors}` : ''}`
 }
 
 function updateAutoOpenIndicators() {
@@ -2077,11 +2133,23 @@ function updateAutoOpenIndicators() {
 }
 
 function autoOpenCandidates(): AutoOpenCandidate[] {
-  return autoOpenEvents.flatMap((event) => {
+  const { sources } = autoOpenSettings
+  const bll = sources.bll ? autoOpenEvents.flatMap((event) => {
     if (!event.live || autoOpenDismissed.has(event.url)) return []
     const decision = autoOpenDecision(event, autoOpenSettings)
     return decision.open ? [{ url: event.url, name: event.name, mainTeam: decision.mainTeam !== null }] : []
-  })
+  }) : []
+  // Most watched first (the order of the list), so a game on two channels opens the one more people follow.
+  const youtube = sources.youtube ? autoOpenYoutube.flatMap((live) => {
+    if (autoOpenDismissed.has(live.url)) return []
+    const decision = youtubeAutoOpenDecision(live, autoOpenSettings)
+    return decision.open ? [{ url: live.url, name: live.name, mainTeam: decision.mainTeam !== null }] : []
+  }) : []
+  // A game already on screen (from any source, opened by hand or by Auto mode) isn't opened again from the other one.
+  const names = new Map([...autoOpenEvents, ...autoOpenYoutube].map((event) => [event.url, event.name]))
+  // On the start screen the old grid's panels are about to go: nothing is open.
+  const open = view !== 'grid' ? [] : panels.filter((panel) => panel.url).map((panel) => ({ url: panel.url, name: names.get(panel.url) ?? panelTitles.get(panel.id) ?? '' }))
+  return mergeAutoOpenCandidates([...bll, ...youtube], open)
 }
 
 function markAutoOpened(id: PanelId, url: string, mainTeam: boolean) {
@@ -2161,32 +2229,210 @@ async function pollAutoOpen() {
   if (!result || result.status !== 'ok') {
     autoOpenError = window.quadra ? 'Não foi possível ler a lista da BLL; tenta de novo em 25 s. Se continuar, abra a BLL num painel e confira o login.' : 'O modo Auto só funciona no app do Quadra.'
     updateAutoOpenIndicators()
+    finishAutoSearchSource('bll', window.quadra ? 'Não deu para ler a BLL · confira o login' : 'O Auto só funciona no app')
     return
   }
   autoOpenError = ''
   autoOpenReadAt = Date.now()
   autoOpenEvents = result.events
   applyAutoOpen()
+  finishAutoSearchSource('bll')
+}
+
+async function pollAutoOpenYoutube() {
+  if (!autoOpenOn || !autoOpenSettings.sources.youtube || autoOpenYoutubeReading) return
+  const channels = loadYoutubeChannels()
+  if (channels.length === 0) {
+    autoOpenYoutube = []
+    autoOpenYoutubeError = 'YouTube: a lista de canais está vazia; adicione canais em Abrir jogos ao vivo do YouTube.'
+    updateAutoOpenIndicators()
+    finishAutoSearchSource('youtube', 'Lista de canais do YouTube vazia')
+    return
+  }
+  autoOpenYoutubeReading = true
+  const result = await window.quadra?.listYoutubeLives(channels.map((channel) => channel.id)).catch(() => null) ?? null
+  autoOpenYoutubeReading = false
+  if (!autoOpenOn || !autoOpenSettings.sources.youtube) return
+  if (!result || result.status !== 'ok') {
+    // The games already found stay: a failed read doesn't close nor reopen anything.
+    autoOpenYoutubeError = !window.quadra
+      ? 'O modo Auto só funciona no app do Quadra.'
+      : `YouTube: ${YOUTUBE_ERRORS[result?.status ?? 'unavailable'].replace(' e clique em Atualizar lista', '')} Tenta de novo em ${Math.round(AUTO_OPEN_YOUTUBE_POLL_MS / 60000) || 1} min.`
+    updateAutoOpenIndicators()
+    finishAutoSearchSource('youtube', window.quadra ? AUTO_SEARCH_YOUTUBE_ERRORS[result?.status ?? 'unavailable'] : 'O Auto só funciona no app')
+    return
+  }
+  autoOpenYoutubeError = ''
+  autoOpenYoutubeReadAt = Date.now()
+  autoOpenYoutube = result.events
+  applyAutoOpen()
+  finishAutoSearchSource('youtube')
+}
+
+function stopAutoOpenReads() {
+  if (autoOpenTimer !== null) window.clearInterval(autoOpenTimer)
+  if (autoOpenYoutubeTimer !== null) window.clearInterval(autoOpenYoutubeTimer)
+  if (autoOpenRetryTimer !== null) window.clearTimeout(autoOpenRetryTimer)
+  autoOpenTimer = null
+  autoOpenYoutubeTimer = null
+  autoOpenRetryTimer = null
+}
+
+/** Starts the reads of the chosen sources and stops the others; a source turned on reads at once. */
+function syncAutoOpenSources() {
+  if (!autoOpenOn) return
+  const { bll, youtube } = autoOpenSettings.sources
+  if (bll && autoOpenTimer === null) {
+    autoOpenTimer = window.setInterval(() => void pollAutoOpen(), AUTO_OPEN_POLL_MS)
+    void pollAutoOpen()
+  } else if (!bll && autoOpenTimer !== null) {
+    window.clearInterval(autoOpenTimer)
+    autoOpenTimer = null
+    autoOpenError = ''
+    finishAutoSearchSource('bll')
+  }
+  if (youtube && autoOpenYoutubeTimer === null) {
+    autoOpenYoutubeTimer = window.setInterval(() => void pollAutoOpenYoutube(), AUTO_OPEN_YOUTUBE_POLL_MS)
+    void pollAutoOpenYoutube()
+  } else if (!youtube && autoOpenYoutubeTimer !== null) {
+    window.clearInterval(autoOpenYoutubeTimer)
+    autoOpenYoutubeTimer = null
+    autoOpenYoutubeError = ''
+    finishAutoSearchSource('youtube')
+  }
+  updateAutoOpenIndicators()
 }
 
 function setAutoOpen(on: boolean) {
   if (autoOpenOn === on) return
   autoOpenOn = on
-  if (autoOpenTimer !== null) window.clearInterval(autoOpenTimer)
-  if (autoOpenRetryTimer !== null) window.clearTimeout(autoOpenRetryTimer)
-  autoOpenTimer = null
-  autoOpenRetryTimer = null
+  stopAutoOpenReads()
   autoOpenEvents = []
   autoOpenReadAt = 0
   autoOpenError = ''
+  autoOpenYoutube = []
+  autoOpenYoutubeReadAt = 0
+  autoOpenYoutubeError = ''
   autoOpenSkipped = 0
   if (on) {
     // Turning the mode on opens the games already live too, even from the start screen.
     autoOpenSeen.clear()
-    autoOpenTimer = window.setInterval(() => void pollAutoOpen(), AUTO_OPEN_POLL_MS)
-    void pollAutoOpen()
+    startAutoSearch()
+    syncAutoOpenSources()
+  } else {
+    clearAutoSearch()
   }
   updateAutoOpenIndicators()
+}
+
+function isAutoSearchPanel(id: PanelId) {
+  return autoSearch?.marked.has(id) === true && !panelById(id)?.url && !pipPanels.has(id)
+}
+
+/** Turns the empty screens into skeletons while the first reads of the chosen sources run. */
+function startAutoSearch() {
+  clearAutoSearch({ render: false })
+  const pending = new Set<AutoSearchSource>()
+  if (autoOpenSettings.sources.bll) pending.add('bll')
+  if (autoOpenSettings.sources.youtube) pending.add('youtube')
+  if (pending.size === 0 || (view === 'grid' && editorOpen)) return
+  const fromChooser = view === 'choose'
+  const empty = fromChooser ? [] : panels.filter((panel) => !panel.url && !pipPanels.has(panel.id)).map((panel) => panel.id)
+  const { mark, addTemporary } = autoSearchPlaceholders({ emptyPanelIds: empty, panelCount: panels.length, maxPanels: MAX_PANELS, fromChooser })
+  if (mark.length === 0 && addTemporary === 0) return
+  const temporary = Array.from({ length: addTemporary }, createPanel)
+  autoSearch = { phase: 'searching', message: AUTO_SEARCH_SEARCHING, pending, errors: new Map(), marked: new Set([...mark, ...temporary.map((panel) => panel.id)]), temporary: new Set(temporary.map((panel) => panel.id)), fromChooser, timer: null }
+  if (fromChooser) {
+    // The same grid as choosing 4 screens; the games found replace it.
+    for (const panel of panels) clearPanelMatchState(panel.id)
+    panels = temporary
+    highlighted.clear()
+    layoutMode = 'auto'
+    highlightPosition = undefined
+    compositionVariant = undefined
+    buildCurrentLayout()
+    view = 'grid'
+    editorOpen = false
+    pendingFocusPanelId = null
+    render()
+    return
+  }
+  if (temporary.length > 0) {
+    panels = [...panels, ...temporary]
+    buildCurrentLayout()
+  }
+  renderGrid()
+}
+
+/** One source finished its first read (or failed, with a short message); the last one settles the search. */
+function finishAutoSearchSource(source: AutoSearchSource, error = '') {
+  if (!autoSearch || autoSearch.phase !== 'searching' || !autoSearch.pending.delete(source)) return
+  if (error) autoSearch.errors.set(source, error)
+  if (autoSearch.pending.size === 0) settleAutoSearch()
+}
+
+/** Every source was read: the games already took their screens; the skeletons left say why, then go back to normal. */
+function settleAutoSearch() {
+  const search = autoSearch
+  if (!search) return
+  if (search.timer !== null) window.clearTimeout(search.timer)
+  search.timer = null
+  // Games waiting for the user (organizing, dragging, a goal highlight) still count as found.
+  if (autoOpenRetryTimer !== null) {
+    search.timer = window.setTimeout(settleAutoSearch, AUTO_OPEN_RETRY_MS + 100)
+    return
+  }
+  // `autoOpenSeen` starts empty when the mode is turned on: anything in it was opened by this search.
+  const opened = autoOpenSeen.size > 0
+  const left = [...search.marked].filter(isAutoSearchPanel)
+  if (opened || left.length === 0) {
+    clearAutoSearch()
+    return
+  }
+  const errors = [...search.errors.values()]
+  search.phase = errors.length > 0 ? 'error' : 'none-found'
+  search.message = errors.length > 0 ? `${errors.join(' · ')} · o Auto segue procurando` : AUTO_SEARCH_NONE
+  search.timer = window.setTimeout(() => clearAutoSearch(), errors.length > 0 ? AUTO_SEARCH_ERROR_MS : AUTO_SEARCH_NONE_MS)
+  if (view === 'grid') renderGrid()
+}
+
+/**
+ * Ends the search: the skeletons turn back into normal screens and the temporary ones still empty go away.
+ * `keepPanels`: a manual layout change keeps them as normal empty screens. Started on the start screen and nothing
+ * opened: back there.
+ */
+function clearAutoSearch(options: { render?: boolean; keepPanels?: boolean } = {}) {
+  const search = autoSearch
+  if (!search) return
+  autoSearch = null
+  if (search.timer !== null) window.clearTimeout(search.timer)
+  if (options.keepPanels) {
+    if (options.render !== false && view === 'grid') renderGrid()
+    return
+  }
+  const drop = new Set([...search.temporary].filter((id) => {
+    const panel = panelById(id)
+    return panel && !panel.url && !pipPanels.has(id)
+  }))
+  const backToChooser = drop.size > 0 && drop.size === panels.length
+  if (backToChooser) {
+    // Nothing found from the start screen: the empty grid stays behind the start screen, as choosing 4 screens would make it.
+    if (search.fromChooser && view === 'grid' && options.render !== false) {
+      view = 'choose'
+      render()
+    }
+    return
+  }
+  if (drop.size > 0) {
+    for (const id of drop) clearPanelMatchState(id)
+    panels = panels.filter((panel) => !drop.has(panel.id))
+    highlighted = new Set([...highlighted].filter((id) => !drop.has(id)))
+    buildCurrentLayout()
+  }
+  if (options.render !== false && view === 'grid') {
+    renderGrid()
+    syncLayout()
+  }
 }
 
 function competitionRowHtml(id: string, label: string, mode: CompetitionMode, custom = false) {
@@ -2199,13 +2445,19 @@ function competitionRowHtml(id: string, label: string, mode: CompetitionMode, cu
 function autoOpenListsHtml(settings: AutoOpenSettings) {
   const group = (legend: string, rules: readonly CompetitionRule[]) => `<fieldset class="bll-batch__group auto-open__group"><legend>${legend}</legend>
     ${rules.map((rule) => competitionRowHtml(rule.id, rule.label, settings.competitions[rule.id] ?? 'off')).join('')}</fieldset>`
-  return `${group('Brasil', COMPETITIONS.filter((rule) => rule.region === 'Brasil'))}
+  const youtubeChannels = loadYoutubeChannels().length
+  return `<fieldset class="bll-batch__group auto-open__group"><legend>Onde procurar</legend>
+      <label class="auto-open__check"><input type="checkbox" data-source="bll"${settings.sources.bll ? ' checked' : ''}> BLL (lista lida a cada 25 s)</label>
+      <label class="auto-open__check"><input type="checkbox" data-source="youtube"${settings.sources.youtube ? ' checked' : ''}> YouTube: lives dos ${youtubeChannels} ${youtubeChannels === 1 ? 'canal' : 'canais'} da lista do YouTube (a cada 5 min)</label>
+      <p class="bll-batch__status">Um jogo que está nos dois lugares abre uma vez só, pela BLL.</p>
+    </fieldset>
+    ${group('Brasil', COMPETITIONS.filter((rule) => rule.region === 'Brasil'))}
     ${group('Europa · ligas', COMPETITIONS.filter((rule) => rule.region === 'Europa' && rule.kind === 'liga'))}
     ${group('Europa · copas', COMPETITIONS.filter((rule) => rule.region === 'Europa' && rule.kind === 'copa'))}
     <fieldset class="bll-batch__group auto-open__group"><legend>Outras competições</legend>
       ${settings.custom.map((item, index) => competitionRowHtml(String(index), item.name, item.mode, true)).join('')}
       <form class="yt-channels__add" data-add-competition>
-        <input type="text" name="competition" placeholder="Como aparece na BLL, ex.: Portugal, Liga Portugal" aria-label="Competição" autocomplete="off" spellcheck="false" maxlength="120">
+        <input type="text" name="competition" placeholder="Como aparece na BLL (ex.: Portugal, Liga Portugal) ou no título do YouTube (ex.: Libertadores)" aria-label="Competição" autocomplete="off" spellcheck="false" maxlength="120">
         <button type="submit" class="btn btn--load"${settings.custom.length >= MAX_CUSTOM_COMPETITIONS ? ' disabled' : ''}>Adicionar</button>
       </form>
     </fieldset>
@@ -2232,7 +2484,7 @@ function openAutoOpenDialog() {
     <p id="auto-open-title" class="confirm__message">Modo Auto</p>
     <p class="bll-batch__status" role="status" aria-live="polite" data-auto-open-status></p>
     <div class="auto-open__body">
-      <p class="bll-batch__status">Ligado, o Quadra lê a lista da BLL a cada 25 s e abre numa tela cada jogo que começar nas competições escolhidas (só futebol). Jogos que você fechar não voltam.</p>
+      <p class="bll-batch__status">Ligado, o Quadra procura na BLL e/ou no YouTube e abre numa tela cada jogo que começar nas competições escolhidas (só futebol). Jogos que você fechar não voltam.</p>
       <div data-auto-open-lists></div>
       <p class="yt-channels__message" role="status" aria-live="polite" data-auto-open-message></p>
       <button type="button" class="btn btn--ghost yt-channels__restore" data-restore>Restaurar listas padrão</button>
@@ -2275,6 +2527,9 @@ function openAutoOpenDialog() {
       update({ ...autoOpenSettings, custom: autoOpenSettings.custom.map((item, position) => position === index ? { ...item, mode: target.value as CompetitionMode } : item) })
     } else if (target instanceof HTMLInputElement && target.dataset.teamsAnywhere !== undefined) {
       update({ ...autoOpenSettings, teamsAnywhere: target.checked })
+    } else if (target instanceof HTMLInputElement && (target.dataset.source === 'bll' || target.dataset.source === 'youtube')) {
+      update({ ...autoOpenSettings, sources: { ...autoOpenSettings.sources, [target.dataset.source]: target.checked } }, `[data-source="${target.dataset.source}"]`)
+      syncAutoOpenSources()
     }
   })
   lists.addEventListener('click', (event) => {
@@ -2317,10 +2572,16 @@ function openAutoOpenDialog() {
     }
   })
   backdrop.querySelector('[data-restore]')!.addEventListener('click', () => {
-    update(defaultAutoOpenSettings())
+    // The lists only: where to look stays as chosen.
+    update({ ...defaultAutoOpenSettings(), sources: autoOpenSettings.sources })
     message.textContent = 'Listas padrão restauradas.'
   })
-  backdrop.querySelector('[data-auto-open-toggle]')!.addEventListener('click', () => setAutoOpen(!autoOpenOn))
+  backdrop.querySelector('[data-auto-open-toggle]')!.addEventListener('click', () => {
+    const on = !autoOpenOn
+    setAutoOpen(on)
+    // Turning it on closes the dialog, so the screens searching for games are in sight.
+    if (on) finish()
+  })
   backdrop.querySelector('[data-cancel]')!.addEventListener('click', finish)
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
   document.addEventListener('keydown', onKey)
@@ -2602,6 +2863,14 @@ function panelInnerHtml(panel: Panel): string {
       <div class="panel__pip-note">
         <p class="panel__slot">Jogo ${panelIndex(panel.id) + 1} na janela flutuante</p>
         <button type="button" class="btn btn--load" data-pip-return><img src="./pip-return-icon.png" alt="" aria-hidden="true" /> Trazer de volta</button>
+      </div>
+    `
+  }
+  if (!panel.url && autoSearch && isAutoSearchPanel(panel.id)) {
+    return `
+      ${panelActionsHtml(panel)}
+      <div class="panel__empty panel__searching" aria-busy="${autoSearch.phase === 'searching'}">
+        <p class="panel__slot" role="status">${escapeHtml(autoSearch.message)}</p>
       </div>
     `
   }
@@ -3349,6 +3618,7 @@ function bindUpdateCheck(): void {
 
 function renderChoose() {
   cancelAutoMode()
+  clearAutoSearch({ render: false })
   clearToolbarHideTimer()
   // Entering the grid again shows its controls.
   toolbarShown = true
@@ -3549,7 +3819,7 @@ function renderGrid() {
       </div>
     </div>
     <div class="layout-stage grid grid--${panels.length}${editorOpen ? ' is-editing' : ''}" id="layout-stage" data-layout-mode="${layoutMode}">
-      ${panels.map((panel, index) => `<div class="panel${pipPanels.has(panel.id) ? ' panel--pip' : panel.url ? ' panel--loaded' : ' panel--empty'}${highlighted.has(panel.id) ? ' is-highlighted' : ''}" data-panel-id="${escapeHtml(panel.id)}" data-slot="${index}">${panelInnerHtml(panel)}</div>`).join('')}
+      ${panels.map((panel, index) => `<div class="panel${pipPanels.has(panel.id) ? ' panel--pip' : panel.url ? ' panel--loaded' : ` panel--empty${isAutoSearchPanel(panel.id) ? ` panel--searching${autoSearch?.phase !== 'searching' ? ' is-searching-done' : ''}` : ''}`}${highlighted.has(panel.id) ? ' is-highlighted' : ''}" data-panel-id="${escapeHtml(panel.id)}" data-slot="${index}">${panelInnerHtml(panel)}</div>`).join('')}
     </div>
     ${editorOpen ? organizePanelHtml() : ''}
   </div>`

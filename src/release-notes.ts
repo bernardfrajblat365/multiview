@@ -9,6 +9,8 @@ export const RELEASES: readonly Release[] = [
     version: '1.3.2',
     label: '1.3.2',
     notes: [
+      { title: 'Modo Auto no YouTube', body: 'O Modo Auto também procura nas lives dos canais da sua lista do YouTube: marque YouTube em Onde procurar. As mesmas competições e times principais valem para os dois, e um jogo que está na BLL e no YouTube abre uma vez só. Para poupar a cota do YouTube, as lives são lidas a cada 5 minutos.' },
+      { title: 'Modo Auto mostra que está procurando', body: 'Ao ligar o Modo Auto, a janela fecha e as telas vazias mostram que o Quadra está procurando jogos ao vivo; cada jogo encontrado ocupa uma delas. Se nada estiver ao vivo, as telas avisam e voltam ao normal, e o Auto segue procurando.' },
       { title: 'Modo Auto sem som por cima', body: 'Um jogo que o modo Auto abre entra mudo quando já há outro jogo na tela, mesmo que você esteja ouvindo um deles; só o primeiro jogo de uma grade vazia segue o seu "Mutar todos".' },
       { title: 'Tela limpa nos gols', body: 'Quando um gol (ou o VAR) reorganiza as telas com você parado, os botões dos painéis, a barra de cima e o cursor não aparecem mais: a tela continua limpa para o lance. Eles voltam ao mexer o mouse ou apertar uma tecla.' },
       { title: 'Cursor some com o mouse parado', body: 'O cursor agora some sobre o vídeo alguns segundos depois de você parar o mouse, também depois de clicar em um botão do Quadra e nos players que ficam dentro de outra página ou que mudam o próprio cursor.' },

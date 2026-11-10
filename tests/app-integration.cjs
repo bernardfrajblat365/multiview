@@ -1241,7 +1241,10 @@ async function run() {
     await waitForExpression(target, `Boolean(document.querySelector('.chooser'))`)
 
     // Grid with an empty screen and nothing live in the lists: the skeleton says so, then turns back into a normal empty screen.
+    // "Começar com uma tela" keeps the first panel of the last grid (with its game): clear it for an empty screen.
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-start-one').click()`)
+    await waitForExpression(target, `document.querySelectorAll('.panel').length === 1`)
+    await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-more').click(); document.querySelector('#btn-clear-all').click()`)
     await waitForExpression(target, `document.querySelectorAll('.panel--empty').length === 1`)
     fixtureDelayMs.bll = 1500
     await evaluate(target.webSocketDebuggerUrl, `document.querySelector('#btn-auto-open').click()`)

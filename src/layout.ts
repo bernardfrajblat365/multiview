@@ -21,7 +21,7 @@ export type PanelPayload = {
   pip: boolean
   bounds: Bounds
 }
-export type LayoutPayload = { view: 'choose' | 'grid'; panelCount: number; mode: LayoutMode; panels: PanelPayload[] }
+export type LayoutPayload = { view: 'choose' | 'grid'; panelCount: number; mode: LayoutMode; panels: PanelPayload[]; seq?: number }
 export type Composition = { id: string; highlightCount: number; label: string; positions: HighlightPosition[] }
 export type CompositionOptions = {
   mode?: LayoutMode

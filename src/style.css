@@ -7,6 +7,12 @@
   --accent-ink: #102418;
   --line: rgba(200, 245, 96, 0.18);
   --panel-empty: #0a2a20;
+  --veil: #050f0b;
+  --ease-out: cubic-bezier(0.22, 1, 0.36, 1);
+  --ease-in: cubic-bezier(0.4, 0, 1, 1);
+  --d-fast: 120ms;
+  --d-base: 200ms;
+  --d-slow: 320ms;
   color-scheme: dark;
   font-family: 'Figtree', sans-serif;
   font-size: 16px;
@@ -584,10 +590,13 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
   display: flex; flex-wrap: wrap; align-items: center; justify-content: flex-end; gap: 0.4rem;
   max-width: calc(100% - 1.5rem); padding: 0.45rem; border: 1px solid var(--line); border-radius: 12px;
   background: rgba(7,26,20,0.97); box-shadow: 0 8px 28px rgba(0,0,0,0.45);
-  opacity: 0; visibility: hidden; transform: translateY(calc(100% + 1.5rem)); pointer-events: none;
-  transition: opacity 0.2s ease, transform 0.2s ease, visibility 0s linear 0.2s;
+  opacity: 0; visibility: hidden; transform: translateY(10px); pointer-events: none;
+  transition: opacity var(--d-slow) var(--ease-in), transform var(--d-slow) var(--ease-in), visibility 0s linear var(--d-slow);
 }
-.grid-shell.is-toolbar-visible .toolbar { opacity: 1; visibility: visible; transform: none; pointer-events: auto; transition-delay: 0s; }
+.grid-shell.is-toolbar-visible .toolbar {
+  opacity: 1; visibility: visible; transform: none; pointer-events: auto;
+  transition: opacity 160ms var(--ease-out), transform 160ms var(--ease-out), visibility 0s;
+}
 .back-corner {
   position: fixed; top: 0.45rem; left: 0.45rem; z-index: 61;
   box-sizing: border-box; height: 1.85rem; display: inline-flex; align-items: center; line-height: 1;
@@ -1019,4 +1028,110 @@ body.is-dragging, body.is-dragging * { cursor: grabbing !important; }
 @container (max-width: 17rem) {
   .info-stat__line { gap: 0.25rem; font-size: 0.72rem; grid-template-columns: minmax(2rem, auto) minmax(0, 1fr) minmax(2rem, auto); }
   .info-stat__name { font-size: 0.66rem; }
+}
+
+/* ---------- Motion (animation plan) ---------- */
+#motion-layer, .motion-ghost-host { display: contents; }
+.motion-ghost { pointer-events: none !important; }
+
+/* Overlay UI */
+.chooser.is-entering .chooser__card { animation: chooser-card-in var(--d-slow) var(--ease-out) backwards; animation-delay: calc(var(--i, 0) * 18ms); }
+@keyframes chooser-card-in { from { opacity: 0; transform: translateY(10px); } }
+
+.toolbar__menu { transform-origin: bottom right; }
+.toolbar__menu.is-entering { animation: menu-in var(--d-base) var(--ease-out); }
+.toolbar__menu[hidden].is-leaving { display: flex; align-items: flex-start; gap: 0.7rem; pointer-events: none; animation: menu-out var(--d-fast) var(--ease-in) forwards; }
+@keyframes menu-in { from { opacity: 0; transform: translateY(6px) scale(0.97); } }
+@keyframes menu-out { to { opacity: 0; transform: translateY(6px) scale(0.97); } }
+
+.organize-panel.is-entering { animation: organize-in var(--d-slow) var(--ease-out); }
+.organize-panel.is-leaving { overflow: hidden; animation: organize-out var(--d-fast) var(--ease-in) forwards; }
+@keyframes organize-in { from { opacity: 0; transform: translateY(14px); } }
+@keyframes organize-out { to { opacity: 0; transform: translateY(10px); } }
+
+.confirm.is-entering { animation: fade-in var(--d-base) var(--ease-out); }
+.confirm.is-entering > * { animation: confirm-dialog-in var(--d-slow) var(--ease-out); }
+.confirm.is-leaving { animation: fade-out var(--d-fast) var(--ease-in) forwards; }
+.confirm.is-leaving > * { animation: confirm-dialog-out var(--d-fast) var(--ease-in) forwards; }
+@keyframes confirm-dialog-in { from { opacity: 0; transform: translateY(6px) scale(0.96); } }
+@keyframes confirm-dialog-out { to { opacity: 0; transform: translateY(4px) scale(0.97); } }
+@keyframes fade-in { from { opacity: 0; } }
+@keyframes fade-out { to { opacity: 0; } }
+
+#btn-check-updates { display: inline-flex; align-items: center; justify-content: center; gap: 0.45rem; }
+.btn__spinner { display: none; width: 0.85em; height: 0.85em; border: 2px solid currentColor; border-right-color: transparent; border-radius: 50%; }
+#btn-check-updates[aria-busy="true"] .btn__spinner { display: inline-block; animation: spin 700ms linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+#update-status { display: inline-block; }
+#update-status.is-updating { animation: status-in var(--d-base) var(--ease-out); }
+@keyframes status-in { from { opacity: 0; transform: translateY(4px); } }
+
+/* Grid render diff */
+.panel.is-entering { animation: panel-in var(--d-slow) var(--ease-out); }
+@keyframes panel-in { from { opacity: 0; transform: scale(0.9); } }
+.panel.is-leaving { animation: panel-out 140ms var(--ease-in) forwards; }
+.panel.is-leaving .panel__controls { display: none; }
+@keyframes panel-out { to { opacity: 0; transform: scale(0.94); } }
+
+[data-highlight].is-popping { animation: star-pop 360ms var(--ease-out); }
+@keyframes star-pop { 35% { transform: scale(1.38) rotate(-8deg); } }
+.panel.is-glowing::after {
+  content: ""; position: absolute; inset: 0; z-index: 20; pointer-events: none;
+  border: 1px solid rgba(200,245,96,0.8); box-shadow: inset 0 0 22px rgba(200,245,96,0.22);
+  opacity: 0; animation: panel-glow 520ms var(--ease-out);
+}
+@keyframes panel-glow { 40% { opacity: 1; } }
+
+.panel__target-ring {
+  position: absolute; inset: 4px; z-index: 21; pointer-events: none; border-radius: 4px;
+  border: 2px solid rgba(255,196,122,0.9); box-shadow: 0 0 0 3px rgba(255,168,76,0.18);
+}
+.panel__target-ring.is-pulsing::before {
+  content: ""; position: absolute; inset: -2px; border-radius: 5px; border: 2px solid #ffd7a8;
+  animation: ring-pulse 900ms var(--ease-out) 3;
+}
+@keyframes ring-pulse { from { opacity: 0.9; transform: scale(1); } to { opacity: 0; transform: scale(1.03); } }
+
+.motion-flash { position: fixed; z-index: 21; background: var(--ink); opacity: 0; animation: panel-flash 420ms var(--ease-out); }
+@keyframes panel-flash { from { opacity: 0.28; } }
+
+#panel-count-status { display: inline-block; }
+#panel-count-status.is-rolling-up { animation: count-up var(--d-base) var(--ease-out); }
+#panel-count-status.is-rolling-down { animation: count-down var(--d-base) var(--ease-out); }
+@keyframes count-up { from { opacity: 0; transform: translateY(60%); } }
+@keyframes count-down { from { opacity: 0; transform: translateY(-60%); } }
+
+.organize-preview__cell.is-entering { animation: fade-in var(--d-base) var(--ease-out); }
+
+/* Veils over native video */
+.panel__veil {
+  position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; overflow: hidden; pointer-events: none;
+  background: var(--veil); transition: opacity var(--d-slow) var(--ease-out);
+}
+.panel__veil::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(200,245,96,0.07) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: veil-shimmer 1100ms linear 7; /* about 8 s, then a static veil */
+}
+@keyframes veil-shimmer { to { transform: translateX(100%); } }
+.panel__veil.is-revealing { opacity: 0; }
+.panel__veil-label { position: relative; color: var(--ink-muted); font-size: 0.8rem; }
+
+.layout-veil { position: fixed; inset: 0; z-index: 19; }
+.layout-veil__tile { position: absolute; background: var(--veil); }
+.layout-veil__tile--viewport { inset: 0; }
+.layout-veil__frame {
+  position: absolute; display: grid; place-items: center; border-radius: 2px;
+  border: 1px solid rgba(200,245,96,0.35); background: rgba(18,80,60,0.25);
+  font-family: 'Neuton', serif; font-weight: 700; font-size: clamp(0.85rem, 1.6vw, 1.4rem); color: var(--ink);
+}
+
+/* Instant cuts: reduced motion, the motion=off flag and window resizes. */
+@media (prefers-reduced-motion: reduce) {
+  *, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }
+}
+html[data-motion="off"] *, html[data-motion="off"] *::before, html[data-motion="off"] *::after,
+html.is-resizing *, html.is-resizing *::before, html.is-resizing *::after {
+  transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important;
 }

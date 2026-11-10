@@ -84,6 +84,60 @@ function stripIdentity(node: Element): void {
   }
 }
 
+export type ScreenRect = { left: number; top: number; width: number; height: number }
+export type FlipEntry = { el: HTMLElement; from: ScreenRect }
+
+const FLIP_EASING = 'cubic-bezier(0.22, 1, 0.36, 1)'
+const activeFlips = new WeakMap<HTMLElement, Animation>()
+
+/**
+ * FLIP with the Web Animations API: the element is already at its final layout;
+ * it is drawn from `from` and slides back to none. Only transform is animated,
+ * nothing is written to inline styles, and the animation disappears when done.
+ * Never call this on an element that carries a native video view.
+ */
+export function flip(entries: FlipEntry[], durationMs: number, onDone?: () => void): void {
+  if (!motionEnabled() || typeof Element.prototype.animate !== 'function') {
+    onDone?.()
+    return
+  }
+  const animations: Animation[] = []
+  for (const { el, from } of entries) {
+    activeFlips.get(el)?.cancel()
+    const to = el.getBoundingClientRect()
+    if (to.width <= 0 || to.height <= 0 || from.width <= 0 || from.height <= 0) continue
+    const dx = from.left - to.left
+    const dy = from.top - to.top
+    const sx = from.width / to.width
+    const sy = from.height / to.height
+    if (Math.abs(dx) < 0.5 && Math.abs(dy) < 0.5 && Math.abs(sx - 1) < 0.005 && Math.abs(sy - 1) < 0.005) continue
+    const animation = el.animate([
+      { transformOrigin: '0 0', transform: `translate(${dx}px, ${dy}px) scale(${sx}, ${sy})` },
+      { transformOrigin: '0 0', transform: 'none' },
+    ], { duration: durationMs, easing: FLIP_EASING })
+    activeFlips.set(el, animation)
+    animations.push(animation)
+  }
+  if (!onDone) return
+  if (animations.length === 0) {
+    onDone()
+    return
+  }
+  void Promise.allSettled(animations.map((animation) => animation.finished)).then(() => onDone())
+}
+
+/** A short light flash over a screen rect (e.g. a panel that just received a player). */
+export function flashRect(rect: ScreenRect, durationMs = 420): void {
+  if (!motionEnabled() || rect.width <= 0 || rect.height <= 0) return
+  const flash = document.createElement('div')
+  flash.className = 'motion-ghost motion-flash'
+  Object.assign(flash.style, {
+    left: `${rect.left}px`, top: `${rect.top}px`, width: `${rect.width}px`, height: `${rect.height}px`,
+  })
+  motionLayer().appendChild(flash)
+  window.setTimeout(() => flash.remove(), durationMs + 60)
+}
+
 /**
  * Plays an exit animation on an inert copy of `element`. Call it right before the
  * real element is removed or hidden; the real DOM change stays synchronous.
@@ -100,7 +154,9 @@ export function ghostOut(element: Element | null | undefined, rootClass: string,
   const ghost = element.cloneNode(true) as HTMLElement
   const copies = [ghost, ...ghost.querySelectorAll<HTMLElement>('*')]
   for (const node of copies) stripIdentity(node)
-  ghost.classList.remove(rootClass)
+  for (const name of [...ghost.classList]) {
+    if (name === rootClass || name.startsWith(`${rootClass}--`)) ghost.classList.remove(name)
+  }
   ghost.classList.add('motion-ghost', ghostClass, 'is-leaving')
   ghost.inert = true
   ghost.setAttribute('aria-hidden', 'true')

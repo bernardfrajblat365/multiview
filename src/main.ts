@@ -19,7 +19,8 @@ import {
   type OrganizerChoice,
   type OrganizerDraft,
 } from './organizer'
-import { ghostOut, initMotion, markResizing, oneShot } from './motion'
+import { flashRect, flip, ghostOut, initMotion, markResizing, oneShot, type FlipEntry, type ScreenRect } from './motion'
+import { diffRender, type RenderDiff, type RenderSnapshot } from './motion-diff'
 
 type View = 'choose' | 'grid'
 type Panel = { id: PanelId; url: string; draftUrl: string; muted: boolean }
@@ -66,6 +67,10 @@ let pendingFocusPanelId: PanelId | null = null
 let weddbetsTargetId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
 let lastRenderedView: View | null = null
+let lastRender: RenderSnapshot | null = null
+type CatalogId = 'weddbets' | 'bllsport'
+const CATALOG_IDS: CatalogId[] = ['weddbets', 'bllsport']
+let renderedTargets: Record<CatalogId, PanelId | null> = { weddbets: null, bllsport: null }
 
 function createPanel(): Panel {
   return { id: `panel-${panelSerial++}`, url: '', draftUrl: '', muted: allPanelsMuted() }
@@ -197,7 +202,8 @@ function setPanelCount(count: number, options: { recordHistory?: boolean } = {})
   if (view === 'grid') renderGrid()
 }
 
-function selectCount(count: number) {
+function selectCount(count: number, card?: HTMLElement) {
+  const from = card?.querySelector('.chooser__preview')?.getBoundingClientRect()
   highlighted.clear()
   layoutMode = 'auto'
   highlightPosition = undefined
@@ -208,6 +214,15 @@ function selectCount(count: number) {
   editorOpen = false
   pendingFocusPanelId = null
   render()
+  morphStageFrom(from)
+}
+
+// Chooser thumbnail grows into the grid. Only when no panel has a video:
+// a transformed stage would distort the bounds sent to native views.
+function morphStageFrom(from: DOMRect | undefined) {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')
+  if (!from || !stage || panels.some((panel) => panel.url)) return
+  flip([{ el: stage, from }], 320, scheduleSyncLayout)
 }
 
 function startWithOnePanel() {
@@ -446,12 +461,14 @@ function panelLabel(id: PanelId) {
 function openWeddbets(id: PanelId) {
   if (!panelById(id)) return
   weddbetsTargetId = id
+  syncTargetRings()
   window.quadra?.openWeddbets(id, panelLabel(id))
 }
 
 function openBllsport(id: PanelId) {
   if (!panelById(id)) return
   bllsportTargetId = id
+  syncTargetRings()
   window.quadra?.openBllsport(id, panelLabel(id))
 }
 
@@ -468,6 +485,8 @@ function useSportsCatalogPlayer(
   const next = panels.find((candidate) => candidate.id !== panelId && !candidate.url)
   setTargetId(next?.id ?? null)
   renderGrid()
+  const filled = findPanel(panelId)
+  if (filled) flashRect(filled.getBoundingClientRect())
   if (next) syncTarget(next.id, panelLabel(next.id))
   else syncTarget(null)
 }
@@ -612,6 +631,7 @@ function renderPanelElements() {
     panelElement.style.width = `${rect.width * 100}%`
     panelElement.style.height = `${rect.height * 100}%`
   }
+  lastRender = renderSnapshot(result.rects)
 
   scheduleSyncLayout()
 }
@@ -938,6 +958,8 @@ function renderChoose() {
   pendingFocusPanelId = null
   weddbetsTargetId = null
   bllsportTargetId = null
+  lastRender = null
+  renderedTargets = { weddbets: null, bllsport: null }
   window.quadra?.setWeddbetsTarget(null)
   window.quadra?.setBllsportTarget(null)
   document.body.classList.remove('is-grid')
@@ -954,7 +976,7 @@ function renderChoose() {
   </div></main>`
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
   bindUpdateCheck()
-  app.querySelectorAll<HTMLButtonElement>('.chooser__card').forEach((button) => button.addEventListener('click', () => selectCount(Number(button.dataset.count))))
+  app.querySelectorAll<HTMLButtonElement>('.chooser__card').forEach((button) => button.addEventListener('click', () => selectCount(Number(button.dataset.count), button)))
   scheduleSyncLayout()
 }
 
@@ -1076,13 +1098,122 @@ function updateOrganizerPanel(focusSelector?: string): void {
     }
   }
 
+  const previousCells = [...panel.querySelectorAll('.organize-position')].map((position) => new Map(
+    [...position.querySelectorAll<HTMLElement>('[data-preview-panel]')].map((cell) => [cell.dataset.previewPanel ?? '', cell.getBoundingClientRect()]),
+  ))
+
   panel.outerHTML = organizePanelHtml()
   bindOrganizerControls()
+  const entries = [...app.querySelectorAll('.organize-panel .organize-position')].flatMap((position, index) =>
+    [...position.querySelectorAll<HTMLElement>('[data-preview-panel]')].flatMap((cell): FlipEntry[] => {
+      const from = previousCells[index]?.get(cell.dataset.previewPanel ?? '')
+      if (from) return [{ el: cell, from }]
+      oneShot(cell, 'is-entering')
+      return []
+    }))
+  flip(entries, 320)
   app.querySelector<HTMLElement>('.organize-panel__body')?.scrollTo({ top: scrollTop })
   if (nextFocusSelector) app.querySelector<HTMLElement>(nextFocusSelector)?.focus({ preventScroll: true })
 }
 
+function renderSnapshot(rects: ReturnType<typeof calculateLayout>['rects']): RenderSnapshot {
+  return {
+    count: panels.length,
+    rects: Object.fromEntries(rects.map(({ panelId, x, y, width, height }) => [panelId, { x, y, width, height }])),
+    urls: Object.fromEntries(panels.map((panel) => [panel.id, panel.url])),
+    highlighted: [...highlighted],
+  }
+}
+
+function findPanel(id: PanelId) {
+  return app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(id)}"]`)
+}
+
+function captureRingRects(): Partial<Record<CatalogId, DOMRect>> {
+  const rects: Partial<Record<CatalogId, DOMRect>> = {}
+  for (const catalog of CATALOG_IDS) {
+    const ring = app.querySelector(`.panel__target-ring--${catalog}`)
+    if (ring) rects[catalog] = ring.getBoundingClientRect()
+  }
+  return rects
+}
+
+function catalogTarget(catalog: CatalogId) {
+  return catalog === 'weddbets' ? weddbetsTargetId : bllsportTargetId
+}
+
+// Keeps the target ring and the catalog buttons in sync without a re-render.
+// The ring is decoration over the panel: transforming it never touches the
+// rects measured for native views.
+function syncTargetRings(previousRects: Partial<Record<CatalogId, DOMRect>> = captureRingRects()) {
+  if (view !== 'grid') return
+  for (const catalog of CATALOG_IDS) {
+    const id = catalogTarget(catalog)
+    for (const ring of app.querySelectorAll<HTMLElement>(`.panel__target-ring--${catalog}`)) {
+      if (ring.closest<HTMLElement>('.panel')?.dataset.panelId !== id) ring.remove()
+    }
+    for (const button of app.querySelectorAll<HTMLButtonElement>(`[data-${catalog}]`)) {
+      const isTarget = button.closest<HTMLElement>('.panel')?.dataset.panelId === id
+      button.classList.toggle('is-target', isTarget)
+      button.setAttribute('aria-pressed', String(isTarget))
+    }
+    const changed = renderedTargets[catalog] !== id
+    renderedTargets[catalog] = id
+    const panel = id ? findPanel(id) : null
+    if (!panel) continue
+    let ring = panel.querySelector<HTMLElement>(`.panel__target-ring--${catalog}`)
+    if (!ring) {
+      ring = document.createElement('span')
+      ring.className = `panel__target-ring panel__target-ring--${catalog}`
+      ring.setAttribute('aria-hidden', 'true')
+      panel.appendChild(ring)
+    }
+    if (!changed) continue
+    const from = previousRects[catalog]
+    if (from) flip([{ el: ring, from }], 380)
+    oneShot(ring, 'is-pulsing')
+  }
+}
+
+function playGridMotion(diff: RenderDiff, previous: RenderSnapshot) {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')?.getBoundingClientRect()
+  if (stage && diff.movedEmpty.length > 0) {
+    const toScreen = ({ x, y, width, height }: { x: number; y: number; width: number; height: number }): ScreenRect => ({
+      left: stage.left + x * stage.width,
+      top: stage.top + y * stage.height,
+      width: width * stage.width,
+      height: height * stage.height,
+    })
+    const entries = diff.movedEmpty.flatMap((id): FlipEntry[] => {
+      const el = findPanel(id)
+      const from = previous.rects[id]
+      return el?.classList.contains('panel--empty') && from ? [{ el, from: toScreen(from) }] : []
+    })
+    flip(entries, 320)
+  }
+  for (const id of diff.entered) {
+    const el = findPanel(id)
+    if (el?.classList.contains('panel--empty')) oneShot(el, 'is-entering')
+  }
+  for (const id of diff.highlightAdded) {
+    const el = findPanel(id)
+    oneShot(el?.querySelector('[data-highlight]'), 'is-popping')
+    oneShot(el, 'is-glowing')
+  }
+  if (diff.countDelta !== 0) {
+    oneShot(app.querySelector('#panel-count-status'), diff.countDelta > 0 ? 'is-rolling-up' : 'is-rolling-down')
+  }
+}
+
 function renderGrid() {
+  const previousRender = view === 'grid' && app.querySelector('#layout-stage') ? lastRender : null
+  const previousRings = captureRingRects()
+  if (previousRender) {
+    const remaining = new Set(panels.map((panel) => panel.id))
+    for (const id of Object.keys(previousRender.rects)) {
+      if (!remaining.has(id) && !previousRender.urls[id]) ghostOut(findPanel(id), 'panel', 'motion-ghost--panel', 140)
+    }
+  }
   clearToolbarHideTimer()
   moreMenuAbort?.abort()
   moreMenuAbort = null
@@ -1142,6 +1273,8 @@ function renderGrid() {
   bindMoreMenu()
   bindToolbar()
   renderPanelElements()
+  if (previousRender && lastRender) playGridMotion(diffRender(previousRender, lastRender), previousRender)
+  syncTargetRings(previousRings)
   focusPendingPanel()
 }
 
@@ -1166,10 +1299,12 @@ window.quadra?.onFullscreenChange((on) => {
 window.quadra?.onWeddbetsPlayerOpened(({ panelId, url }) => useWeddbetsPlayer(panelId, url))
 window.quadra?.onWeddbetsTargetRequired(() => {
   weddbetsTargetId = null
+  syncTargetRings()
 })
 window.quadra?.onBllsportPlayerOpened(({ panelId, url }) => useBllsportPlayer(panelId, url))
 window.quadra?.onBllsportTargetRequired(() => {
   bllsportTargetId = null
+  syncTargetRings()
 })
 document.addEventListener('keydown', (event) => {
   if (event.key !== 'Escape') return

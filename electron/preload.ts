@@ -17,6 +17,16 @@ const quadra = {
     ipcRenderer.on('quadra:request-layout', listener)
     return () => ipcRenderer.removeListener('quadra:request-layout', listener)
   },
+  onPanelLoadState: (callback: (payload: { panelId: string; state: 'loading' | 'ready' | 'failed' }) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, payload: { panelId: string; state: 'loading' | 'ready' | 'failed' }) => callback(payload)
+    ipcRenderer.on('quadra:panel-load-state', listener)
+    return () => ipcRenderer.removeListener('quadra:panel-load-state', listener)
+  },
+  onLayoutApplied: (callback: (seq: number) => void) => {
+    const listener = (_event: Electron.IpcRendererEvent, seq: number) => callback(seq)
+    ipcRenderer.on('quadra:layout-applied', listener)
+    return () => ipcRenderer.removeListener('quadra:layout-applied', listener)
+  },
   onFullscreenChange: (callback: (on: boolean) => void) => {
     const listener = (_event: Electron.IpcRendererEvent, on: boolean) => callback(on)
     ipcRenderer.on('quadra:fullscreen-changed', listener)

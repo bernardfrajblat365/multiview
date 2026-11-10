@@ -19,7 +19,8 @@ import {
   type OrganizerChoice,
   type OrganizerDraft,
 } from './organizer'
-import { flashRect, flip, ghostOut, initMotion, markResizing, oneShot, type FlipEntry, type ScreenRect } from './motion'
+import { flashRect, flip, ghostOut, initMotion, markResizing, motionAllowed, motionEnabled, oneShot, type FlipEntry, type ScreenRect } from './motion'
+import { coverRects, noteLayoutApplied, VEIL_FRAME_MS, waitForLayoutApplied, type Veil, type VeilFrame } from './veil'
 import { diffRender, type RenderDiff, type RenderSnapshot } from './motion-diff'
 
 type View = 'choose' | 'grid'
@@ -68,6 +69,14 @@ let weddbetsTargetId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
 let lastRenderedView: View | null = null
 let lastRender: RenderSnapshot | null = null
+// Panel veils (PR 3): loading veil per panel, one layout veil at a time.
+const LOADING_VEIL_CAP_MS = 10_000
+const loadingPanels = new Set<PanelId>()
+const loadingTimers = new Map<PanelId, number>()
+let layoutSeq = 0
+let syncNeedsPaintedVeil = false
+let layoutVeil: Veil | null = null
+let fullscreenVeil: Veil | null = null
 type CatalogId = 'weddbets' | 'bllsport'
 const CATALOG_IDS: CatalogId[] = ['weddbets', 'bllsport']
 let renderedTargets: Record<CatalogId, PanelId | null> = { weddbets: null, bllsport: null }
@@ -613,7 +622,51 @@ function panelInnerHtml(panel: Panel): string {
       ${urlFormHtml(panel, { withClose: true })}
     </div>
     <div class="panel__stage" data-stage aria-hidden="true"></div>
+    ${loadingPanels.has(panel.id) ? loadingVeilHtml(panel.id) : ''}
   `
+}
+
+function loadingVeilHtml(id: PanelId) {
+  return `<div class="panel__veil" aria-hidden="true"><span class="panel__veil-label">Carregando ${escapeHtml(panelLabel(id))}…</span></div>`
+}
+
+function markPanelLoading(id: PanelId) {
+  if (!motionAllowed()) return
+  loadingPanels.add(id)
+  const previous = loadingTimers.get(id)
+  if (previous !== undefined) window.clearTimeout(previous)
+  loadingTimers.set(id, window.setTimeout(() => revealPanel(id), LOADING_VEIL_CAP_MS))
+}
+
+// Dissolves the loading veil: the video fades in from behind the overlay.
+function revealPanel(id: PanelId) {
+  loadingPanels.delete(id)
+  const timer = loadingTimers.get(id)
+  if (timer !== undefined) window.clearTimeout(timer)
+  loadingTimers.delete(id)
+  const veil = findPanel(id)?.querySelector<HTMLElement>('.panel__veil')
+  if (!veil) return
+  if (!motionEnabled()) {
+    veil.remove()
+    return
+  }
+  veil.classList.add('is-revealing')
+  veil.addEventListener('transitionend', () => veil.remove(), { once: true })
+  window.setTimeout(() => veil.remove(), 420)
+}
+
+function onPanelLoadState(panelId: PanelId, state: 'loading' | 'ready' | 'failed') {
+  const panel = panelById(panelId)
+  if (!panel?.url || view !== 'grid') return
+  if (state !== 'loading') {
+    revealPanel(panelId)
+    return
+  }
+  if (loadingPanels.has(panelId)) return
+  markPanelLoading(panelId)
+  if (!loadingPanels.has(panelId)) return
+  const element = findPanel(panelId)
+  if (element && !element.querySelector('.panel__veil')) element.insertAdjacentHTML('beforeend', loadingVeilHtml(panelId))
 }
 
 function renderPanelElements() {
@@ -715,6 +768,13 @@ function toggleFullscreen() {
   if (window.quadra) {
     nativeFullscreen = !nativeFullscreen
     updateFullscreenButton()
+    if (panels.some((panel) => panel.url)) {
+      fullscreenVeil?.cancel()
+      const veil = coverRects('viewport')
+      fullscreenVeil = veil
+      // Fallback in case the window never reports the change.
+      if (veil) window.setTimeout(() => releaseFullscreenVeil(veil), 1500)
+    }
     window.quadra.setFullscreen(nativeFullscreen)
     scheduleSyncLayout()
     return
@@ -761,7 +821,7 @@ function setChromeInteractive(interactive: boolean) {
 function syncLayout() {
   if (view === 'choose') {
     setChromeInteractive(true)
-    window.quadra?.setLayout({ view: 'choose', panelCount: panels.length, mode: layoutMode, panels: [] })
+    window.quadra?.setLayout({ view: 'choose', panelCount: panels.length, mode: layoutMode, panels: [], seq: ++layoutSeq })
     return
   }
   const payloadPanels = panels.flatMap((panel) => {
@@ -777,15 +837,68 @@ function syncLayout() {
       bounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
     }]
   })
-  window.quadra?.setLayout({ view: 'grid', panelCount: panels.length, mode: layoutMode, panels: payloadPanels })
+  window.quadra?.setLayout({ view: 'grid', panelCount: panels.length, mode: layoutMode, panels: payloadPanels, seq: ++layoutSeq })
 }
 
 function scheduleSyncLayout() {
   if (layoutSyncFrame !== null) cancelAnimationFrame(layoutSyncFrame)
   layoutSyncFrame = requestAnimationFrame(() => {
+    // A layout veil was added in this task: wait one more frame so it is on
+    // screen before the native views jump to their new bounds.
+    if (syncNeedsPaintedVeil) {
+      syncNeedsPaintedVeil = false
+      layoutSyncFrame = requestAnimationFrame(() => {
+        layoutSyncFrame = null
+        syncLayout()
+      })
+      return
+    }
     layoutSyncFrame = null
     syncLayout()
   })
+}
+
+/** Schedules the next sync behind a freshly added veil; resolves once main applied it. */
+function syncBehindVeil(timeoutMs: number) {
+  syncNeedsPaintedVeil = true
+  const seq = layoutSeq + 1
+  scheduleSyncLayout()
+  return waitForLayoutApplied(seq, timeoutMs)
+}
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+
+// Videos that change place are covered (old and new rects), the views snap
+// once behind the veil, frames show where each game went, then it lifts.
+function veilMovedVideos(ids: PanelId[], previous: RenderSnapshot, stage: DOMRect) {
+  const toScreen = ({ x, y, width, height }: { x: number; y: number; width: number; height: number }): ScreenRect => ({
+    left: stage.left + x * stage.width,
+    top: stage.top + y * stage.height,
+    width: width * stage.width,
+    height: height * stage.height,
+  })
+  const tiles: ScreenRect[] = []
+  const frames: VeilFrame[] = []
+  for (const id of ids) {
+    const before = previous.rects[id]
+    const after = lastRender?.rects[id]
+    if (!before || !after) continue
+    const from = toScreen(before)
+    const to = toScreen(after)
+    tiles.push(from, to)
+    frames.push({ from, to, label: panelLabel(id) })
+  }
+  layoutVeil?.cancel()
+  const veil = coverRects(tiles, frames)
+  layoutVeil = veil
+  if (!veil) return
+  void Promise.all([syncBehindVeil(150), delay(VEIL_FRAME_MS)])
+    .then(nextFrame)
+    .then(() => {
+      veil.release()
+      if (layoutVeil === veil) layoutVeil = null
+    })
 }
 
 function updateChromeHitTarget(x: number, y: number) {
@@ -960,6 +1073,9 @@ function renderChoose() {
   bllsportTargetId = null
   lastRender = null
   renderedTargets = { weddbets: null, bllsport: null }
+  for (const id of [...loadingPanels]) revealPanel(id)
+  layoutVeil?.cancel()
+  layoutVeil = null
   window.quadra?.setWeddbetsTarget(null)
   window.quadra?.setBllsportTarget(null)
   document.body.classList.remove('is-grid')
@@ -1177,6 +1293,7 @@ function syncTargetRings(previousRects: Partial<Record<CatalogId, DOMRect>> = ca
 
 function playGridMotion(diff: RenderDiff, previous: RenderSnapshot) {
   const stage = app.querySelector<HTMLElement>('#layout-stage')?.getBoundingClientRect()
+  if (stage && diff.movedLoaded.length > 0 && motionEnabled()) veilMovedVideos(diff.movedLoaded, previous, stage)
   if (stage && diff.movedEmpty.length > 0) {
     const toScreen = ({ x, y, width, height }: { x: number; y: number; width: number; height: number }): ScreenRect => ({
       left: stage.left + x * stage.width,
@@ -1208,6 +1325,12 @@ function playGridMotion(diff: RenderDiff, previous: RenderSnapshot) {
 function renderGrid() {
   const previousRender = view === 'grid' && app.querySelector('#layout-stage') ? lastRender : null
   const previousRings = captureRingRects()
+  for (const id of [...loadingPanels]) {
+    if (!panelById(id)?.url) revealPanel(id)
+  }
+  for (const panel of panels) {
+    if (panel.url && previousRender?.urls[panel.id] !== panel.url) markPanelLoading(panel.id)
+  }
   if (previousRender) {
     const remaining = new Set(panels.map((panel) => panel.id))
     for (const id of Object.keys(previousRender.rects)) {
@@ -1290,12 +1413,25 @@ function render() {
 }
 
 window.quadra?.onRequestLayout(() => scheduleSyncLayout())
+function releaseFullscreenVeil(veil: Veil) {
+  veil.release()
+  if (fullscreenVeil === veil) fullscreenVeil = null
+}
+
 window.quadra?.onFullscreenChange((on) => {
   markResizing()
   nativeFullscreen = on
   updateFullscreenButton()
-  scheduleSyncLayout()
+  const veil = fullscreenVeil
+  if (!veil) {
+    scheduleSyncLayout()
+    return
+  }
+  // Lift after the views follow the new window size and resizing settles.
+  void syncBehindVeil(600).then(() => delay(160)).then(() => releaseFullscreenVeil(veil))
 })
+window.quadra?.onLayoutApplied((seq) => noteLayoutApplied(seq))
+window.quadra?.onPanelLoadState(({ panelId, state }) => onPanelLoadState(panelId, state))
 window.quadra?.onWeddbetsPlayerOpened(({ panelId, url }) => useWeddbetsPlayer(panelId, url))
 window.quadra?.onWeddbetsTargetRequired(() => {
   weddbetsTargetId = null

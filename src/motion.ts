@@ -22,11 +22,13 @@ export function initMotion(): void {
   if (params.get('motion') === 'off') document.documentElement.dataset.motion = 'off'
 }
 
+/** Motion is allowed at all (user preference and test flag), regardless of resizes. */
+export function motionAllowed(): boolean {
+  return !reducedMotionQuery?.matches && document.documentElement.dataset.motion !== 'off'
+}
+
 export function motionEnabled(): boolean {
-  const root = document.documentElement
-  return !reducedMotionQuery?.matches &&
-    root.dataset.motion !== 'off' &&
-    !root.classList.contains('is-resizing')
+  return motionAllowed() && !document.documentElement.classList.contains('is-resizing')
 }
 
 /** Suspends every transition while the window is being resized or changes fullscreen. */
@@ -40,7 +42,7 @@ export function markResizing(): void {
   }, RESIZE_SETTLE_MS)
 }
 
-function motionLayer(): HTMLElement {
+export function motionLayer(): HTMLElement {
   if (layer?.isConnected) return layer
   layer = document.createElement('div')
   layer.id = 'motion-layer'

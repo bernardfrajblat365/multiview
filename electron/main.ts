@@ -8,7 +8,8 @@ import { createAutoUpdateController } from './update'
 
 const { autoUpdater } = electronUpdater
 
-type SlotViewState = { view: WebContentsView; url: string; cursorCssKey?: string; cursorRevision: number }
+type SlotViewState = { view: WebContentsView; url: string; cursorCssKey?: string; cursorRevision: number; revealPending: boolean }
+type PanelLoadState = 'loading' | 'ready' | 'failed'
 
 const __dirname = dirname(fileURLToPath(import.meta.url))
 const isDev = Boolean(process.env.ELECTRON_RENDERER_URL)
@@ -289,6 +290,7 @@ function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebCo
     }
     const existing = slotViews.get(catalog.target.id)
     if (existing?.url === playerUrl && !existing.view.webContents.isDestroyed()) {
+      markRevealPending(catalog.target.id, existing)
       void existing.view.webContents.loadURL(playerUrl).catch(() => {})
     }
     overlayWindow?.webContents.send(`quadra:${catalog.id}-player-opened`, {
@@ -340,8 +342,28 @@ function openSportsCatalog(catalogId: SportsCatalogId, id: string, label: string
   void catalog.window.loadURL(catalog.homeUrl).catch(() => {})
 }
 
+// The overlay covers a panel with a veil while Quadra itself loads a URL in it
+// and dissolves it once the first load settles. Navigations started by the
+// page (links, SPA routing) never trigger the veil.
+function sendPanelLoadState(panelId: string, state: PanelLoadState) {
+  overlayWindow?.webContents.send('quadra:panel-load-state', { panelId, state })
+}
+
+function markRevealPending(panelId: string, state: SlotViewState) {
+  state.revealPending = true
+  sendPanelLoadState(panelId, 'loading')
+}
+
+function settleReveal(panelId: string, result: Exclude<PanelLoadState, 'loading'>) {
+  const state = slotViews.get(panelId)
+  if (!state?.revealPending) return
+  state.revealPending = false
+  sendPanelLoadState(panelId, result)
+}
+
 function configureRemoteContents(contents: Electron.WebContents, slotId?: string) {
   contents.setUserAgent(electronUserAgent)
+  if (slotId) contents.on('did-stop-loading', () => settleReveal(slotId, 'ready'))
   contents.on('did-finish-load', () => {
     void contents.insertCSS(videoContainCss, { cssOrigin: 'user' }).catch(() => {})
     if (!matchSportsPlayerUrl(contents.getURL())) return
@@ -349,6 +371,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
   })
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!slotId || !isMainFrame || errorCode === -3) return
+    settleReveal(slotId, 'failed')
     const match = matchSportsPlayerUrl(validatedURL)
     if (!match) return
     overlayWindow?.webContents.send(`quadra:${match.catalog.id}-error`, {
@@ -447,8 +470,9 @@ function createSlotView(id: string, url: string, muted: boolean) {
   configureRemoteContents(view.webContents, id)
   view.webContents.setAudioMuted(muted)
   mainWindow?.contentView.addChildView(view)
-  const state: SlotViewState = { view, url, cursorRevision: 0 }
+  const state: SlotViewState = { view, url, cursorRevision: 0, revealPending: false }
   slotViews.set(id, state)
+  markRevealPending(id, state)
   if (cursorHidden) void syncSlotCursor(state)
   void view.webContents.loadURL(url).catch(() => {})
   return state
@@ -468,6 +492,7 @@ function isValidLayoutPayload(value: unknown): value is LayoutPayload {
   if (payload.view !== 'choose' && payload.view !== 'grid') return false
   if (!Number.isInteger(payload.panelCount) || Number(payload.panelCount) < 1 || Number(payload.panelCount) > 16) return false
   if (payload.mode !== 'auto' && payload.mode !== 'equal' && payload.mode !== 'highlights') return false
+  if (payload.seq !== undefined && (!Number.isSafeInteger(payload.seq) || payload.seq < 0)) return false
   if (!Array.isArray(payload.panels) || payload.panels.length > 16) return false
   if (payload.view === 'grid' && payload.panels.length !== payload.panelCount) return false
   const ids = new Set<string>()
@@ -517,6 +542,7 @@ function applyLayout(payload: LayoutPayload) {
     state.view.webContents.setAudioMuted(panel.muted)
     if (state.url !== panel.url) {
       state.url = panel.url
+      markRevealPending(panel.id, state)
       void state.view.webContents.loadURL(panel.url).catch(() => {})
     }
     state.view.setBounds({
@@ -531,6 +557,8 @@ function applyLayout(payload: LayoutPayload) {
     if (!visibleSlots.has(id)) destroySlotView(id)
   }
   raiseOverlay()
+  // Lets the overlay lift its layout veil only after the native views moved.
+  if (payload.seq !== undefined) overlayWindow?.webContents.send('quadra:layout-applied', payload.seq)
 }
 
 function withQuery(url: string, query: Record<string, string>) {

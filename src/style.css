@@ -414,6 +414,31 @@ body.is-grid #app, body.is-grid .grid-shell, body.is-grid .layout-stage { backgr
 
 .organize-preview__cell.is-entering { animation: fade-in var(--d-base) var(--ease-out); }
 
+/* ---------- Motion (PR 3): veils over native video ---------- */
+:root { --veil: #050f0b; }
+.panel__veil {
+  position: absolute; inset: 0; z-index: 20; display: grid; place-items: center; overflow: hidden; pointer-events: none;
+  background: var(--veil); transition: opacity var(--d-slow) var(--ease-out);
+}
+.panel__veil::before {
+  content: ""; position: absolute; inset: 0;
+  background: linear-gradient(100deg, transparent 30%, rgba(200,245,96,0.07) 50%, transparent 70%);
+  transform: translateX(-100%);
+  animation: veil-shimmer 1100ms linear 7; /* about 8 s, then a static veil */
+}
+@keyframes veil-shimmer { to { transform: translateX(100%); } }
+.panel__veil.is-revealing { opacity: 0; }
+.panel__veil-label { position: relative; color: var(--ink-muted); font-size: 0.8rem; }
+
+.layout-veil { position: fixed; inset: 0; z-index: 19; }
+.layout-veil__tile { position: absolute; background: var(--veil); }
+.layout-veil__tile--viewport { inset: 0; }
+.layout-veil__frame {
+  position: absolute; display: grid; place-items: center; border-radius: 2px;
+  border: 1px solid rgba(200,245,96,0.35); background: rgba(18,80,60,0.25);
+  font-family: 'Neuton', serif; font-weight: 700; font-size: clamp(0.85rem, 1.6vw, 1.4rem); color: var(--ink);
+}
+
 /* Instant cuts: reduced motion, the motion=off flag and window resizes. */
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition-duration: 0s !important; transition-delay: 0s !important; animation-duration: 0s !important; animation-delay: 0s !important; animation-iteration-count: 1 !important; }

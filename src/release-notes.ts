@@ -9,6 +9,7 @@ export const RELEASES: readonly Release[] = [
     version: '1.3.2',
     label: '1.3.2',
     notes: [
+      { title: 'Transições mais suaves', body: 'Menus, janelas e o painel Organizar abrem e fecham com uma transição curta. As telas deslizam até o novo lugar quando você adiciona, remove, destaca ou reorganiza; o jogo aparece suavemente ao terminar de carregar, sem o quadro preto; e, ao reorganizar telas com jogo, um véu escuro mostra para onde cada jogo foi. Nada disso fica rodando com a tela parada, e tudo vira corte seco se o Windows estiver com animações reduzidas.' },
       { title: 'Modo Auto no YouTube', body: 'O Modo Auto também procura nas lives dos canais da sua lista do YouTube: marque YouTube em Onde procurar. As mesmas competições e times principais valem para os dois, e um jogo que está na BLL e no YouTube abre uma vez só. Para poupar a cota do YouTube, as lives são lidas a cada 5 minutos.' },
       { title: 'Modo Auto mostra que está procurando', body: 'Ao ligar o Modo Auto, a janela fecha e as telas vazias mostram que o Quadra está procurando jogos ao vivo; cada jogo encontrado ocupa uma delas. Se nada estiver ao vivo, as telas avisam e voltam ao normal, e o Auto segue procurando.' },
       { title: 'Modo Auto sem som por cima', body: 'Um jogo que o modo Auto abre entra mudo quando já há outro jogo na tela, mesmo que você esteja ouvindo um deles; só o primeiro jogo de uma grade vazia segue o seu "Mutar todos".' },

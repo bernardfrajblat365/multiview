@@ -51,6 +51,8 @@ async function run() {
             await new Promise((resolve) => setTimeout(resolve, 25))
           }
         }
+        // Panels may still be sliding (FLIP, <= 320 ms) a frame after a change; measure the settled layout.
+        const settle = () => Promise.allSettled(document.getAnimations().filter((animation) => { const t = animation.effect && animation.effect.getComputedTiming(); return t && t.endTime <= 600 }).map((animation) => animation.finished))
         const readLayout = () => {
           const stage = document.querySelector('.layout-stage')
           const stageRect = stage.getBoundingClientRect()
@@ -196,6 +198,7 @@ async function run() {
         first.querySelector('[data-highlight]').click()
         document.querySelector('.panel[data-slot="1"] [data-highlight]').click()
         await waitFrame()
+        await settle()
         const focused = readLayout()
         const highlightedIds = [...document.querySelectorAll('.panel.is-highlighted')].map((panel) => panel.dataset.panelId)
         const largeAreas = focused.rects.filter((rect) => highlightedIds.includes(rect.id)).map((rect) => rect.width * rect.height)
@@ -421,6 +424,7 @@ async function run() {
         const heroId = heroPanel.dataset.panelId
         heroPanel.querySelector('[data-highlight]').click()
         await waitFrame()
+        await settle()
         const thirteen = readLayout()
         const heroRect = thirteen.rects.find((rect) => rect.id === heroId)
         const otherAreas = thirteen.rects.filter((rect) => rect.id !== heroId).map((rect) => rect.width * rect.height)

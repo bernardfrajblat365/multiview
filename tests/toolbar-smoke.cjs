@@ -104,9 +104,15 @@ async function worker() {
     overlay = BrowserWindow.getAllWindows().find((win) => win.webContents.getURL().includes('/renderer/index.html'))
     return overlay
   }, 'overlay')
-  const ui = (expression) => overlay.webContents.executeJavaScript(expression, true).catch((error) => {
-    throw new Error(`UI JavaScript failed: ${expression}\n${error.stack || error}`)
-  })
+  // State changes are synchronous, but panels may still be sliding (FLIP) for ~300 ms; measure settled geometry.
+  const settleMotion = () => overlay.webContents.executeJavaScript(
+    'Promise.allSettled(document.getAnimations().map((animation) => animation.finished)).then(() => true)', true).catch(() => false)
+  const ui = async (expression) => {
+    await settleMotion()
+    return overlay.webContents.executeJavaScript(expression, true).catch((error) => {
+      throw new Error(`UI JavaScript failed: ${expression}\n${error.stack || error}`)
+    })
+  }
   await until(() => ui("Boolean(document.querySelector('.chooser'))"), 'chooser')
   const main = BaseWindow.getAllWindows().find((win) => win !== overlay)
   const pages = () => webContents.getAllWebContents().filter((page) => page.getURL().startsWith(process.env.QUADRA_TOOLBAR_URL))

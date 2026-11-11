@@ -79,6 +79,9 @@ import {
   type OrganizerChoice,
   type OrganizerDraft,
 } from './organizer'
+import { flashRect, flip, ghostOut, initMotion, markResizing, motionAllowed, motionEnabled, oneShot, type FlipEntry, type ScreenRect } from './motion'
+import { diffRender, type RenderDiff, type RenderSnapshot } from './motion-diff'
+import { coverRects, noteLayoutApplied, VEIL_FRAME_MS, waitForLayoutApplied, type Veil, type VeilFrame } from './veil'
 
 type View = 'choose' | 'grid'
 type Panel = { id: PanelId; url: string; draftUrl: string; muted: boolean; alertsOff: boolean }
@@ -93,6 +96,7 @@ type LayoutSnapshot = {
 }
 
 const app = document.querySelector<HTMLDivElement>('#app')!
+initMotion()
 const APP_VERSION = `v${version}`
 const MIN_PANELS = 1
 const HISTORY_LIMIT = 24
@@ -128,6 +132,17 @@ let layoutResizeFrame: number | null = null
 let lastChromeInteractive: boolean | null = null
 let pendingFocusPanelId: PanelId | null = null
 let bllsportTargetId: PanelId | null = null
+// ---------- Motion state (animation plan) ----------
+let lastRenderedView: View | null = null
+let lastRender: RenderSnapshot | null = null
+let renderedBllTarget: PanelId | null = null
+const LOADING_VEIL_CAP_MS = 10_000
+const loadingPanels = new Set<PanelId>()
+const loadingTimers = new Map<PanelId, number>()
+let layoutSeq = 0
+let syncNeedsPaintedVeil = false
+let layoutVeil: Veil | null = null
+let fullscreenVeil: Veil | null = null
 /** The panels living in their own floating windows (picture-in-picture), memory only. */
 const pipPanels = new Set<PanelId>()
 /** What each floating window was last sent, to send again only what changed. */
@@ -1342,7 +1357,8 @@ function setPanelCount(count: number, options: { recordHistory?: boolean } = {})
   if (view === 'grid') renderGrid()
 }
 
-function selectCount(count: number) {
+function selectCount(count: number, card?: HTMLElement) {
+  const from = card?.querySelector('.chooser__preview')?.getBoundingClientRect()
   highlighted.clear()
   layoutMode = 'auto'
   highlightPosition = undefined
@@ -1353,6 +1369,15 @@ function selectCount(count: number) {
   editorOpen = false
   pendingFocusPanelId = null
   render()
+  morphStageFrom(from)
+}
+
+// Chooser thumbnail grows into the grid. Only when no panel has a video:
+// a transformed stage would distort the bounds sent to native views.
+function morphStageFrom(from: DOMRect | undefined) {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')
+  if (!from || !stage || panels.some((panel) => panel.url)) return
+  flip([{ el: stage, from }], 320, scheduleSyncLayout)
 }
 
 function startWithOnePanel() {
@@ -1401,6 +1426,8 @@ function removePanel(id: PanelId) {
 function setEditor(open: boolean) {
   if (open) infoDrawer.close()
   captureDrafts()
+  const wasOpen = editorOpen
+  if (wasOpen && !open) ghostOut(app.querySelector('.organize-panel'), 120)
   editorOpen = open
 
   if (open) {
@@ -1414,6 +1441,7 @@ function setEditor(open: boolean) {
   }
 
   renderGrid()
+  if (open && !wasOpen) oneShot(app.querySelector('.organize-panel'), 'is-entering')
   app.querySelector<HTMLButtonElement>(open ? '[data-composition]' : '#btn-organize')?.focus()
 }
 
@@ -1609,6 +1637,7 @@ function openWeddbets(id: PanelId) {
 function openBllsport(id: PanelId) {
   if (!panelById(id)) return
   bllsportTargetId = id
+  syncTargetRings()
   syncLayout()
   window.quadra?.openBllsport(id, panelLabel(id))
 }
@@ -1632,7 +1661,7 @@ async function promptText(
     const input = backdrop.querySelector<HTMLInputElement>('.confirm__input')!
     const finish = (value: string | null) => {
       document.removeEventListener('keydown', onKey)
-      backdrop.remove()
+      dismissBackdrop(backdrop)
       resolve(value)
     }
     const submit = () => {
@@ -1650,7 +1679,7 @@ async function promptText(
     backdrop.querySelector('[data-ok]')!.addEventListener('click', submit)
     backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish(null) })
     document.addEventListener('keydown', onKey)
-    document.body.appendChild(backdrop)
+    showBackdrop(backdrop)
     input.focus()
     if (initial) input.select()
   })
@@ -1743,6 +1772,8 @@ function useSportsCatalogPlayer(
   const next = panels.find((candidate) => candidate.id !== panelId && !candidate.url)
   setTargetId(next?.id ?? null)
   renderGrid()
+  const filled = findPanel(panelId)
+  if (filled) flashRect(filled.getBoundingClientRect())
   if (next) syncTarget(next.id, panelLabel(next.id))
   else syncTarget(null)
 }
@@ -1791,6 +1822,7 @@ function applyBatch(urls: string[], source: BatchSource, firstPanelId: PanelId |
   if (source !== 'bll') return
   const next = panels.find((panel) => !panel.url)
   bllsportTargetId = next?.id ?? null
+  syncTargetRings()
   if (next) window.quadra?.setBllsportTarget(next.id, panelLabel(next.id))
   else window.quadra?.setBllsportTarget(null)
 }
@@ -1978,7 +2010,7 @@ function openBatch(source: BatchSource, firstPanelId: PanelId | null = null) {
   renderList()
   const finish = () => {
     document.removeEventListener('keydown', onKey)
-    backdrop.remove()
+    dismissBackdrop(backdrop)
   }
   const onKey = (event: KeyboardEvent) => {
     if (event.key !== 'Escape') return
@@ -2006,7 +2038,7 @@ function openBatch(source: BatchSource, firstPanelId: PanelId | null = null) {
   })
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
   document.addEventListener('keydown', onKey)
-  document.body.appendChild(backdrop)
+  showBackdrop(backdrop)
   backdrop.querySelector<HTMLButtonElement>('[data-cancel]')?.focus()
   void load()
 }
@@ -2213,6 +2245,7 @@ function applyAutoOpen() {
     if (bllsportTargetId && panelById(bllsportTargetId)?.url) {
       const next = panels.find((panel) => !panel.url)
       bllsportTargetId = next?.id ?? null
+      syncTargetRings()
       if (next) window.quadra?.setBllsportTarget(next.id, panelLabel(next.id))
       else window.quadra?.setBllsportTarget(null)
     }
@@ -2509,7 +2542,7 @@ function openAutoOpenDialog() {
   }
   const finish = () => {
     document.removeEventListener('keydown', onKey)
-    backdrop.remove()
+    dismissBackdrop(backdrop)
     // New lists count from the last BLL read, without waiting for the next one.
     if (changed) applyAutoOpen()
   }
@@ -2586,7 +2619,7 @@ function openAutoOpenDialog() {
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish() })
   document.addEventListener('keydown', onKey)
   renderLists()
-  document.body.appendChild(backdrop)
+  showBackdrop(backdrop)
   updateAutoOpenIndicators()
   backdrop.querySelector<HTMLButtonElement>('[data-auto-open-toggle]')?.focus()
 }
@@ -2890,7 +2923,51 @@ function panelInnerHtml(panel: Panel): string {
       ${urlFormHtml(panel, { withClose: true })}
     </div>
     <div class="panel__stage" data-stage aria-hidden="true"></div>
+    ${loadingPanels.has(panel.id) ? loadingVeilHtml(panel.id) : ''}
   `
+}
+
+function loadingVeilHtml(id: PanelId) {
+  return `<div class="panel__veil" aria-hidden="true"><span class="panel__veil-label">Carregando ${escapeHtml(panelLabel(id))}…</span></div>`
+}
+
+function markPanelLoading(id: PanelId) {
+  if (!motionAllowed() || pipPanels.has(id)) return
+  loadingPanels.add(id)
+  const previous = loadingTimers.get(id)
+  if (previous !== undefined) window.clearTimeout(previous)
+  loadingTimers.set(id, window.setTimeout(() => revealPanel(id), LOADING_VEIL_CAP_MS))
+}
+
+// Dissolves the loading veil: the video fades in from behind the overlay.
+function revealPanel(id: PanelId) {
+  loadingPanels.delete(id)
+  const timer = loadingTimers.get(id)
+  if (timer !== undefined) window.clearTimeout(timer)
+  loadingTimers.delete(id)
+  const veil = findPanel(id)?.querySelector<HTMLElement>('.panel__veil')
+  if (!veil) return
+  if (!motionEnabled()) {
+    veil.remove()
+    return
+  }
+  veil.classList.add('is-revealing')
+  veil.addEventListener('transitionend', () => veil.remove(), { once: true })
+  window.setTimeout(() => veil.remove(), 420)
+}
+
+function onPanelLoadState(panelId: PanelId, state: 'loading' | 'ready' | 'failed') {
+  const panel = panelById(panelId)
+  if (!panel?.url || view !== 'grid') return
+  if (state !== 'loading') {
+    revealPanel(panelId)
+    return
+  }
+  if (loadingPanels.has(panelId)) return
+  markPanelLoading(panelId)
+  if (!loadingPanels.has(panelId)) return
+  const element = findPanel(panelId)
+  if (element?.querySelector('[data-stage]') && !element.querySelector('.panel__veil')) element.insertAdjacentHTML('beforeend', loadingVeilHtml(panelId))
 }
 
 function renderPanelElements() {
@@ -2908,6 +2985,7 @@ function renderPanelElements() {
     panelElement.style.width = `${rect.width * 100}%`
     panelElement.style.height = `${rect.height * 100}%`
   }
+  lastRender = renderSnapshot(result.rects)
 
   scheduleSyncLayout()
   updatePanelLabels()
@@ -3017,12 +3095,31 @@ function toggleFullscreen() {
   if (window.quadra) {
     nativeFullscreen = !nativeFullscreen
     updateFullscreenButton()
+    if (panels.some((panel) => panel.url && !pipPanels.has(panel.id))) {
+      fullscreenVeil?.cancel()
+      const veil = coverRects('viewport')
+      fullscreenVeil = veil
+      // Fallback in case the window never reports the change.
+      if (veil) window.setTimeout(() => releaseFullscreenVeil(veil), 1500)
+    }
     window.quadra.setFullscreen(nativeFullscreen)
     scheduleSyncLayout()
     return
   }
   if (document.fullscreenElement) void document.exitFullscreen()
   else void shell.requestFullscreen().catch(() => {})
+}
+
+/** Shows a dialog backdrop with its entrance animation. */
+function showBackdrop(backdrop: HTMLElement) {
+  document.body.appendChild(backdrop)
+  oneShot(backdrop, 'is-entering')
+}
+
+/** Removes a dialog backdrop right away; its exit plays on an inert copy. */
+function dismissBackdrop(backdrop: HTMLElement) {
+  ghostOut(backdrop, 120)
+  backdrop.remove()
 }
 
 function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boolean> {
@@ -3037,7 +3134,7 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
     </div>`
     const finish = (value: boolean) => {
       document.removeEventListener('keydown', onKey)
-      backdrop.remove()
+      dismissBackdrop(backdrop)
       resolve(value)
     }
     const onKey = (event: KeyboardEvent) => {
@@ -3047,7 +3144,7 @@ function confirmAction(message: string, confirmLabel = 'Confirmar'): Promise<boo
     backdrop.querySelector('[data-ok]')!.addEventListener('click', () => finish(true))
     backdrop.addEventListener('click', (event) => { if (event.target === backdrop) finish(false) })
     document.addEventListener('keydown', onKey)
-    document.body.appendChild(backdrop)
+    showBackdrop(backdrop)
     backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
   })
 }
@@ -3089,7 +3186,7 @@ function showUiDialog(payload: UiDialogPayload) {
   </div>`
   const finish = (response: number) => {
     document.removeEventListener('keydown', onKey, true)
-    backdrop.remove()
+    dismissBackdrop(backdrop)
     window.quadra?.respondUiDialog(payload.id, response)
   }
   const onKey = (event: KeyboardEvent) => {
@@ -3102,7 +3199,7 @@ function showUiDialog(payload: UiDialogPayload) {
     button.addEventListener('click', () => finish(Number(button.dataset.response)))
   }
   document.addEventListener('keydown', onKey, true)
-  document.body.appendChild(backdrop)
+  showBackdrop(backdrop)
   backdrop.querySelector<HTMLButtonElement>(`[data-response="${payload.defaultId}"]`)?.focus()
 }
 
@@ -3121,7 +3218,7 @@ function showReleaseNotes(release: Release) {
   </div>`
   const close = () => {
     document.removeEventListener('keydown', onKey)
-    backdrop.remove()
+    dismissBackdrop(backdrop)
   }
   const onKey = (event: KeyboardEvent) => {
     if (event.key === 'Escape') close()
@@ -3129,7 +3226,7 @@ function showReleaseNotes(release: Release) {
   backdrop.querySelector('[data-ok]')!.addEventListener('click', close)
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close() })
   document.addEventListener('keydown', onKey)
-  document.body.appendChild(backdrop)
+  showBackdrop(backdrop)
   backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
 }
 
@@ -3148,7 +3245,7 @@ function showFirstSteps() {
   </div>`
   const close = () => {
     document.removeEventListener('keydown', onKey)
-    backdrop.remove()
+    dismissBackdrop(backdrop)
   }
   const onKey = (event: KeyboardEvent) => {
     if (event.key === 'Escape') close()
@@ -3156,7 +3253,7 @@ function showFirstSteps() {
   backdrop.querySelector('[data-ok]')!.addEventListener('click', close)
   backdrop.addEventListener('click', (event) => { if (event.target === backdrop) close() })
   document.addEventListener('keydown', onKey)
-  document.body.appendChild(backdrop)
+  showBackdrop(backdrop)
   backdrop.querySelector<HTMLButtonElement>('[data-ok]')?.focus()
 }
 
@@ -3215,7 +3312,7 @@ function syncLayout() {
   infoDrawer.sync()
   if (view === 'choose') {
     setChromeInteractive(true)
-    window.quadra?.setLayout({ view: 'choose', panelCount: panels.length, mode: layoutMode, panels: [] })
+    window.quadra?.setLayout({ view: 'choose', panelCount: panels.length, mode: layoutMode, panels: [], seq: ++layoutSeq })
     return
   }
   const payloadPanels = panels.flatMap((panel) => {
@@ -3235,7 +3332,7 @@ function syncLayout() {
       bounds: { x: rect.left, y: rect.top, width: rect.width, height: rect.height },
     }]
   })
-  window.quadra?.setLayout({ view: 'grid', panelCount: panels.length, mode: layoutMode, panels: payloadPanels })
+  window.quadra?.setLayout({ view: 'grid', panelCount: panels.length, mode: layoutMode, panels: payloadPanels, seq: ++layoutSeq })
 }
 
 function scheduleSyncLayout() {
@@ -3250,8 +3347,63 @@ function scheduleSyncLayout() {
     updatePanelLabels()
   }
   // With the main window minimized the overlay is hidden and animation frames stop; the floating window still sends commands.
-  if (document.visibilityState === 'hidden') layoutSyncTimer = window.setTimeout(run, 0)
-  else layoutSyncFrame = requestAnimationFrame(run)
+  if (document.visibilityState === 'hidden') {
+    syncNeedsPaintedVeil = false
+    layoutSyncTimer = window.setTimeout(run, 0)
+    return
+  }
+  layoutSyncFrame = requestAnimationFrame(() => {
+    // A layout veil was added in this task: wait one more frame so it is on
+    // screen before the native views jump to their new bounds.
+    if (!syncNeedsPaintedVeil) {
+      run()
+      return
+    }
+    syncNeedsPaintedVeil = false
+    layoutSyncFrame = requestAnimationFrame(run)
+  })
+}
+
+/** Schedules the next sync behind a freshly added veil; resolves once main applied it. */
+function syncBehindVeil(timeoutMs: number) {
+  syncNeedsPaintedVeil = true
+  const seq = layoutSeq + 1
+  scheduleSyncLayout()
+  return waitForLayoutApplied(seq, timeoutMs)
+}
+
+const nextFrame = () => new Promise<void>((resolve) => requestAnimationFrame(() => resolve()))
+const delay = (ms: number) => new Promise<void>((resolve) => window.setTimeout(resolve, ms))
+
+function stageToScreen(stage: DOMRect, { x, y, width, height }: { x: number; y: number; width: number; height: number }): ScreenRect {
+  return { left: stage.left + x * stage.width, top: stage.top + y * stage.height, width: width * stage.width, height: height * stage.height }
+}
+
+// Videos that change place are covered (old and new rects), the views snap
+// once behind the veil, frames show where each game went, then it lifts.
+function veilMovedVideos(ids: PanelId[], previous: RenderSnapshot, stage: DOMRect) {
+  const tiles: ScreenRect[] = []
+  const frames: VeilFrame[] = []
+  for (const id of ids) {
+    const before = previous.rects[id]
+    const after = lastRender?.rects[id]
+    if (!before || !after || pipPanels.has(id)) continue
+    const from = stageToScreen(stage, before)
+    const to = stageToScreen(stage, after)
+    tiles.push(from, to)
+    frames.push({ from, to, label: panelLabel(id) })
+  }
+  if (tiles.length === 0) return
+  layoutVeil?.cancel()
+  const veil = coverRects(tiles, frames)
+  layoutVeil = veil
+  if (!veil) return
+  void Promise.all([syncBehindVeil(150), delay(VEIL_FRAME_MS)])
+    .then(nextFrame)
+    .then(() => {
+      veil.release()
+      if (layoutVeil === veil) layoutVeil = null
+    })
 }
 
 function panelAtPoint(x: number, y: number): PanelId | null {
@@ -3545,9 +3697,18 @@ function bindMoreMenu() {
   const panel = app.querySelector<HTMLElement>('#toolbar-more-menu')
   if (!menu || !trigger || !panel) return
   const setOpen = (open: boolean) => {
+    const wasOpen = !panel.hidden
     menu.classList.toggle('is-open', open)
     trigger.setAttribute('aria-expanded', String(open))
     panel.hidden = !open
+    if (open === wasOpen) return
+    if (open) {
+      panel.classList.remove('is-leaving')
+      oneShot(panel, 'is-entering')
+    } else {
+      panel.classList.remove('is-entering')
+      oneShot(panel, 'is-leaving')
+    }
   }
   trigger.addEventListener('click', (event) => { event.stopPropagation(); setOpen(panel.hasAttribute('hidden')) }, { signal })
   app.querySelector('#btn-bll-batch')?.addEventListener('click', () => { setOpen(false); openBatch('bll') }, { signal })
@@ -3594,21 +3755,26 @@ function bindUpdateCheck(): void {
   const button = app.querySelector<HTMLButtonElement>('#btn-check-updates')
   const status = app.querySelector<HTMLElement>('#update-status')
   if (!button || !status) return
+  const setStatus = (text: string) => {
+    if (status.textContent === text) return
+    status.textContent = text
+    oneShot(status, 'is-updating')
+  }
 
   button.addEventListener('click', () => {
     if (button.disabled) return
     const check = window.quadra?.checkForUpdate
     if (!check) {
-      status.textContent = updateCheckMessage('disabled')
+      setStatus(updateCheckMessage('disabled'))
       return
     }
 
     button.disabled = true
     button.setAttribute('aria-busy', 'true')
-    status.textContent = 'Consultando atualizações...'
+    setStatus('Consultando atualizações...')
     void check()
-      .then((result) => { status.textContent = updateCheckMessage(result) })
-      .catch(() => { status.textContent = updateCheckMessage('error') })
+      .then((result) => { setStatus(updateCheckMessage(result)) })
+      .catch(() => { setStatus(updateCheckMessage('error')) })
       .finally(() => {
         button.disabled = false
         button.removeAttribute('aria-busy')
@@ -3635,13 +3801,20 @@ function renderChoose() {
   window.quadra?.setBllsportTarget(null)
   document.body.classList.remove('is-grid')
   setChromeInteractive(true)
-  app.innerHTML = `<main class="chooser"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
+  const entering = lastRenderedView !== 'choose'
+  lastRenderedView = 'choose'
+  lastRender = null
+  renderedBllTarget = null
+  for (const id of [...loadingPanels]) revealPanel(id)
+  layoutVeil?.cancel()
+  layoutVeil = null
+  app.innerHTML = `<main class="chooser${entering ? ' is-entering' : ''}"><div class="chooser__atmosphere" aria-hidden="true"></div><div class="chooser__content">
     <div class="brand-lockup"><p class="brand">Quadra</p><span class="app-version" aria-label="Versão ${APP_VERSION}">${APP_VERSION}</span></div>
     <h1>Quantas telas?</h1><p class="lede">Escolha de 1 a ${MAX_PANELS} jogos para acompanhar ao mesmo tempo.</p>
-    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><div class="chooser__bll"><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch" title="Abrir vários jogos; passe o mouse para trocar de conta da BLL">Abrir vários jogos da BLL</button><div class="bll-accounts" role="menu" aria-label="Contas da BLL"><button type="button" class="bll-accounts__item bll-accounts__add" role="menuitem" data-bll-add><span class="bll-accounts__check" aria-hidden="true"></span><span class="bll-accounts__name">Adicionar conta</span></button></div></div><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status">Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-first-steps">Primeiros passos</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
+    <div class="chooser__start"><button type="button" class="btn btn--load" id="btn-start-one">Começar com uma tela</button><div class="chooser__bll"><button type="button" class="btn btn--load btn--bll" id="btn-start-bll-batch" title="Abrir vários jogos; passe o mouse para trocar de conta da BLL">Abrir vários jogos da BLL</button><div class="bll-accounts" role="menu" aria-label="Contas da BLL"><button type="button" class="bll-accounts__item bll-accounts__add" role="menuitem" data-bll-add><span class="bll-accounts__check" aria-hidden="true"></span><span class="bll-accounts__name">Adicionar conta</span></button></div></div><button type="button" class="btn btn--load btn--youtube" id="btn-start-youtube-batch">Abrir jogos ao vivo do YouTube</button><button type="button" class="btn btn--ghost btn--auto-open" id="btn-start-auto-open" aria-pressed="${autoOpenOn}">${autoOpenOn ? 'Modo Auto: ligado' : 'Modo Auto'}</button><button type="button" class="btn btn--ghost" id="btn-check-updates" aria-describedby="update-status"><span class="btn__spinner" aria-hidden="true"></span>Verificar atualizações</button><button type="button" class="btn btn--ghost" id="btn-first-steps">Primeiros passos</button><button type="button" class="btn btn--ghost" id="btn-release-notes">Novidades</button><span id="update-status" role="status" aria-live="polite"></span></div>
     ${alertControlsHtml('chooser')}
     <div class="chooser__options" role="group" aria-label="Número de telas">
-      ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
+      ${Array.from({ length: MAX_PANELS }, (_, index) => index + 1).map((count) => `<button type="button" class="chooser__card" data-count="${count}" style="--i:${count - 1}">${previewHtml(count)}<span class="chooser__count">${count}</span><span class="chooser__label">${count === 1 ? 'tela' : 'telas'}</span></button>`).join('')}
     </div>
   </div></main>`
   app.querySelector<HTMLButtonElement>('#btn-start-one')?.addEventListener('click', startWithOnePanel)
@@ -3653,7 +3826,7 @@ function renderChoose() {
   app.querySelector<HTMLButtonElement>('#btn-release-notes')?.addEventListener('click', () => showReleaseNotes(RELEASES.find((release) => release.version === version) ?? RELEASES[0]))
   bindUpdateCheck()
   bindAlertControls(app)
-  app.querySelectorAll<HTMLButtonElement>('.chooser__card').forEach((button) => button.addEventListener('click', () => selectCount(Number(button.dataset.count))))
+  app.querySelectorAll<HTMLButtonElement>('.chooser__card').forEach((button) => button.addEventListener('click', () => selectCount(Number(button.dataset.count), button)))
   scheduleSyncLayout()
 }
 
@@ -3775,13 +3948,110 @@ function updateOrganizerPanel(focusSelector?: string): void {
     }
   }
 
+  const previousCells = [...panel.querySelectorAll('.organize-position')].map((position) => new Map(
+    [...position.querySelectorAll<HTMLElement>('[data-preview-panel]')].map((cell) => [cell.dataset.previewPanel ?? '', cell.getBoundingClientRect()]),
+  ))
+
   panel.outerHTML = organizePanelHtml()
   bindOrganizerControls()
+  const entries = [...app.querySelectorAll('.organize-panel .organize-position')].flatMap((position, index) =>
+    [...position.querySelectorAll<HTMLElement>('[data-preview-panel]')].flatMap((cell): FlipEntry[] => {
+      const from = previousCells[index]?.get(cell.dataset.previewPanel ?? '')
+      if (from) return [{ el: cell, from }]
+      oneShot(cell, 'is-entering')
+      return []
+    }))
+  flip(entries, 320)
   app.querySelector<HTMLElement>('.organize-panel__body')?.scrollTo({ top: scrollTop })
   if (nextFocusSelector) app.querySelector<HTMLElement>(nextFocusSelector)?.focus({ preventScroll: true })
 }
 
+function renderSnapshot(rects: ReturnType<typeof calculateLayout>['rects']): RenderSnapshot {
+  return {
+    count: panels.length,
+    rects: Object.fromEntries(rects.map(({ panelId, x, y, width, height }) => [panelId, { x, y, width, height }])),
+    // Floating panels have no video in the grid: they animate like empty ones would not, so mark them loaded.
+    urls: Object.fromEntries(panels.map((panel) => [panel.id, pipPanels.has(panel.id) ? `pip:${panel.id}` : panel.url])),
+    highlighted: [...highlighted],
+  }
+}
+
+function findPanel(id: PanelId) {
+  return app.querySelector<HTMLElement>(`.panel[data-panel-id="${CSS.escape(id)}"]`)
+}
+
+// Keeps the BLL target ring and buttons in sync without a re-render. The ring
+// is decoration over the panel: transforming it never touches the rects
+// measured for native views.
+function syncTargetRings(previousRect: DOMRect | undefined = app.querySelector('.panel__target-ring')?.getBoundingClientRect()) {
+  if (view !== 'grid') return
+  const id = bllsportTargetId
+  for (const ring of app.querySelectorAll<HTMLElement>('.panel__target-ring')) {
+    if (ring.closest<HTMLElement>('.panel')?.dataset.panelId !== id) ring.remove()
+  }
+  for (const button of app.querySelectorAll<HTMLButtonElement>('[data-bllsport]')) {
+    const isTarget = button.closest<HTMLElement>('.panel')?.dataset.panelId === id
+    button.classList.toggle('is-target', isTarget)
+    button.setAttribute('aria-pressed', String(isTarget))
+  }
+  const changed = renderedBllTarget !== id
+  renderedBllTarget = id
+  const panel = id ? findPanel(id) : null
+  if (!panel) return
+  let ring = panel.querySelector<HTMLElement>('.panel__target-ring')
+  if (!ring) {
+    ring = document.createElement('span')
+    ring.className = 'panel__target-ring panel__target-ring--bllsport'
+    ring.setAttribute('aria-hidden', 'true')
+    panel.appendChild(ring)
+  }
+  if (!changed) return
+  if (previousRect) flip([{ el: ring, from: previousRect }], 380)
+  oneShot(ring, 'is-pulsing')
+}
+
+function playGridMotion(diff: RenderDiff, previous: RenderSnapshot) {
+  const stage = app.querySelector<HTMLElement>('#layout-stage')?.getBoundingClientRect()
+  if (!stage) return
+  if (diff.movedLoaded.length > 0 && motionEnabled()) veilMovedVideos(diff.movedLoaded, previous, stage)
+  if (diff.movedEmpty.length > 0) {
+    const entries = diff.movedEmpty.flatMap((id): FlipEntry[] => {
+      const el = findPanel(id)
+      const from = previous.rects[id]
+      return el?.classList.contains('panel--empty') && from ? [{ el, from: stageToScreen(stage, from) }] : []
+    })
+    flip(entries, 320)
+  }
+  for (const id of diff.entered) {
+    const el = findPanel(id)
+    if (el?.classList.contains('panel--empty')) oneShot(el, 'is-entering')
+  }
+  for (const id of diff.highlightAdded) {
+    const el = findPanel(id)
+    oneShot(el?.querySelector('[data-highlight]'), 'is-popping')
+    oneShot(el, 'is-glowing')
+  }
+  if (diff.countDelta !== 0) {
+    oneShot(app.querySelector('#panel-count-status'), diff.countDelta > 0 ? 'is-rolling-up' : 'is-rolling-down')
+  }
+}
+
 function renderGrid() {
+  const previousRender = lastRenderedView === 'grid' && app.querySelector('#layout-stage') ? lastRender : null
+  const previousRing = app.querySelector('.panel__target-ring')?.getBoundingClientRect()
+  if (previousRender) {
+    const remaining = new Set(panels.map((panel) => panel.id))
+    for (const id of Object.keys(previousRender.rects)) {
+      if (!remaining.has(id) && !previousRender.urls[id]) ghostOut(findPanel(id), 140)
+    }
+  }
+  for (const id of [...loadingPanels]) {
+    if (!panelById(id)?.url || pipPanels.has(id)) revealPanel(id)
+  }
+  for (const panel of panels) {
+    if (panel.url && previousRender?.urls[panel.id] !== panel.url) markPanelLoading(panel.id)
+  }
+  lastRenderedView = 'grid'
   cancelPanelDrag()
   clearBackHideTimer()
   moreMenuAbort?.abort()
@@ -3849,6 +4119,8 @@ function renderGrid() {
   bindMoreMenu()
   bindToolbar()
   renderPanelElements()
+  if (previousRender && lastRender) playGridMotion(diffRender(previousRender, lastRender), previousRender)
+  syncTargetRings(previousRing)
   updatePanelLabels()
   applyAlertStates(app)
   updateAutoControls()
@@ -3870,15 +4142,30 @@ function render() {
 }
 
 window.quadra?.onRequestLayout(() => scheduleSyncLayout())
+function releaseFullscreenVeil(veil: Veil) {
+  veil.release()
+  if (fullscreenVeil === veil) fullscreenVeil = null
+}
+
 window.quadra?.onFullscreenChange((on) => {
+  markResizing()
   nativeFullscreen = on
   updateFullscreenButton()
-  scheduleSyncLayout()
+  const veil = fullscreenVeil
+  if (!veil) {
+    scheduleSyncLayout()
+    return
+  }
+  // Lift after the views follow the new window size and resizing settles.
+  void syncBehindVeil(600).then(() => delay(160)).then(() => releaseFullscreenVeil(veil))
 })
+window.quadra?.onLayoutApplied((seq) => noteLayoutApplied(seq))
+window.quadra?.onPanelLoadState(({ panelId, state }) => onPanelLoadState(panelId, state))
 window.quadra?.onWeddbetsPlayerOpened(({ panelId, url }) => useWeddbetsPlayer(panelId, url))
 window.quadra?.onBllsportPlayerOpened(({ panelId, url }) => useBllsportPlayer(panelId, url))
 window.quadra?.onBllsportTargetRequired(() => {
   bllsportTargetId = null
+  syncTargetRings()
 })
 window.quadra?.onPanelTitle(({ panelId, title }) => {
   if (!panelById(panelId)) return
@@ -4013,6 +4300,7 @@ document.addEventListener('keydown', (event) => {
   setEditor(false)
 })
 window.addEventListener('resize', () => {
+  markResizing()
   if (view !== 'grid') {
     scheduleSyncLayout()
     return

@@ -59,7 +59,10 @@ type SlotViewState = {
   playbackRetries: number
   /** Window holding the view: the grid, or the picture-in-picture floating window. */
   host: 'main' | 'pip'
+  /** Quadra started a load in this view; the overlay keeps a loading veil until it settles. */
+  revealPending: boolean
 }
+type PanelLoadState = 'loading' | 'ready' | 'failed'
 
 const PIP_WINDOW_TITLE = 'Quadra — Janela flutuante'
 const VIDEO_RECT_POLL_MS = 1500
@@ -714,6 +717,7 @@ function configureSportsCatalog(catalog: SportsCatalog, contents: Electron.WebCo
     }
     const existing = slotViews.get(catalog.target.id)
     if (existing?.url === playerUrl && !existing.view.webContents.isDestroyed()) {
+      markRevealPending(catalog.target.id, existing)
       void existing.view.webContents.loadURL(playerUrl).catch(() => {})
     }
     overlayWindow?.webContents.send(`quadra:${catalog.id}-player-opened`, {
@@ -1117,8 +1121,28 @@ function startMatchDetection(contents: Electron.WebContents, panelId: string) {
   matchDetections.set(panelId, timer)
 }
 
+// The overlay covers a panel with a veil while Quadra itself loads a URL in it
+// and dissolves it once the first load settles. Navigations started by the
+// page (links, SPA routing) never trigger the veil.
+function sendPanelLoadState(panelId: string, state: PanelLoadState) {
+  overlayWindow?.webContents.send('quadra:panel-load-state', { panelId, state })
+}
+
+function markRevealPending(panelId: string, state: SlotViewState) {
+  state.revealPending = true
+  if (state.host === 'main') sendPanelLoadState(panelId, 'loading')
+}
+
+function settleReveal(panelId: string, result: Exclude<PanelLoadState, 'loading'>) {
+  const state = slotViews.get(panelId)
+  if (!state?.revealPending) return
+  state.revealPending = false
+  sendPanelLoadState(panelId, result)
+}
+
 function configureRemoteContents(contents: Electron.WebContents, slotId?: string) {
   contents.setUserAgent(electronUserAgent)
+  if (slotId) contents.on('did-stop-loading', () => settleReveal(slotId, 'ready'))
   let youtubeCssKey: string | undefined
   // YouTube is a SPA: re-evaluate on in-page navigation, and drop the CSS when leaving /watch.
   const syncYoutubePlayer = async () => {
@@ -1195,6 +1219,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
   }
   contents.on('did-fail-load', (_event, errorCode, errorDescription, validatedURL, isMainFrame) => {
     if (!slotId || !isMainFrame || errorCode === -3) return
+    settleReveal(slotId, 'failed')
     const match = matchSportsPlayerUrl(validatedURL)
     if (!match) return
     overlayWindow?.webContents.send(`quadra:${match.catalog.id}-error`, {
@@ -1417,7 +1442,7 @@ function createSlotView(id: string, url: string, muted: boolean, pip = false, ti
     if (!isPipPanelContents(view.webContents)) zoomOverlayByWheel(direction)
   })
   view.webContents.setAudioMuted(muted)
-  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0, host: 'main' }
+  const state: SlotViewState = { view, url, cursorRevision: 0, videoRect: undefined, playbackRetries: 0, host: 'main', revealPending: false }
   if (pip) {
     state.host = 'pip'
     pipWindow.show(id, view, title)
@@ -1425,6 +1450,7 @@ function createSlotView(id: string, url: string, muted: boolean, pip = false, ti
     mainWindow?.contentView.addChildView(view)
   }
   slotViews.set(id, state)
+  markRevealPending(id, state)
   startVideoRectPolling(state, id)
   void syncSlotCursor(state)
   loadSlotUrl(state, url)
@@ -1447,6 +1473,7 @@ function isValidLayoutPayload(value: unknown): value is LayoutPayload {
   const maxPanels = 18
   if (!Number.isInteger(payload.panelCount) || Number(payload.panelCount) < 1 || Number(payload.panelCount) > maxPanels) return false
   if (payload.mode !== 'auto' && payload.mode !== 'equal' && payload.mode !== 'highlights') return false
+  if (payload.seq !== undefined && (!Number.isSafeInteger(payload.seq) || payload.seq < 0)) return false
   if (!Array.isArray(payload.panels) || payload.panels.length > maxPanels) return false
   if (payload.view === 'grid' && payload.panels.length !== payload.panelCount) return false
   const ids = new Set<string>()
@@ -1525,6 +1552,7 @@ function applyLayout(payload: LayoutPayload) {
         state.url = panel.url
         state.cursorCssKey = undefined
         state.playbackRetries = 0
+        markRevealPending(panel.id, state)
         loadSlotUrl(state, panel.url)
       }
     }
@@ -1555,6 +1583,8 @@ function applyLayout(payload: LayoutPayload) {
   }
   syncBllEndWatch()
   raiseOverlay()
+  // Lets the overlay lift its layout veil only after the native views moved.
+  if (payload.seq !== undefined) overlayWindow?.webContents.send('quadra:layout-applied', payload.seq)
 }
 
 function createOverlay() {
@@ -1605,6 +1635,8 @@ function createOverlay() {
   })
   // Smokes run on a fresh profile; the "what's new" popup would cover the screens they click.
   const query: Record<string, string> = testUserDataPath ? { 'release-notes': 'off', 'first-steps': 'off' } : {}
+  // QUADRA_MOTION=off turns every UI animation into an instant cut (visual tests).
+  if (process.env.QUADRA_MOTION === 'off') query.motion = 'off'
   // Smokes read the BLL list for Auto mode faster than the minute the app uses.
   if (Number(process.env.QUADRA_AUTO_OPEN_POLL_MS) > 0) query['auto-open-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_POLL_MS))
   if (Number(process.env.QUADRA_AUTO_OPEN_YOUTUBE_POLL_MS) > 0) query['auto-open-youtube-poll-ms'] = String(Number(process.env.QUADRA_AUTO_OPEN_YOUTUBE_POLL_MS))

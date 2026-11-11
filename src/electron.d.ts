@@ -40,6 +40,8 @@ type QuadraBridge = {
   resolveYoutubeChannel: (input: string) => Promise<YoutubeChannelResult>
   onRequestLayout: (callback: () => void) => () => void
   onFullscreenChange: (callback: (on: boolean) => void) => () => void
+  onPanelLoadState: (callback: (payload: { panelId: string; state: 'loading' | 'ready' | 'failed' }) => void) => () => void
+  onLayoutApplied: (callback: (seq: number) => void) => () => void
   onWeddbetsPlayerOpened: (callback: (payload: { panelId: string; url: string }) => void) => () => void
   onWeddbetsTargetRequired: (callback: () => void) => () => void
   onWeddbetsError: (callback: (payload: { message: string; panelId?: string; url?: string }) => void) => () => void

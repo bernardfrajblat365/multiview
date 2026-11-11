@@ -42,7 +42,7 @@ async function run() {
   try {
     const rendererPath = path.join(projectRoot, 'out', 'renderer', 'index.html')
     async function reset() {
-      await window.loadFile(rendererPath)
+      await window.loadFile(rendererPath, { query: { motion: 'off' } })
       await wait(700)
     }
 

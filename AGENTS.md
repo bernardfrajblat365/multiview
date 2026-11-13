@@ -148,7 +148,7 @@ Persistência: **somente memória** para painéis/URLs/layout (undo ≤ 24). Ses
 | Framework UI | — | Vanilla TypeScript/DOM (sem React/Vue) |
 | ESLint / Prettier | — | **Não configurados**; qualidade via `tsc` + testes |
 
-Fonte de verdade das versões de pacote: `package.json` / `package-lock.json`. Versão do produto atual: **1.3.1**.
+Fonte de verdade das versões de pacote: `package.json` / `package-lock.json`. Versão do produto atual: **1.3.2**.
 
 ### Variáveis de ambiente relevantes
 

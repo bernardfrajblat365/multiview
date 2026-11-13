@@ -437,6 +437,7 @@ async function run() {
         const removedFromSix = document.querySelector('.panel[data-slot="3"]').dataset.panelId
         document.querySelector('.panel[data-slot="3"] [data-remove]').click()
         await waitFrame()
+        await settle()
         const five = readLayout()
         result.interactions.removeChoosesOptimalPreviousCount = five.count === 5 && five.mode === 'auto' &&
           five.noOverlap && document.querySelectorAll('.panel.is-highlighted').length === 1 &&

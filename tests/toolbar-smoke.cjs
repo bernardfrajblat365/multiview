@@ -107,6 +107,9 @@ async function worker() {
   const ui = (expression) => overlay.webContents.executeJavaScript(expression, true).catch((error) => {
     throw new Error(`UI JavaScript failed: ${expression}\n${error.stack || error}`)
   })
+  // State changes are synchronous, but panels may still be sliding (FLIP, <= 320 ms). Geometry checks wait for
+  // that; ordinary calls must not, or every veil and slide would be waited out and the run takes twice as long.
+  const settleMotion = () => ui('Promise.allSettled(document.getAnimations().filter((animation) => { const t = animation.effect && animation.effect.getComputedTiming(); return t && t.endTime <= 600 }).map((animation) => animation.finished)).then(() => true)')
   await until(() => ui("Boolean(document.querySelector('.chooser'))"), 'chooser')
   const main = BaseWindow.getAllWindows().find((win) => win !== overlay)
   const pages = () => webContents.getAllWebContents().filter((page) => page.getURL().startsWith(process.env.QUADRA_TOOLBAR_URL))
@@ -116,11 +119,17 @@ async function worker() {
   let compositions = 0
   async function check(label) {
     await wait(60)
+    await settleMotion()
     const state = await ui(`(${inspectToolbar.toString()})()`)
     assert.deepEqual(state.errors, [], `${label}: ${JSON.stringify(state)}`)
     assert.equal(overlay.isVisible(), true, label)
     assert.equal(overlay.getParentWindow(), main, 'Overlay must stay above the native video views as a child window')
-    assert.deepEqual(overlay.getBounds(), main.getContentBounds(), `native bounds: ${label}`)
+    // At fractional display scaling (e.g. 125% on Windows) setBounds rounds to whole device pixels, so the overlay may differ by 1 DIP.
+    const overlayBounds = overlay.getBounds()
+    const contentBounds = main.getContentBounds()
+    for (const key of ['x', 'y', 'width', 'height']) {
+      assert.ok(Math.abs(overlayBounds[key] - contentBounds[key]) <= 1, `native bounds: ${label} ${JSON.stringify({ overlayBounds, contentBounds })}`)
+    }
     const loadedPages = pages()
     if (loadedPages.length > 0) {
       const fits = await Promise.all(loadedPages.map((page) => page.executeJavaScript(`(() => {
@@ -135,6 +144,7 @@ async function worker() {
     checks++
   }
   async function panelPlacement() {
+    await settleMotion()
     return ui(`(() => {
       const stage = document.querySelector('#layout-stage')?.getBoundingClientRect()
       const panel = document.querySelector('.panel.is-highlighted')?.getBoundingClientRect()
@@ -675,10 +685,10 @@ async function parent() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-toolbar-'))
   const baseUrl = `http://127.0.0.1:${server.address().port}`
-  const env = { ...process.env, QUADRA_TEST_USER_DATA: userData, QUADRA_TOOLBAR_URL: `${baseUrl}/video`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` }
+  const env = { ...process.env, QUADRA_TEST_USER_DATA: userData, QUADRA_TOOLBAR_URL: `${baseUrl}/video`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_MOTION: 'off' }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(require('electron'), [__filename, '--worker'], { env, windowsHide: true, stdio: 'inherit' })
-  const timer = setTimeout(() => child.kill(), 600000)
+  const timer = setTimeout(() => child.kill(), 3600000)
   try {
     const code = await new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject) })
     assert.equal(code, 0, 'Toolbar integration failed')

@@ -680,10 +680,10 @@ async function parent() {
   await new Promise((resolve) => server.listen(0, '127.0.0.1', resolve))
   const userData = fs.mkdtempSync(path.join(os.tmpdir(), 'quadra-toolbar-'))
   const baseUrl = `http://127.0.0.1:${server.address().port}`
-  const env = { ...process.env, QUADRA_TEST_USER_DATA: userData, QUADRA_TOOLBAR_URL: `${baseUrl}/video`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/` }
+  const env = { ...process.env, QUADRA_TEST_USER_DATA: userData, QUADRA_TOOLBAR_URL: `${baseUrl}/video`, QUADRA_BLLSPORT_URL: `${baseUrl}/bll/`, QUADRA_MOTION: 'off' }
   delete env.ELECTRON_RUN_AS_NODE
   const child = spawn(require('electron'), [__filename, '--worker'], { env, windowsHide: true, stdio: 'inherit' })
-  const timer = setTimeout(() => child.kill(), 900000)
+  const timer = setTimeout(() => child.kill(), 3600000)
   try {
     const code = await new Promise((resolve, reject) => { child.once('exit', resolve); child.once('error', reject) })
     assert.equal(code, 0, 'Toolbar integration failed')

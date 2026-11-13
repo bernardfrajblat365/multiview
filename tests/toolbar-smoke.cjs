@@ -124,7 +124,12 @@ async function worker() {
     assert.deepEqual(state.errors, [], `${label}: ${JSON.stringify(state)}`)
     assert.equal(overlay.isVisible(), true, label)
     assert.equal(overlay.getParentWindow(), main, 'Overlay must stay above the native video views as a child window')
-    assert.deepEqual(overlay.getBounds(), main.getContentBounds(), `native bounds: ${label}`)
+    // At fractional display scaling (e.g. 125% on Windows) setBounds rounds to whole device pixels, so the overlay may differ by 1 DIP.
+    const overlayBounds = overlay.getBounds()
+    const contentBounds = main.getContentBounds()
+    for (const key of ['x', 'y', 'width', 'height']) {
+      assert.ok(Math.abs(overlayBounds[key] - contentBounds[key]) <= 1, `native bounds: ${label} ${JSON.stringify({ overlayBounds, contentBounds })}`)
+    }
     const loadedPages = pages()
     if (loadedPages.length > 0) {
       const fits = await Promise.all(loadedPages.map((page) => page.executeJavaScript(`(() => {

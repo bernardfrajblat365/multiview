@@ -1,6 +1,6 @@
 # AGENTS.md — Quadra Multi-view (Single Source of Truth)
 
-Este arquivo é a **fonte única de verdade** para qualquer agente de IA que operar neste repositório. Antes de alterar código, leia este documento por completo e consulte a seção [6. Histórico de Tarefas, Decisões e Estado Atual](#6-histórico-de-tarefas-decisões-e-estado-atual). **Antes de qualquer release, comece pela seção [0. Validação pendente no Windows](#0-validação-pendente-no-windows-antes-do-próximo-release-132).**
+Este arquivo é a **fonte única de verdade** para qualquer agente de IA que operar neste repositório. Antes de alterar código, leia este documento por completo e consulte a seção [6. Histórico de Tarefas, Decisões e Estado Atual](#6-histórico-de-tarefas-decisões-e-estado-atual).
 
 Documentação humana complementar (não substitui este arquivo):
 
@@ -12,71 +12,6 @@ Documentação humana complementar (não substitui este arquivo):
 | `PLANO-FULLSCREEN.md` | Diagnóstico de barra de tarefas sobre controles em tela cheia |
 | `docs/disney-plus-drm.md` | Investigação Widevine/ECS/EVS e limites de evidência Disney+ |
 | `docs/historico-tarefas.md` | Entradas antigas da tabela da seção 6 (consultar só por área/arquivo, não ler tudo) |
-
----
-
-## 0. Validação pendente no Windows antes do próximo release (1.3.2)
-
-**Leia isto primeiro.** As mudanças abaixo entraram na `main` em 2026-11-05, feitas e testadas em sessões na nuvem (Linux): passaram em `typecheck`, `npm test`, `build` e no CI Windows (`fast`, `app`, `toolbar`), mas **nada foi conferido no app de verdade, com jogo ao vivo, login BLL ou DRM**. Antes de abrir o PR de release (`release/1.3.2`), o agente deve passar por esta lista com o usuário no Windows, marcar cada item com `[x]` e a data quando o usuário confirmar, e anotar o que falhar (com o PR de correção). Depois do release, apague esta seção.
-
-Preparação: `npm ci`, `npm run dev` (ou `npm run dist` e instalar o `.exe` de `release/`), com a BLL logada.
-
-### Segurança: permissões e navegação do overlay ([#43](https://github.com/bernardfrajblat365/multiview/pull/43))
-
-- [ ] Jogo BLL real (Widevine) abre, toca e entra em tela cheia. As páginas agora só recebem `fullscreen`, `mediaKeySystem`, escrita no clipboard e storage-access (`electron/web-security.ts`).
-- [ ] Disney+ toca (só vale com o instalador com VMP de produção; ver `docs/disney-plus-drm.md`).
-- [ ] Live do YouTube toca, entra em tela cheia e não pede nenhuma permissão nova.
-- [ ] Arrastar um link ou arquivo para a janela não troca a interface do Quadra por outra página.
-- [ ] Se algum player parar de funcionar: ver no DevTools do painel qual permissão foi negada e incluí-la em `GRANTED_PERMISSIONS`, com teste em `tests/web-security.test.ts`.
-
-### Gaveta de informações: 5 abas ([#44](https://github.com/bernardfrajblat365/multiview/pull/44), [#47](https://github.com/bernardfrajblat365/multiview/pull/47), [#48](https://github.com/bernardfrajblat365/multiview/pull/48))
-
-- [ ] As 5 abas (Escalação, Tabela, Odds, Jogos, Estatísticas) cabem na fileira num painel pequeno e num destaque; a aba escolhida rola para a vista.
-- [ ] Estatísticas com jogo ao vivo do YouTube e de um painel BLL com radar William Hill (ordem dos times igual à do rótulo, inclusive com o feed invertido).
-- [ ] Odds ao vivo e antes do jogo (setas ▲/▼, "antes", palpite dos torcedores); basquete sem empate.
-- [ ] Jogos: confronto direto e forma dos dois times, com escudos.
-- [ ] Com a gaveta aberta, o painel passar a acompanhar outro jogo (ex.: WH achado no 365Scores) recarrega a gaveta com o jogo novo.
-
-### Alertas e vínculo com o 365Scores
-
-- [ ] VAR em jogo BLL com radar William Hill ([#49](https://github.com/bernardfrajblat365/multiview/pull/49)): selo azul "Revisão" durante o VAR e alerta da decisão, sem atraso ⏱; gols e cartões continuam vindo do WH, sem alerta repetido; "gol anulado" só solta o destaque do gol certo.
-- [ ] Alertas WH continuam chegando (gol, cartão, fim de jogo, relógio) depois da mudança dos scripts injetados para `electron/scoreboard-hook.ts` ([#46](https://github.com/bernardfrajblat365/multiview/pull/46)).
-- [ ] Live do YouTube com título "Time A - Time B" se liga ao jogo do 365Scores ([#45](https://github.com/bernardfrajblat365/multiview/pull/45)).
-- [ ] Gol anulado pelo VAR seguido de outro gol do mesmo time (365Scores): o nome de quem marcou vai para o gol novo ([#44](https://github.com/bernardfrajblat365/multiview/pull/44); ver linhas `nome do gol` no Monitor).
-
-### Ainda sem conferência, da 1.3.1 (ver tabela da seção 6)
-
-- [ ] Várias contas BLL com 2 logins reais (trocar de conta, Auto e alertas seguem).
-- [ ] Ícones novos dos controles do painel e da janelinha PIP.
-- [ ] Placar certo no alerta de gol da William Hill com um gol real.
-
-### Animações e véus sobre os vídeos ([#56](https://github.com/bernardfrajblat365/multiview/pull/56))
-
-- [ ] Com 9 painéis tocando, destacar, Organizar → Aplicar, Desfazer, arrastar um painel e adicionar/remover tela: os vídeos que mudam de lugar ficam cobertos por um véu curto (~0,4 s) e reaparecem no lugar novo, sem salto visível e sem recarregar.
-- [ ] Abrir um jogo (URL, BLL, YouTube): o véu "Carregando Jogo N…" some quando o vídeo aparece; em site lento ele dura no máximo 10 s.
-- [ ] Abertura em lote BLL/YouTube com jogos já abertos: ver se aparece um salto curto antes do véu (esses fluxos chamam `syncLayout()` direto).
-- [ ] Tela cheia (entrar e sair) com jogos abertos: véu durante a troca, sem tela preta presa; Disney+ e BLL com Widevine continuam tocando.
-- [ ] Janela flutuante (PiP): painel flutuante não recebe véu nem animação; ida e volta sem recarregar.
-- [ ] Windows com "Efeitos de animação" desligados (movimento reduzido): tudo vira corte seco e nenhum véu aparece.
-- [ ] Parado com jogos tocando, o Quadra não deve gastar mais GPU que antes (Gerenciador de Tarefas).
-
-### Smokes no Windows (o CI já roda, mas vale rodar uma vez local antes do release)
-
-```bash
-npm run test:app
-```
-
-```bash
-npm run test:close
-```
-
-```bash
-npm run test:toolbar
-```
-
-### Decisão pendente do usuário
-
-- [x] (2026-11-05, mergeado no #51) **Odds 1X2 na legenda do painel** (embaixo do nome de cada time, ligada por padrão, opção "Ocultar/Mostrar odds na legenda" no menu ⋯). Foi feita pela sessão das abas Odds/Jogos sem ter sido pedida, por isso ficou fora da `main`; o usuário pediu o PR depois: [#51](https://github.com/bernardfrajblat365/multiview/pull/51) (CI verde, inclusive `test:app`). Antes de mergear, o usuário decide no Windows: a legenda com odds ocupa pouco espaço extra nos painéis pequenos, o atraso ⏱ segura as odds junto com o placar, e jogo da BLL com feed William Hill invertido e basquete (sem empate) mostram as odds certas. Depois do merge, marcar este item e apagar o commit `5be341a` das referências.
 
 ---
 
@@ -373,6 +308,7 @@ Entradas antigas estão em `docs/historico-tarefas.md`. Só consulte esse arquiv
 | Data | Tarefa / Escopo | Status (Concluído / Parcial / Bloqueado) | Arquivos Principais Afetados | Detalhes & Decisões Tomadas | Próximos Passos |
 | :--- | :--- | :--- | :--- | :--- | :--- |
 | 2026-11-18 | Aviso de atualização com só as novidades para o usuário (sem os passos de instalação nem a lista técnica de PRs) | Concluído no código (typecheck, `npm test` 683/683 com casos novos em `tests/release-notes-update.test.ts`; texto da 1.3.2 gerado e lido pelo parser; workflow de release não rodado; sem atualização real) | `electron/release-notes.ts`, `scripts/release-body.ts`, `.github/workflows/windows-release.yml`, `.github/release-install.md`, `tests/release-notes-update.test.ts`, `AGENTS.md` | Relato do usuário. O diálogo lê o corpo do release do GitHub e mostra todo item de lista: os dois avisos do Windows/navegador de "Como instalar" e os títulos de PR do `--generate-notes`. Agora o workflow não usa `--generate-notes`: `scripts/release-body.ts <versão> <arquivo>` monta o corpo com `buildReleaseBody` a partir da entrada de `RELEASES` (`src/release-notes.ts`): seção "Novidades" com um item por nota só com o título em negrito e a descrição numa linha recuada (não é item de lista, então nenhum leitor, nem o das versões já instaladas, mostra), e depois `release-install.md`, cujos dois avisos viraram passos numerados 3 e 4. `parseReleaseNotes` pula as seções "Como instalar", "What's Changed" e "New Contributors"; limite do diálogo 10 → 16 itens. Sem nota de versão. | Editar o corpo do release `v1.3.2` publicado (quem atualiza da 1.3.1 ainda lê o corpo antigo); conferir no próximo draft. |
+| 2026-11-18 | Release 1.3.2 publicado; seção 0 (checklist de validação no Windows) removida | Concluído (só texto) | `AGENTS.md` | Tag `v1.3.2` no merge do #62, draft conferido (`release-verification.json`: versões 1.3.2, VMP de produção, blockmap e sha512 do `latest.yml` batem) e publicado como latest a pedido do usuário. A seção 0 saiu como ela mesma pedia; os itens dela (BLL com Widevine, Disney+, VAR via 365Scores, abas da gaveta, véus/animações, PiP, várias contas BLL) **não foram conferidos no Windows** antes do release, por decisão do usuário. A lista continua no histórico do git (commit anterior a este). | Se aparecer regressão nesses fluxos, corrigir em PR próprio e lançar 1.3.3. |
 | 2026-11-18 | Notas da `1.3.3` juntadas na `1.3.2` antes da tag `v1.3.2` | Concluído (typecheck, `npm test`) | `src/release-notes.ts`, `AGENTS.md` | Pedido do usuário: lançar a 1.3.2 com tudo da `main`. O bump 1.3.2 (#58) foi mergeado sem tag e depois entraram #60/#61 com notas numa entrada `1.3.3`; como o pop-up mostra só a entrada da versão instalada, quem fosse da 1.3.1 para a 1.3.3 perderia as notas da 1.3.2. As 3 notas foram para a `1.3.2` (a do cursor juntada à "Cursor some com o mouse parado"; "tela limpa no gol" já estava em "Tela limpa nos gols") e a entrada `1.3.3` saiu. Checklist da seção 0 continua sem conferência no Windows (o usuário optou por lançar mesmo assim). | Tag `v1.3.2` no merge com CI verde; conferir o draft antes de publicar; apagar a seção 0 depois do release. |
 | 2026-11-18 | Cursor parado que às vezes não sumia depois de 5 s | Concluído no código (typecheck, `npm test` 678/678 com o novo `tests/idle-cursor.test.ts`, `build`; causa achada lendo o código, sem medir com `GetCursorInfo` nem testar no app; o smoke não move o cursor real, então a troca de foco entre players não tem teste de janela) | `electron/idle-cursor.ts`, `electron/main.ts`, `tests/idle-cursor.test.ts`, `package.json`, `src/release-notes.ts`, `AGENTS.md` | Relato do usuário. O Chromium só redesenha o cursor parado na página com foco e só numa mudança de estilo (medido em 2026-11-10). Duas falhas no `quadra:set-chrome-interactive` com `'idle'`: (1) só dava o foco ao player sob o cursor se o foco estivesse no overlay; com o foco num player (clique noutro jogo, o caso comum) o cursor sobre outro painel nunca sumia; também falhava quando o overlay estava interativo no momento (o `(false, true)` anterior já tinha focado a janela dos players e o `'idle'` saía cedo); (2) o CSS do cursor oculto podia chegar antes do foco, e a atualização do cursor da página inativa se perdia. Agora `hideCursorUnderPointer`: com o Quadra em primeiro plano, foca o player sob o cursor (`idleFocusTarget`; não rouba o foco de outro programa nem de um player com campo de texto focado, `EDITING_SCRIPT` em todos os frames, 500 ms de limite) e, depois do foco e de `state.cursorSync`, "cutuca" a folha do cursor (`frameCursorScript('nudge')`, troca `none` por um SVG vazio com `, none` de reserva, invisível dos dois jeitos) duas vezes (0 e 150 ms). Sem mexer no player com mousemove (o YouTube mostraria os controles). Continua sem jeito se outro programa está em primeiro plano. | Conferir no Windows: clicar num jogo, parar o cursor sobre outro, e ver o cursor sumir em ~5 s; também depois de clicar num botão do Quadra. |
 | 2026-11-18 | Controles só no painel sob o cursor; tela limpa no destaque de gol com o mouse parado | Concluído no código (typecheck, `npm test` 668/668, `build`; `test:idle` ganhou os casos novos e `test:toolbar` foi ajustado, os dois rodam só no CI do PR; sem teste com gol real) | `src/main.ts`, `src/style.css`, `tests/idle-screen-smoke.cjs`, `tests/toolbar-smoke.cjs`, `src/release-notes.ts`, `AGENTS.md` | Pedido do usuário: no gol todos os controles apareciam. Duas causas: (1) `.grid-shell.is-toolbar-visible .panel__controls` mostrava os controles de **todos** os painéis sempre que a toolbar aparecia; (2) quando o layout muda sob o cursor parado, Chromium/Windows mandam `mousemove` com a mesma posição, que revelava a toolbar. Agora `updatePanelHover` marca por geometria (painel tocando tem `pointer-events: none`, `:hover` não serve) o painel sob o cursor com `.is-pointer-over`, e só ele mostra os controles (fora da toolbar; re-marcado depois de cada render com `lastPointer`). `mousemove` confiável com o mesmo `screenX/Y` do anterior não revela toolbar nem Voltar; evento disparado por script sempre conta (os smokes usam). `:focus-within` virou `:has(:focus-visible)` com o cursor visível (clique num botão não prende os controles), e o menu ⏱ aberto segura os controles do seu painel. Nota na `1.3.2` (estava numa entrada `1.3.3`; juntada antes da tag). | Conferir no Windows com gol real e mouse parado; ver no CI `test:idle` e `test:toolbar`. |

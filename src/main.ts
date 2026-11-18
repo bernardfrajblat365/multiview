@@ -3529,6 +3529,23 @@ function updateLabelHover(x: number | null, y: number | null) {
   }
 }
 
+/** Last pointer position over the overlay (client coords), to re-mark the hovered panel after a re-render. */
+let lastPointer: { x: number, y: number } | null = null
+/** Last pointer position on screen: a mousemove that doesn't change it is synthetic (the layout moved under a still cursor). */
+let lastPointerScreen: { x: number, y: number } | null = null
+
+// A playing panel ignores the mouse (clicks reach the video), so CSS :hover never matches it.
+// The panel under the pointer is found by geometry and marked; only its controls show.
+function updatePanelHover(x: number | null, y: number | null) {
+  const overToolbar = x !== null && y !== null && Boolean(document.elementFromPoint(x, y)?.closest('.toolbar, .toolbar__menu'))
+  for (const panel of app.querySelectorAll<HTMLElement>('.grid-shell .panel[data-panel-id]')) {
+    const rect = panel.getBoundingClientRect()
+    const over = x !== null && y !== null && !overToolbar && !panel.classList.contains('is-leaving')
+      && x >= rect.left && x < rect.right && y >= rect.top && y < rect.bottom
+    panel.classList.toggle('is-pointer-over', over)
+  }
+}
+
 function updateChromeHitTarget(x: number, y: number) {
   if (dragState) return
   if (view !== 'grid') {
@@ -3544,7 +3561,7 @@ let toolbarAbort: AbortController | null = null
 let moreMenuAbort: AbortController | null = null
 let toolbarResizeObserver: ResizeObserver | null = null
 let toolbarHideTimer: number | null = null
-/** Whether the toolbar (and with it every panel's controls and the cursor) shows; a re-render keeps it as it is. */
+/** Whether the toolbar (and with it the cursor and the hovered panel's controls) shows; a re-render keeps it as it is. */
 let toolbarShown = true
 
 function clearToolbarHideTimer() {
@@ -3666,11 +3683,26 @@ function bindToolbar() {
   // Windows forwards mouse movement while the transparent overlay passes
   // clicks through to a video. Re-enable input as soon as it reaches a control.
   document.addEventListener('mousemove', (event) => {
-    revealToolbar()
-    revealBack(event)
+    // Chromium and Windows send a mousemove with the same position when the layout changes under a still cursor
+    // (goal highlight, Auto mode, a game closing). Only a real movement reveals the toolbar and the controls.
+    // A mousemove dispatched by script carries no screen position and always counts.
+    const moved = !event.isTrusted || !lastPointerScreen || lastPointerScreen.x !== event.screenX || lastPointerScreen.y !== event.screenY
+    if (event.isTrusted) lastPointerScreen = { x: event.screenX, y: event.screenY }
+    lastPointer = { x: event.clientX, y: event.clientY }
+    updatePanelHover(event.clientX, event.clientY)
+    if (moved) {
+      revealToolbar()
+      revealBack(event)
+    }
     updateChromeHitTarget(event.clientX, event.clientY)
   }, { signal, passive: true })
-  document.documentElement.addEventListener('mouseleave', () => updateLabelHover(null, null), { signal, passive: true })
+  document.documentElement.addEventListener('mouseleave', () => {
+    lastPointer = null
+    updateLabelHover(null, null)
+    updatePanelHover(null, null)
+  }, { signal, passive: true })
+  // The panels are new elements after a re-render: mark again the one under the pointer.
+  updatePanelHover(lastPointer?.x ?? null, lastPointer?.y ?? null)
   document.addEventListener('pointerdown', (event) => {
     updateChromeHitTarget(event.clientX, event.clientY)
     revealToolbar()

@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.3',
+    label: '1.3.3',
+    notes: [
+      { title: 'Botões só no painel do cursor', body: 'Ao mexer o mouse aparece a barra de baixo e só os botões do painel que está embaixo do cursor, em vez dos botões de todos os painéis. Quando um gol destaca um jogo com o mouse parado, a tela continua limpa.' },
+    ],
+  },
+  {
     version: '1.3.2',
     label: '1.3.2',
     notes: [

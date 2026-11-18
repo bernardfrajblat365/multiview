@@ -1,5 +1,6 @@
 // Idle screen: with nobody touching the mouse, the screen stays clean (no toolbar, panel controls or cursor),
-// even when a goal re-arranges the grid, and the hidden cursor also covers players in iframes and pages with
+// even when a goal re-arranges the grid or a mousemove arrives without movement; a real move shows only the
+// controls of the panel under the cursor; and the hidden cursor also covers players in iframes and pages with
 // their own `!important` cursor rules.
 const assert = require('node:assert/strict')
 const fs = require('node:fs')
@@ -110,8 +111,25 @@ async function worker() {
   await until(async () => (await cursors()).iframe !== 'none', 'cursor rule removed from the iframe', 5000)
   await until(async () => (await cursors()).important !== 'none', 'cursor rule removed from the page', 5000)
   assert.equal((await cursors()).important, 'pointer', 'With the cursor shown the page keeps its own cursor rule')
+  await wait(300)
+  assert.equal((await screenState()).controls, 0, 'The toolbar alone does not show the panel controls')
 
-  console.log('PASS idle screen: clean after idle and on a goal, hidden cursor in iframes and over !important rules')
+  // Moving the mouse shows the toolbar, but only the controls of the panel under the cursor.
+  const visibleControls = () => ui(`[...document.querySelectorAll('.panel')].filter((panel) => getComputedStyle(panel.querySelector('.panel__controls')).opacity !== '0').map((panel) => panel.dataset.slot)`)
+  const point = await ui(`(() => { const r = document.querySelector('.panel[data-slot="2"]').getBoundingClientRect(); return { x: Math.round(r.left + r.width / 2), y: Math.round(r.top + r.height / 2) } })()`)
+  overlay.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y })
+  await until(async () => JSON.stringify(await visibleControls()) === '["2"]', 'only the hovered panel shows its controls', 3000)
+    .catch(async (error) => { throw new Error(`${error.message}: ${JSON.stringify(await visibleControls())}`) })
+  assert.equal((await screenState()).toolbar, true, 'Moving the mouse shows the toolbar')
+
+  // A mousemove at the same spot (sent when the layout changes under a still cursor) doesn't bring anything back.
+  await until(async () => !(await screenState()).toolbar, 'idle toolbar hide after the mouse move', 12000)
+  await until(async () => (await screenState()).controls === 0, 'panel controls faded out again', 3000)
+  overlay.webContents.sendInputEvent({ type: 'mouseMove', x: point.x, y: point.y })
+  await wait(300)
+  assert.deepEqual(await screenState(), { toolbar: false, cursorHidden: true, controls: 0 }, 'A mousemove without movement keeps the screen clean')
+
+  console.log('PASS idle screen: clean after idle, on a goal and on a still mousemove, controls only on the hovered panel, hidden cursor in iframes and over !important rules')
   app.quit()
 }
 

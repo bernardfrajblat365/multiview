@@ -84,7 +84,11 @@ function inspectToolbar() {
       const y = buttonRect.top + buttonRect.height / 2
       const toolbarOverlapsPanel = x >= rect.left && x <= rect.right && y >= rect.top && y <= rect.bottom
       if (!toolbarOverlapsPanel) {
+        // Only the panel under the cursor shows its controls: check each one as if the cursor were over it.
+        const wasOver = panel.classList.contains('is-pointer-over')
+        panel.classList.add('is-pointer-over')
         const hit = document.elementFromPoint(x, y)
+        if (!wasOver) panel.classList.remove('is-pointer-over')
         if (!button.contains(hit)) errors.push(`covered trash in ${panel.dataset.slot} by ${hit?.className}`)
       }
     }

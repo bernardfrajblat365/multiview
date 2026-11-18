@@ -163,6 +163,47 @@ const NICKNAMES: Record<string, string> = {
   galo: 'atletico mineiro', fogao: 'botafogo', verdao: 'palmeiras', timao: 'corinthians', mengao: 'flamengo', peixe: 'santos',
   'vasco da gama': 'vasco', cap: 'atletico paranaense', bragantino: 'red bull bragantino', 'rb bragantino': 'red bull bragantino',
 }
+/**
+ * National teams: the BLL names them in English in the Nations League and friendlies ("Germany", "Netherlands"),
+ * 365Scores (langId 31) in Portuguese ("Alemanha", "Holanda"), sometimes in English too ("Poland U18").
+ * Only whole names (after "U21"/"(W)" are taken out) are swapped, so "Ireland" never touches a club's name.
+ * Values are 365Scores' Portuguese names, normalized; names spelled the same in both languages are left out.
+ */
+const NATIONAL_TEAMS: Record<string, string> = {
+  // Europe
+  germany: 'alemanha', netherlands: 'holanda', holland: 'holanda', 'the netherlands': 'holanda', 'paises baixos': 'holanda',
+  england: 'inglaterra', spain: 'espanha', france: 'franca', italy: 'italia', belgium: 'belgica', croatia: 'croacia',
+  czechia: 'tchequia', 'czech republic': 'tchequia', 'republica tcheca': 'tchequia', 'republica checa': 'tchequia',
+  turkey: 'turquia', turkiye: 'turquia', greece: 'grecia', serbia: 'servia', switzerland: 'suica', scotland: 'escocia', wales: 'pais de gales',
+  ireland: 'irlanda', 'republic of ireland': 'irlanda', 'northern ireland': 'irlanda do norte', hungary: 'hungria',
+  poland: 'polonia', sweden: 'suecia', norway: 'noruega', denmark: 'dinamarca', finland: 'finlandia', iceland: 'islandia',
+  romania: 'romenia', ukraine: 'ucrania', slovakia: 'eslovaquia', slovenia: 'eslovenia', 'north macedonia': 'macedonia do norte',
+  kazakhstan: 'cazaquistao', azerbaijan: 'azerbaijao', bielorrussia: 'belarus', moldova: 'moldavia', lithuania: 'lituania',
+  latvia: 'letonia', luxembourg: 'luxemburgo', 'faroe islands': 'ilhas faroe', faroe: 'ilhas faroe', cyprus: 'chipre',
+  'bosnia herzegovina': 'bosnia e herzegovina', 'bosnia and herzegovina': 'bosnia e herzegovina',
+  // Americas
+  brazil: 'brasil', uruguay: 'uruguai', paraguay: 'paraguai', ecuador: 'equador', 'united states': 'estados unidos',
+  usa: 'estados unidos', guyana: 'guiana', 'puerto rico': 'porto rico', martinique: 'martinica', guadeloupe: 'guadalupe',
+  'dominican republic': 'republica dominicana', 'trinidad and tobago': 'trinidad e tobago', 'antigua and barbuda': 'antigua e barbuda',
+  // Africa
+  morocco: 'marrocos', egypt: 'egito', algeria: 'argelia', cameroon: 'camaroes', 'ivory coast': 'costa do marfim',
+  'cote d ivoire': 'costa do marfim', 'south africa': 'africa do sul', guinea: 'guine', 'equatorial guinea': 'guine equatorial',
+  'cape verde': 'cabo verde', 'cape verde islands': 'cabo verde', mozambique: 'mocambique', zimbabwe: 'zimbabue', kenya: 'quenia',
+  ethiopia: 'etiopia', sudan: 'sudao', 'south sudan': 'sudao do sul', libya: 'libia', gabon: 'gabao', eswatini: 'essuatini',
+  rwanda: 'ruanda', botswana: 'botsuana', 'sierra leone': 'serra leoa', 'guinea bissau': 'guine bissau', chad: 'chade',
+  lesotho: 'lesoto', eritrea: 'eritreia', mauritius: 'mauricio', comoros: 'comores',
+  // Asia and Oceania
+  japan: 'japao', 'south korea': 'coreia do sul', 'korea republic': 'coreia do sul', 'north korea': 'coreia do norte',
+  'saudi arabia': 'arabia saudita', qatar: 'catar', iraq: 'iraque', 'united arab emirates': 'emirados arabes', uae: 'emirados arabes',
+  'emirados arabes unidos': 'emirados arabes', jordan: 'jordania', 'new zealand': 'nova zelandia', uzbekistan: 'uzbequistao',
+  oman: 'oma', bahrain: 'bahrein', syria: 'siria', lebanon: 'libano', palestine: 'palestina', thailand: 'tailandia',
+  malaysia: 'malasia', singapore: 'singapura', philippines: 'filipinas', kyrgyzstan: 'quirguistao', tajikistan: 'tajiquistao',
+  yemen: 'iemen', afghanistan: 'afeganistao', cambodia: 'camboja', turkmenistan: 'turcomenistao', maldives: 'maldivas',
+  tahiti: 'taiti', 'cook islands': 'ilhas cook', 'solomon islands': 'ilhas salomao', 'new caledonia': 'nova caledonia',
+  'papua new guinea': 'papua nova guine',
+  // "Irã" would read as the start of "Iraque": both sides become "iran".
+  ira: 'iran', 'ir iran': 'iran',
+}
 /** Words in a YouTube title around the team names that are not part of them. */
 const TITLE_NOISE = /\b(?:ao vivo(?: e com imagens?)?|com imagens?|en vivo|live|hoje|agora|assista(?: agora)?|assistir|onde assistir|transmiss[aã]o|online|gr[aá]tis|jogo|partida|narra[cç][aã]o)\b/gi
 const AGE_QUALIFIER = /\b(?:sub|u)[- ]?(\d{2})\b/i
@@ -199,7 +240,8 @@ export function teamQualifiers(text: string, teamNames: string = text) {
 export function teamTokens(name: string): string[] {
   let words = plainWords(name.replace(/\(f\)|\(w\)/gi, ' '))
     .replace(/\b(?:sub|u)\s?\d{2}\b|\bfeminin[oa]\b|\bwomen\b|\breservas?\b/g, ' ')
-  words = NICKNAMES[words.trim()] ?? words
+  const whole = words.replace(/\s+/g, ' ').trim()
+  words = NICKNAMES[whole] ?? NATIONAL_TEAMS[whole] ?? words
   return words
     .split(' ')
     .map((token) => TOKEN_ALIASES[token] ?? token)

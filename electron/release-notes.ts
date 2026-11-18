@@ -20,10 +20,18 @@ export function releaseTag(version: string): string {
 export function parseReleaseNotes(body: string | null | undefined): string[] {
   if (!body) return []
   const items: string[] = []
+  let skipSection = false
   for (const rawLine of body.replace(/\r\n/g, '\n').split('\n')) {
     const line = rawLine.trim()
     if (!line) continue
-    if (/^#{1,6}\s/.test(line)) continue
+    const heading = line.match(/^#{1,6}\s+(.*)$/)
+    if (heading) {
+      // "Como instalar" (.github/release-install.md) is for people on the
+      // Releases page, not news for someone who already has the app.
+      skipSection = /como instalar/i.test(heading[1] ?? '')
+      continue
+    }
+    if (skipSection) continue
     if (/^\*\*Full Changelog\*\*/i.test(line)) continue
     if (/^Full Changelog:/i.test(line)) continue
     const bullet = line.match(/^[-*]\s+(?:\[[ x]\]\s+)?(.+)$/i)

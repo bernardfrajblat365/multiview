@@ -5,8 +5,9 @@
 
 **O Windows vai mostrar um aviso** porque o instalador ainda não tem assinatura digital paga. O Quadra é seguro; é só confirmar:
 
-- **"O Windows protegeu seu computador"**: clique em **Mais informações** e depois em **Executar assim mesmo**.
-- **"Não é baixado com frequência"** (Edge ou Chrome): clique em **Manter** (ou **Manter mesmo assim**).
+<!-- Sem itens de lista ("- ") nesta seção: o aviso de atualização do Quadra 1.3.2 e anteriores lê cada item do release como novidade. -->
+3. **"O Windows protegeu seu computador"**: clique em **Mais informações** e depois em **Executar assim mesmo**.
+4. **"Não é baixado com frequência"** (Edge ou Chrome): clique em **Manter** (ou **Manter mesmo assim**).
 
 Depois de instalado, o próprio Quadra avisa quando sair uma versão nova e pergunta antes de baixar. Não precisa voltar aqui.
 

@@ -12,6 +12,19 @@ test('parseReleaseNotes limpa marcadores do GitHub e remove duplicados', () => {
   assert.deepEqual(parseReleaseNotes(null), [])
 })
 
+test('parseReleaseNotes ignora a seção "Como instalar" do release', () => {
+  const body = [
+    '## Como instalar',
+    '1. Baixe o instalador.',
+    '- **"O Windows protegeu seu computador"**: clique em Mais informações.',
+    '- **"Não é baixado com frequência"** (Edge ou Chrome): clique em Manter.',
+    '',
+    "## What's Changed",
+    '* feat: Aba Estatísticas by @user in https://github.com/a/b/pull/47',
+  ].join('\n')
+  assert.deepEqual(parseReleaseNotes(body), ['Aba Estatísticas'])
+})
+
 test('releaseNotesFromUpdateInfo aceita string e lista', () => {
   assert.deepEqual(releaseNotesFromUpdateInfo({ releaseNotes: '- a' }), ['a'])
   assert.deepEqual(releaseNotesFromUpdateInfo({ releaseNotes: [{ note: '- b' }, '- b', '- c'] }), ['b', 'c'])

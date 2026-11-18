@@ -6,6 +6,13 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
+    version: '1.3.3',
+    label: '1.3.3',
+    notes: [
+      { title: 'Seleções com nome em inglês', body: 'Jogos de seleções da Liga das Nações e de amistosos que a BLL mostra com os nomes em inglês (como "Germany x Netherlands") agora são ligados ao jogo do 365Scores, com placar, alertas e a gaveta de informações.' },
+    ],
+  },
+  {
     version: '1.3.2',
     label: '1.3.2',
     notes: [

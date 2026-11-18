@@ -29,6 +29,7 @@ import {
   sourceKeyOf,
   teamQualifiers,
   teamSimilarity,
+  teamTokens,
   teamsFromTitle,
   varDecisionNote,
   type Detail365,
@@ -320,6 +321,54 @@ test('matchGame: sigla "PSG" com o outro time pelo nome liga ao jogo sem concorr
   const result = matchGame('AO VIVO: LE HAVRE X PARIS SAINT-GERMAIN | LIGUE 1 26/27 | 9ª RODADA', [game(1, 'Le Havre', 'PSG')], NOW)
   assert.equal(result.status, 'matched')
   assert.equal(result.status === 'matched' && result.game.id, 1)
+})
+
+test('teamSimilarity: seleção em inglês (BLL) bate com o nome em português do 365Scores', () => {
+  assert.equal(teamSimilarity('Germany', 'Alemanha'), 1)
+  assert.equal(teamSimilarity('Netherlands', 'Holanda'), 1)
+  assert.equal(teamSimilarity('Czech Republic', 'Tchéquia'), 1)
+  assert.equal(teamSimilarity('Czechia', 'República Tcheca'), 1)
+  assert.equal(teamSimilarity('Serbia', 'Sérvia'), 1)
+  assert.equal(teamSimilarity('Côte d\'Ivoire', 'Costa do Marfim'), 1)
+  assert.equal(teamSimilarity('Korea Republic', 'Coreia do Sul'), 1)
+  assert.equal(teamSimilarity('Netherlands U18', 'Holanda Sub-18'), 1)
+  assert.equal(teamSimilarity('Belarus', 'Bielorrússia'), 1)
+  assert.equal(teamSimilarity('Iran', 'Irã'), 1)
+  assert.ok(teamSimilarity('Irã', 'Iraque') < 0.5)
+  assert.ok(teamSimilarity('Germany', 'Holanda') < 0.5)
+  // Só o nome inteiro é traduzido: clube com o nome de um país no meio não muda.
+  assert.deepEqual(teamTokens('Spain FC Barcelona'), ['spain', 'barcelona'])
+})
+
+test('matchGame: jogo da Liga das Nações com as seleções em inglês liga ao jogo certo do 365Scores', () => {
+  const nations = { competition: 'Liga das Nações - Liga A - Grupo 2' }
+  const games = [
+    game(1, 'Alemanha', 'Holanda', nations),
+    game(2, 'Grécia', 'Sérvia', nations),
+    game(3, 'Espanha', 'Inglaterra', nations),
+    game(4, 'Croácia', 'Tchéquia', nations),
+    game(5, 'França', 'Turquia', nations),
+    game(6, 'Alemanha Sub-17', 'Holanda Sub-17', nations),
+  ]
+  const expect = (title: string, id: number) => {
+    const result = matchGame(title, games, NOW)
+    assert.equal(result.status, 'matched', title)
+    assert.equal(result.status === 'matched' && result.game.id, id, title)
+  }
+  expect('Germany x Netherlands', 1)
+  expect('Greece vs Serbia', 2)
+  expect('Spain x England', 3)
+  expect('Croatia x Czech Republic', 4)
+  expect('Turkey x France', 5)
+  expect('Germany U17 x Netherlands U17', 6)
+})
+
+test('matchGame: amistoso com as seleções em inglês liga ao jogo em português', () => {
+  const friendly = { competition: 'Amistoso Internacional' }
+  const result = matchGame('Japan x Paraguay', [game(7, 'Japão', 'Paraguai', friendly), game(8, 'Catar', 'Coreia do Sul', friendly)], NOW)
+  assert.equal(result.status === 'matched' && result.game.id, 7)
+  const other = matchGame('Qatar vs South Korea', [game(7, 'Japão', 'Paraguai', friendly), game(8, 'Catar', 'Coreia do Sul', friendly)], NOW)
+  assert.equal(other.status === 'matched' && other.game.id, 8)
 })
 
 test('matchGame: "Venezia x Inter" liga a Venezia x Inter de Milão, Internacional ou Inter Milan (único jogo)', () => {

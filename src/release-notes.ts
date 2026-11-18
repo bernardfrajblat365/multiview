@@ -6,15 +6,6 @@ const STORAGE_KEY = 'quadra:last-seen-version'
 /** Newest first. The popup shows the entry whose `version` matches the installed app. */
 export const RELEASES: readonly Release[] = [
   {
-    version: '1.3.3',
-    label: '1.3.3',
-    notes: [
-      { title: 'Botões só no painel do cursor', body: 'Ao mexer o mouse aparece a barra de baixo e só os botões do painel que está embaixo do cursor, em vez dos botões de todos os painéis. Quando um gol destaca um jogo com o mouse parado, a tela continua limpa.' },
-      { title: 'Cursor some sempre', body: 'Com o mouse parado, o cursor agora some sempre depois de alguns segundos. Antes ele podia ficar na tela se estivesse sobre um jogo diferente do último em que você clicou.' },
-      { title: 'Seleções com nome em inglês', body: 'Jogos de seleções da Liga das Nações e de amistosos que a BLL mostra com os nomes em inglês (como "Germany x Netherlands") agora são ligados ao jogo do 365Scores, com placar, alertas e a gaveta de informações.' },
-    ],
-  },
-  {
     version: '1.3.2',
     label: '1.3.2',
     notes: [
@@ -23,10 +14,12 @@ export const RELEASES: readonly Release[] = [
       { title: 'Modo Auto mostra que está procurando', body: 'Ao ligar o Modo Auto, a janela fecha e as telas vazias mostram que o Quadra está procurando jogos ao vivo; cada jogo encontrado ocupa uma delas. Se nada estiver ao vivo, as telas avisam e voltam ao normal, e o Auto segue procurando.' },
       { title: 'Modo Auto sem som por cima', body: 'Um jogo que o modo Auto abre entra mudo quando já há outro jogo na tela, mesmo que você esteja ouvindo um deles; só o primeiro jogo de uma grade vazia segue o seu "Mutar todos".' },
       { title: 'Tela limpa nos gols', body: 'Quando um gol (ou o VAR) reorganiza as telas com você parado, os botões dos painéis, a barra de cima e o cursor não aparecem mais: a tela continua limpa para o lance. Eles voltam ao mexer o mouse ou apertar uma tecla.' },
-      { title: 'Cursor some com o mouse parado', body: 'O cursor agora some sobre o vídeo alguns segundos depois de você parar o mouse, também depois de clicar em um botão do Quadra e nos players que ficam dentro de outra página ou que mudam o próprio cursor.' },
+      { title: 'Botões só no painel do cursor', body: 'Ao mexer o mouse aparece a barra de baixo e só os botões do painel que está embaixo do cursor, em vez dos botões de todos os painéis.' },
+      { title: 'Cursor some com o mouse parado', body: 'O cursor agora some sobre o vídeo alguns segundos depois de você parar o mouse, sobre qualquer jogo da tela, também depois de clicar em um botão do Quadra e nos players que ficam dentro de outra página ou que mudam o próprio cursor.' },
       { title: 'Nome certo depois de um gol anulado', body: 'Nos jogos ligados ao 365Scores, quando o VAR anula um gol e o mesmo time marca de novo, o nome de quem marcou vai para o gol novo, e não para o anulado.' },
       { title: 'Escalação do jogo certo', body: 'Se o painel passa a acompanhar outro jogo com a gaveta de escalação aberta, ela recarrega com o jogo novo em vez de continuar mostrando o anterior.' },
       { title: 'Jogos com hífen no título', body: 'Lives com o título no formato "Flamengo - Palmeiras" (com um traço em vez do "x") agora também são ligadas ao jogo do 365Scores, com placar e alertas.' },
+      { title: 'Seleções com nome em inglês', body: 'Jogos de seleções da Liga das Nações e de amistosos que a BLL mostra com os nomes em inglês (como "Germany x Netherlands") agora são ligados ao jogo do 365Scores, com placar, alertas e a gaveta de informações.' },
       { title: 'Estatísticas do jogo', body: 'A gaveta de informações do painel ganhou a aba Estatísticas, com posse de bola, chutes, escanteios, faltas, cartões, impedimentos e o que mais o 365Scores tiver do jogo, lado a lado com uma barra para comparar os dois times.' },
       { title: 'Odds e jogos anteriores', body: 'A gaveta de informações do jogo ganhou as abas Odds (resultado, chance dupla, ambos marcam, total de gols e o palpite dos torcedores, com a odd subindo ou caindo ao vivo) e Jogos (confronto direto e os últimos jogos de cada time).' },
       { title: 'VAR nos jogos da BLL com radar', body: 'Os jogos da BLL com o radar da William Hill, que não informa o VAR, agora mostram o VAR pelo 365Scores: o selo azul e o destaque enquanto o árbitro revisa e o alerta com a decisão. Gols e cartões continuam vindo da William Hill.' },

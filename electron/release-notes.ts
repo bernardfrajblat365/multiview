@@ -20,10 +20,19 @@ export function releaseTag(version: string): string {
 export function parseReleaseNotes(body: string | null | undefined): string[] {
   if (!body) return []
   const items: string[] = []
+  let skipSection = false
   for (const rawLine of body.replace(/\r\n/g, '\n').split('\n')) {
     const line = rawLine.trim()
     if (!line) continue
-    if (/^#{1,6}\s/.test(line)) continue
+    const heading = line.match(/^#{1,6}\s+(.*)$/)
+    if (heading) {
+      // "Como instalar" (.github/release-install.md) is for people on the
+      // Releases page, and the PR lists GitHub generates (older releases)
+      // are technical: only the user-facing notes count as news.
+      skipSection = /como instalar|what'?s changed|new contributors/i.test(heading[1] ?? '')
+      continue
+    }
+    if (skipSection) continue
     if (/^\*\*Full Changelog\*\*/i.test(line)) continue
     if (/^Full Changelog:/i.test(line)) continue
     const bullet = line.match(/^[-*]\s+(?:\[[ x]\]\s+)?(.+)$/i)
@@ -50,7 +59,19 @@ export function releaseNotesFromUpdateInfo(info: UpdateNotesSource): string[] {
   return []
 }
 
-export function formatReleaseNotesForDialog(items: string[], limit = 10): string {
+/**
+ * GitHub release text: the user-facing notes from `RELEASES`
+ * (src/release-notes.ts), then the install steps. Only the note titles are
+ * list items, because the update dialog (in every installed version) shows
+ * each list item as one line; the description goes on an indented line,
+ * which the dialog skips.
+ */
+export function buildReleaseBody(notes: readonly { title: string; body: string }[], installText: string): string {
+  const items = notes.map((note) => `- **${note.title.trim()}**  \n  ${note.body.trim()}`).join('\n')
+  return `## Novidades\n\n${items}\n\n${installText.trim()}\n`
+}
+
+export function formatReleaseNotesForDialog(items: string[], limit = 16): string {
   if (items.length === 0) return ''
   const visible = items.slice(0, Math.max(1, limit))
   const lines = visible.map((item) => `• ${item}`)

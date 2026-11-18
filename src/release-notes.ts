@@ -10,6 +10,7 @@ export const RELEASES: readonly Release[] = [
     label: '1.3.3',
     notes: [
       { title: 'Botões só no painel do cursor', body: 'Ao mexer o mouse aparece a barra de baixo e só os botões do painel que está embaixo do cursor, em vez dos botões de todos os painéis. Quando um gol destaca um jogo com o mouse parado, a tela continua limpa.' },
+      { title: 'Cursor some sempre', body: 'Com o mouse parado, o cursor agora some sempre depois de alguns segundos. Antes ele podia ficar na tela se estivesse sobre um jogo diferente do último em que você clicou.' },
     ],
   },
   {

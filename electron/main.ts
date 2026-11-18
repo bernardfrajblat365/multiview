@@ -33,6 +33,7 @@ import { createPipWindowController } from './pip-window'
 import { isValidPipState, parsePipCommand } from '../src/pip'
 import { createWheelZoomGate, nextZoomLevel, type ZoomCommand, zoomCommandOf } from './ui-zoom'
 import { isGrantedPermission, isOverlayNavigationAllowed } from './web-security'
+import { EDITING_SCRIPT, frameCursorScript, idleFocusTarget } from './idle-cursor'
 import {
   addBllProfile,
   createDefaultState,
@@ -52,6 +53,8 @@ type SlotViewState = {
   url: string
   cursorCssKey?: string
   cursorRevision: number
+  /** The cursor rules being applied to the player's frames (hidden or shown). */
+  cursorSync?: Promise<void>
   videoRect?: NormVideoRect | null
   videoPollTimer?: ReturnType<typeof setInterval>
   loadTimer?: ReturnType<typeof setTimeout>
@@ -438,7 +441,7 @@ const pipWindow = createPipWindowController({
     if (state && state.view === view) {
       state.host = 'main'
       if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.addChildView(view)
-      void syncSlotCursor(state)
+      state.cursorSync = syncSlotCursor(state)
     }
     overlayWindow?.webContents.send('quadra:pip-closed', { panelId })
   },
@@ -1177,7 +1180,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
       if (isMainFrame) return
       const state = slotViews.get(slotId)
       const frame = webFrameMain.fromId(frameProcessId, frameRoutingId)
-      if (state && frame) syncFrameCursors(state, frame)
+      if (state && frame) void syncFrameCursors(state, frame)
     })
   }
   contents.on('did-finish-load', () => {
@@ -1189,7 +1192,7 @@ function configureRemoteContents(contents: Electron.WebContents, slotId?: string
       if (state) {
         // Navigation clears inserted CSS; drop the stale key and re-apply cursor policy.
         state.cursorCssKey = undefined
-        void syncSlotCursor(state)
+        state.cursorSync = syncSlotCursor(state)
         void measureSlotVideoRect(state, slotId)
       }
     }
@@ -1264,53 +1267,36 @@ function destroySlotView(id: string) {
   slotViews.delete(id)
 }
 
-/**
- * Hidden cursor in every frame of a player: `insertCSS` only reaches the main frame (many players live in an iframe)
- * and loses to the page's own `!important` cursor rules. A constructed sheet (not blocked by the page's CSP, removable
- * at will) whose ids in `:not()` outrank those rules.
- */
-function frameCursorScript(hidden: boolean) {
-  return `(() => {
-    const key = Symbol.for('quadra-hidden-cursor')
-    let sheet = window[key]
-    if (${hidden}) {
-      if (!sheet) {
-        sheet = new CSSStyleSheet()
-        const root = ':root' + ':not(#quadra)'.repeat(5)
-        sheet.replaceSync(root + ', ' + root + ' * { cursor: none !important; }')
-        Object.defineProperty(window, key, { value: sheet })
-      }
-      if (!document.adoptedStyleSheets.includes(sheet)) document.adoptedStyleSheets = [...document.adoptedStyleSheets, sheet]
-    } else if (sheet) {
-      document.adoptedStyleSheets = document.adoptedStyleSheets.filter((item) => item !== sheet)
-    }
-  })()`
-}
-
-/** Applies the cursor policy to every frame of the player (or just one iframe that finished loading). */
-function syncFrameCursors(state: SlotViewState, frame?: Electron.WebFrameMain) {
+/** Runs a script in every frame of the player (or just one frame); resolves when all are done, failures ignored. */
+function runInFrames<T>(state: SlotViewState, script: string, frame?: Electron.WebFrameMain): Promise<T[]> {
   const contents = state.view.webContents
-  if (contents.isDestroyed()) return
-  const hidden = cursorHidden && state.host === 'main'
-  // A frame that just loaded has no sheet yet: nothing to remove while the cursor shows.
-  if (frame && !hidden) return
+  if (contents.isDestroyed()) return Promise.resolve([])
   let frames: Electron.WebFrameMain[]
   try {
     frames = frame ? [frame] : contents.mainFrame.framesInSubtree
   } catch {
-    return
+    return Promise.resolve([])
   }
-  for (const item of frames) {
+  return Promise.all(frames.map((item) => {
     try {
-      void item.executeJavaScript(frameCursorScript(hidden)).catch(() => {})
+      return (item.executeJavaScript(script) as Promise<T>).catch(() => undefined)
     } catch {
       // The frame went away meanwhile.
+      return Promise.resolve(undefined)
     }
-  }
+  })).then((results) => results.filter((result): result is Awaited<T> => result !== undefined))
+}
+
+/** Applies the cursor policy to every frame of the player (or just one iframe that finished loading). */
+function syncFrameCursors(state: SlotViewState, frame?: Electron.WebFrameMain): Promise<unknown> {
+  const hidden = cursorHidden && state.host === 'main'
+  // A frame that just loaded has no sheet yet: nothing to remove while the cursor shows.
+  if (frame && !hidden) return Promise.resolve()
+  return runInFrames(state, frameCursorScript(hidden ? 'hide' : 'show'), frame)
 }
 
 async function syncSlotCursor(state: SlotViewState) {
-  syncFrameCursors(state)
+  const frames = syncFrameCursors(state)
   const revision = ++state.cursorRevision
   const previousKey = state.cursorCssKey
   state.cursorCssKey = undefined
@@ -1326,6 +1312,7 @@ async function syncSlotCursor(state: SlotViewState) {
     ? '* { cursor: none !important; }'
     : '* { cursor: auto !important; }'
   const key = await state.view.webContents.insertCSS(css).catch(() => '')
+  await frames
   if (!key) return
   if (revision !== state.cursorRevision || state.view.webContents.isDestroyed()) {
     if (!state.view.webContents.isDestroyed()) await state.view.webContents.removeInsertedCSS(key).catch(() => {})
@@ -1337,7 +1324,45 @@ async function syncSlotCursor(state: SlotViewState) {
 function setCursorHidden(hidden: boolean) {
   if (cursorHidden === hidden) return
   cursorHidden = hidden
-  for (const state of slotViews.values()) void syncSlotCursor(state)
+  for (const state of slotViews.values()) state.cursorSync = syncSlotCursor(state)
+}
+
+/** Whether the player has the focus on a text field (the user may be typing there), in any of its frames. */
+async function playerIsEditing(state: SlotViewState): Promise<boolean> {
+  const timeout = new Promise<boolean[]>((resolve) => setTimeout(() => resolve([true]), 500))
+  const results = await Promise.race([runInFrames<boolean>(state, EDITING_SCRIPT), timeout])
+  return results.some((result) => result === true)
+}
+
+let idleFocusRun = 0
+
+/**
+ * Idle screen: the player under the still cursor takes the focus, then its cursor rule changes once more.
+ * Chromium only redraws the cursor without a mouse move in the focused page, and only on a style change: if the
+ * player under the cursor wasn't the focused one (a click on another game, or on a Quadra button), or the hidden
+ * cursor rule landed before the focus, the cursor stayed on screen.
+ */
+async function hideCursorUnderPointer() {
+  const run = ++idleFocusRun
+  if (!mainWindow || mainWindow.isDestroyed() || !overlayWindow || overlayWindow.isDestroyed()) return
+  const overlayFocused = overlayWindow.isFocused()
+  const quadraActive = overlayFocused || mainWindow.isFocused()
+  const underCursor = slotUnderCursor()
+  const focused = [...slotViews.values()].find((state) => state.host === 'main' && !state.view.webContents.isDestroyed() && state.view.webContents.isFocused()) ?? null
+  const focusedEditing = Boolean(quadraActive && underCursor && focused && focused !== underCursor && await playerIsEditing(focused))
+  if (run !== idleFocusRun || !cursorHidden || mainWindow.isDestroyed() || overlayWindow.isDestroyed()) return
+  const target = idleFocusTarget({ quadraActive, underCursor, focused, focusedEditing })
+  // A focused overlay leaves the panel views in the background, where live players stop painting.
+  if (overlayWindow.isFocused()) mainWindow.focus()
+  if (target && slotUnderCursor() === target) target.view.webContents.focus()
+  const player = slotUnderCursor()
+  if (!player || !player.view.webContents.isFocused()) return
+  await player.cursorSync
+  for (const delay of [0, 150]) {
+    if (delay) await new Promise((resolve) => setTimeout(resolve, delay))
+    if (run !== idleFocusRun || !cursorHidden || player.view.webContents.isDestroyed()) return
+    await runInFrames(player, frameCursorScript('nudge'))
+  }
 }
 
 /** The grid panel whose view is under the mouse cursor, if any. */
@@ -1452,7 +1477,7 @@ function createSlotView(id: string, url: string, muted: boolean, pip = false, ti
   slotViews.set(id, state)
   markRevealPending(id, state)
   startVideoRectPolling(state, id)
-  void syncSlotCursor(state)
+  state.cursorSync = syncSlotCursor(state)
   loadSlotUrl(state, url)
   return state
 }
@@ -1507,7 +1532,7 @@ function returnSlotToGrid(id: string, state: SlotViewState) {
   pipWindow.release(id)
   state.host = 'main'
   if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.addChildView(state.view)
-  void syncSlotCursor(state)
+  state.cursorSync = syncSlotCursor(state)
 }
 
 function applyLayout(payload: LayoutPayload) {
@@ -1562,7 +1587,7 @@ function applyLayout(payload: LayoutPayload) {
         if (mainWindow && !mainWindow.isDestroyed()) mainWindow.contentView.removeChildView(state.view)
         state.host = 'pip'
         pipWindow.show(panel.id, state.view, PIP_WINDOW_TITLE)
-        void syncSlotCursor(state)
+        state.cursorSync = syncSlotCursor(state)
       }
       state.view.setVisible(true)
       void measureSlotVideoRect(state, panel.id)
@@ -1716,13 +1741,15 @@ function installIpcHandlers() {
   ipcMain.on('quadra:set-chrome-interactive', (event, interactive: unknown, refocusPlayers: unknown) => {
     if (!isUiSender(event) || typeof interactive !== 'boolean' || !overlayWindow) return
     overlayWindow.setIgnoreMouseEvents(!interactive, { forward: true })
+    if (interactive || !mainWindow || mainWindow.isDestroyed()) return
+    // Idle screen: also when the focus is already on another player (a click on another game), not just on the overlay.
+    if (refocusPlayers === 'idle') {
+      void hideCursorUnderPointer()
+      return
+    }
     // A focused overlay leaves the panel views in the background, where live players stop painting.
-    if (interactive || (refocusPlayers !== true && refocusPlayers !== 'idle') || !overlayWindow.isFocused() || !mainWindow || mainWindow.isDestroyed()) return
+    if (refocusPlayers !== true || !overlayWindow.isFocused()) return
     mainWindow.focus()
-    // Idle screen: the player under the still cursor takes the focus. Chromium only redraws the cursor without a mouse
-    // move in an active page, so otherwise the hidden cursor stays on screen. Only from the overlay: a panel the user is
-    // typing in keeps its focus.
-    if (refocusPlayers === 'idle') slotUnderCursor()?.view.webContents.focus()
   })
   ipcMain.on('quadra:set-fullscreen', (event, on: unknown) => {
     if (isUiSender(event) && typeof on === 'boolean') setNativeFullscreen(on)
